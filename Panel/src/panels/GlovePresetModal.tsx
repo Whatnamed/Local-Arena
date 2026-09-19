@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import Modal from "../components/Modal";
 import Toggle from "../components/Toggle";
 import WearGauge from "../components/WearGauge";
-import GLOVE_SKINS, { gloveModelName, type GloveSkin } from "../data/gloveSkins";
-import { finishName, localizedSkinName } from "../data/skinLocalization";
+import GLOVE_SKINS, { gloveModelName, gloveModelSearchText, type GloveSkin } from "../data/gloveSkins";
+import { finishName, localizedSkinName, localizedSkinSearchText } from "../data/skinLocalization";
+import { glovePreferenceRank, sortByPreference } from "../data/cosmeticOrdering";
 import { api, type GlovePreset, type KnifeCustomizerConfig } from "../lib/api";
 import { useT } from "../i18n";
 import { useStore } from "../state/store";
@@ -39,7 +40,13 @@ export default function GlovePresetModal({ open, csgoPath, config, onSaved, onEr
 
   const visible = useMemo(() => {
     const q = query.trim().toLocaleLowerCase();
-    return rows.filter((row) => !q || `${modelName(row.defindex)} ${skinName(row)} ${row.paint}`.toLocaleLowerCase().includes(q));
+    const ordered = sortByPreference(
+      rows,
+      (row) => localizedSkinSearchText(language, row.defindex, row.paint, `${gloveModelSearchText(language, row.defindex)} | ${row.name}`),
+      (row) => row.paint,
+      glovePreferenceRank,
+    );
+    return ordered.filter((row) => !q || `${gloveModelSearchText(language, row.defindex)} ${localizedSkinSearchText(language, row.defindex, row.paint, row.name)} ${skinName(row)}`.toLocaleLowerCase().includes(q));
   // Labels follow the selected Panel language.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [language, query]);

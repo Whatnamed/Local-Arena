@@ -6,7 +6,8 @@ import { api, type KnifeCustomizerConfig, type KnifePreset } from "../lib/api";
 import type { KnifeIcon } from "../data/knifeIcons";
 import imageRows from "../data/skinImages.json";
 import catalogRows from "../data/weaponSkins.json";
-import { finishName, itemName, localizedSkinName } from "../data/skinLocalization";
+import { finishName, itemName, localizedSkinName, localizedSkinSearchText } from "../data/skinLocalization";
+import { finishPreferenceRank, sortByPreference } from "../data/cosmeticOrdering";
 import { useT, type I18nKey } from "../i18n";
 import { useStore } from "../state/store";
 import CosmeticsTeamSwitch, { useCosmeticsTeam } from "../components/CosmeticsTeamSwitch";
@@ -73,8 +74,16 @@ export default function KnifePresetModal({ knife, csgoPath, config, onSaved, onE
     setUseAsDefault(loadout.default_knife_defindex === knife.id);
   }, [knife, team, config]);
 
-  const allSkins = useMemo(() => !knife ? [] : (imageRows as SkinImage[])
-    .filter((row) => row.weapon_defindex === knife.id && row.paint > 0), [knife]);
+  const allSkins = useMemo(() => {
+    if (!knife) return [];
+    const rows = (imageRows as SkinImage[]).filter((row) => row.weapon_defindex === knife.id && row.paint > 0);
+    return sortByPreference(
+      rows,
+      (row) => localizedSkinSearchText(language, row.weapon_defindex, row.paint),
+      (row) => row.paint,
+      finishPreferenceRank,
+    );
+  }, [knife, language]);
   const catalog = useMemo(() => new Map((catalogRows as CatalogSkin[])
     .map((row) => [`${row.weapon_defindex}:${row.paint}`, row])), []);
   const label = (row: SkinImage) => {
@@ -87,7 +96,7 @@ export default function KnifePresetModal({ knife, csgoPath, config, onSaved, onE
   };
   const skins = useMemo(() => {
     const q = query.trim().toLocaleLowerCase();
-    return allSkins.filter((row) => !q || label(row).toLocaleLowerCase().includes(q));
+    return allSkins.filter((row) => !q || `${label(row)} ${localizedSkinSearchText(language, row.weapon_defindex, row.paint)}`.toLocaleLowerCase().includes(q));
   // The label follows the selected Panel language.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allSkins, language, query]);

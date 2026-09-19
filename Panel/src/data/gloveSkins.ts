@@ -25,4 +25,12 @@ export function gloveModelName(language: string | null | undefined, defindex: nu
   return language === "schinese" ? names.schinese : language === "tchinese" ? names.tchinese : names.english;
 }
 
+export function gloveModelSearchText(language: string | null | undefined, defindex: number): string {
+  const names = GLOVE_MODEL_NAMES[defindex];
+  if (!names) return `#${defindex}`;
+  return Array.from(new Set([
+    gloveModelName(language, defindex), names.english, names.schinese, names.tchinese, String(defindex),
+  ])).join(" ");
+}
+
 export { default } from "./gloveSkins.json";
