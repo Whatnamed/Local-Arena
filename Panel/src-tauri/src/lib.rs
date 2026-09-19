@@ -3010,130 +3010,37 @@ async fn check_online_updates(
     .map_err(|error| AppError::update(format!("Update check task failed: {error}")))?
 }
 
-fn install_plugin_update_impl(app: &AppHandle, csgo: &str) -> Result<online_update::UpdateResult> {
-    let root = csgo_path(csgo)?;
-    ensure_target_not_running(&root)?;
-    ensure_steam_app_idle(&root)?;
-    let state = local_state_root(app)?;
-    let config = read_config(app)?;
-    let restore_preview = config.mode.as_deref() == Some("preview");
-    logging::append(&state, "INFO", "update.plugin_started", "host=github.com");
-    let (version, payload) = online_update::prepare_plugin(app)?;
-    online_update::activate_payload(&version, &payload)?;
-    match with_canonical_layout(&state, &root, restore_preview, || {
-        let result = installer::install(&payload, &state, &root, false)?;
-        write_bot_randomizer_options(&root, &config.bot_items)?;
-        Ok(result)
-    }) {
-        Ok(value) => {
-            logging::append(
-                &state,
-                "INFO",
-                "update.plugin_completed",
-                &format!("version={version}, files={}", value.installed_files),
-            );
-            Ok(online_update::UpdateResult {
-                component: "plugin".into(),
-                version,
-                installed: true,
-                restart_required: false,
-                rollback_succeeded: None,
-                detail: format!("Plugin update installed ({} files)", value.installed_files),
-            })
-        }
-        Err(error) => {
-            logging::append(
-                &state,
-                "ERROR",
-                "update.plugin_failed",
-                &format!("stage=install, rollback=attempted, {}", error.detail),
-            );
-            Err(error)
-        }
-    }
+fn install_plugin_update_impl(_app: &AppHandle, _csgo: &str) -> Result<online_update::UpdateResult> {
+    Err(AppError::update(
+        "Online plugin updates from upstream are disabled in this fork to prevent overwriting the local cosmetics runtime. Please update via the project repository."
+    ))
 }
 
 #[tauri::command]
 async fn install_plugin_update(
-    app: AppHandle,
-    csgo: String,
+    _app: AppHandle,
+    _csgo: String,
 ) -> Result<online_update::UpdateResult> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let _busy = online_update::OperationGuard::acquire()?;
-        install_plugin_update_impl(&app, &csgo)
-    })
-    .await
-    .map_err(|error| AppError::update(format!("Plugin update task failed: {error}")))?
+    Err(AppError::update(
+        "Online plugin updates from upstream are disabled in this fork to prevent overwriting the local cosmetics runtime. Please update via the project repository."
+    ))
 }
 
 #[tauri::command]
-async fn install_panel_update(app: AppHandle) -> Result<online_update::UpdateResult> {
-    let worker_app = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let _busy = online_update::OperationGuard::acquire()?;
-        online_update::prepare_panel(&worker_app)
-    })
-    .await
-    .map_err(|error| AppError::update(format!("Panel update task failed: {error}")))??;
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        app.exit(0);
-    });
-    Ok(result)
+async fn install_panel_update(_app: AppHandle) -> Result<online_update::UpdateResult> {
+    Err(AppError::update(
+        "Online Panel updates from upstream are disabled in this fork to prevent overwriting the local cosmetics runtime. Please update via the project repository."
+    ))
 }
 
 #[tauri::command]
 async fn install_all_updates(
-    app: AppHandle,
-    csgo: Option<String>,
+    _app: AppHandle,
+    _csgo: Option<String>,
 ) -> Result<online_update::UpdateBatchResult> {
-    let worker_app = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let _busy = online_update::OperationGuard::acquire()?;
-        let plugin_version = installed_plugin_version(&worker_app);
-        let snapshot = online_update::snapshot(plugin_version.as_deref())?;
-
-        let plugin = if snapshot.plugin.update_available {
-            if !snapshot.plugin.compatible {
-                return Err(AppError::update(
-                    "This plugin update requires a newer Panel updater",
-                ));
-            }
-            let target = csgo.as_deref().ok_or_else(|| {
-                AppError::directory("Select the CS2 game/csgo directory before updating the plugin")
-            })?;
-            Some(install_plugin_update_impl(&worker_app, target)?)
-        } else {
-            None
-        };
-
-        let panel = if snapshot.panel.update_available {
-            if !snapshot.panel.compatible {
-                return Err(AppError::update(
-                    "This Panel update requires a newer updater baseline",
-                ));
-            }
-            Some(online_update::prepare_panel(&worker_app)?)
-        } else {
-            None
-        };
-
-        Ok(online_update::UpdateBatchResult {
-            restart_required: panel.is_some(),
-            panel,
-            plugin,
-        })
-    })
-    .await
-    .map_err(|error| AppError::update(format!("Combined update task failed: {error}")))??;
-
-    if result.restart_required {
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            app.exit(0);
-        });
-    }
-    Ok(result)
+    Err(AppError::update(
+        "Online updates from upstream are disabled in this fork to prevent overwriting the local cosmetics runtime. Please update via the project repository."
+    ))
 }
 
 #[tauri::command]

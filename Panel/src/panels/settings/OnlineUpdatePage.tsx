@@ -62,16 +62,9 @@ export default function OnlineUpdatePage() {
   const panelAvailable = !!snapshot?.panel.update_available;
   const pluginAvailable = !!snapshot?.plugin.update_available;
   const hasUpdates = panelAvailable || pluginAvailable;
-  const pluginNeedsDirectory = pluginAvailable && !csgoPath;
-  const pluginIncompatible = pluginAvailable && snapshot?.plugin.compatible === false;
-  const panelIncompatible = panelAvailable && snapshot?.panel.compatible === false;
-  const canInstallAll = hasUpdates && !snapshot?.busy && !working
-    && !pluginNeedsDirectory && !(pluginAvailable && blocked)
-    && !pluginIncompatible && !panelIncompatible;
-  const blockingNote = pluginNeedsDirectory ? t("update.selectDirectory")
-    : pluginAvailable && blocked ? t("update.closeCs2")
-      : pluginIncompatible || panelIncompatible ? t("update.incompatible")
-        : null;
+  // Upstream full payload auto-updates are disabled in this cosmetics-only fork.
+  const canInstallAll = false;
+  const blockingNote = hasUpdates ? t("update.allDesc") : null;
   const componentSection = (component: "panel" | "plugin") => {
     const state = snapshot?.[component];
     const progress = state?.total_bytes
@@ -151,7 +144,7 @@ export default function OnlineUpdatePage() {
         <div>
           <button className="is-primary" disabled={!canInstallAll} onClick={installAll}>
             <Download size={16} />
-            {working === "all" ? t("update.updatingAll") : hasUpdates ? t("update.installAll") : t("update.current")}
+            {working === "all" ? t("update.updatingAll") : hasUpdates ? t("update.upstreamDisabled") : t("update.current")}
           </button>
           {working === "all" && <button onClick={cancel}><X size={16} />{t("update.cancel")}</button>}
         </div>

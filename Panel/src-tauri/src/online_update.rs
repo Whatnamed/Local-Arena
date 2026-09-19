@@ -497,33 +497,10 @@ fn find_payload_root(extracted: &Path) -> Option<PathBuf> {
         .find(|path| path.join(installer::MANIFEST_FILE).is_file())
 }
 
-pub fn prepare_plugin(app: &AppHandle) -> Result<(String, PathBuf)> {
-    let (component, archive) = download_component(app, "plugin")?;
-    set_progress(
-        app,
-        UpdateProgress {
-            component: "plugin".into(),
-            stage: "extracting".into(),
-            downloaded_bytes: component.size,
-            total_bytes: component.size,
-        },
-    );
-    let directory = update_root()?.join("payloads").join(&component.version);
-    clear_directory(&directory)?;
-    let file = File::open(archive).map_err(AppError::transaction_io)?;
-    if let Err(error) = update_core::extract_zip_safely(file, &directory) {
-        let _ = fs::remove_dir_all(&directory);
-        return Err(AppError::update(error));
-    }
-    let root = find_payload_root(&directory)
-        .ok_or_else(|| AppError::payload("Plugin update ZIP has no payload manifest"))?;
-    let manifest = installer::verify_payload(&root)?;
-    if manifest.package_version != component.version {
-        return Err(AppError::payload(
-            "Plugin payload version does not match the signed update manifest",
-        ));
-    }
-    Ok((component.version, root))
+pub fn prepare_plugin(_app: &AppHandle) -> Result<(String, PathBuf)> {
+    Err(AppError::update(
+        "Online plugin updates from upstream are disabled in this fork to prevent overwriting the local cosmetics runtime. Please update via the project repository."
+    ))
 }
 
 pub fn activate_payload(version: &str, path: &Path) -> Result<()> {
@@ -563,47 +540,10 @@ pub fn active_payload_root() -> Option<PathBuf> {
     Some(path)
 }
 
-pub fn prepare_panel(app: &AppHandle) -> Result<UpdateResult> {
-    let (component, archive) = download_component(app, "panel")?;
-    set_progress(
-        app,
-        UpdateProgress {
-            component: "panel".into(),
-            stage: "extracting".into(),
-            downloaded_bytes: component.size,
-            total_bytes: component.size,
-        },
-    );
-    let directory = update_root()?.join("panel").join(&component.version);
-    clear_directory(&directory)?;
-    update_core::extract_zip_safely(
-        File::open(archive).map_err(AppError::transaction_io)?,
-        &directory,
-    )
-    .map_err(AppError::update)?;
-    let staged = if directory.join(PANEL_EXECUTABLE_NAME).is_file() {
-        directory.join(PANEL_EXECUTABLE_NAME)
-    } else {
-        fs::read_dir(&directory)
-            .map_err(AppError::transaction_io)?
-            .flatten()
-            .map(|entry| entry.path().join(PANEL_EXECUTABLE_NAME))
-            .find(|path| path.is_file())
-            .ok_or_else(|| {
-                AppError::payload(format!(
-                    "Panel update ZIP has no {PANEL_EXECUTABLE_NAME}"
-                ))
-            })?
-    };
-    schedule_panel_replace(&component.version, &staged)?;
-    Ok(UpdateResult {
-        component: "panel".into(),
-        version: component.version,
-        installed: true,
-        restart_required: true,
-        rollback_succeeded: None,
-        detail: "Panel update is staged and will be applied after restart".into(),
-    })
+pub fn prepare_panel(_app: &AppHandle) -> Result<UpdateResult> {
+    Err(AppError::update(
+        "Online Panel updates from upstream are disabled in this fork to prevent overwriting the local cosmetics runtime. Please update via the project repository."
+    ))
 }
 
 fn schedule_panel_replace(version: &str, staged: &Path) -> Result<()> {
