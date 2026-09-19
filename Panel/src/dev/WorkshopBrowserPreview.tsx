@@ -2,6 +2,7 @@ import type { AppConfig, KnifeCustomizerConfig, KnifePreset } from "../lib/api";
 import StickersPanel from "../panels/StickersPanel";
 import { AppStatePreviewProvider } from "../state/store";
 import { WEAPON_ICONS } from "../data/weaponIcons";
+import { DEFAULT_SHORTCUT_KNIVES } from "../data/cosmeticOrder";
 import skinImages from "../data/skinImages.json";
 import placementRows from "../data/cosmeticPlacements.json";
 import charmRows from "../data/charmCatalog.json";
@@ -83,12 +84,13 @@ const previewConfig: KnifeCustomizerConfig = {
   stickers_enabled: true,
   charms_enabled: true,
   agents_enabled: true,
+  knife_shortcut_enabled: false,
+  shortcut_knife_defindexes: [...DEFAULT_SHORTCUT_KNIVES],
 };
 
 const previewAppConfig: AppConfig = {
   language: "schinese",
-  drop_knife_bind: "",
-  drop_knife_subclasses: [],
+  knife_shortcut_bind: "\\",
   csgo_path: "browser-preview",
   first_run_done: true,
   welcome_story_prompt_presented: true,

@@ -24,8 +24,13 @@ const MAX_ZOOM = 1;
 const MIN_ZOOM = 0.7;
 const SCREEN_FILL = 0.88;
 const TASKBAR_RESERVE = 48;
-const WORKSHOP_BROWSER_PREVIEW = import.meta.env.DEV
-  && new URLSearchParams(window.location.search).get("workshop-preview") === "1";
+// Dev-only browser harnesses (`?preview=workshop`, `?preview=weapon`): they mount
+// one panel over local state so the UI can be operated without Tauri, a CS2
+// directory, or a running game.
+const PREVIEW_SURFACE = import.meta.env.DEV
+  ? new URLSearchParams(window.location.search).get("preview")
+  : null;
+const BROWSER_PREVIEW = PREVIEW_SURFACE === "workshop" || PREVIEW_SURFACE === "weapon";
 
 // The window is created hidden (visible:false). We size + centre it while still
 // hidden, then add the `app-ready` class (kicks off the liquid entrance) and
@@ -96,10 +101,11 @@ document.addEventListener(
 
 async function bootstrap() {
   applyAppearance(DEFAULT_APPEARANCE);
-  if (WORKSHOP_BROWSER_PREVIEW) {
-    const { default: WorkshopBrowserPreview } = await import("./dev/WorkshopBrowserPreview");
+  if (PREVIEW_SURFACE) {
+    const { default: Preview } = await import(PREVIEW_SURFACE === "weapon"
+      ? "./dev/WeaponPresetsBrowserPreview" : "./dev/WorkshopBrowserPreview");
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-      <React.StrictMode><WorkshopBrowserPreview /></React.StrictMode>
+      <React.StrictMode><Preview /></React.StrictMode>
     );
     return;
   }
@@ -126,7 +132,7 @@ async function bootstrap() {
 }
 
 function renderStartupError(error: unknown) {
-  if (WORKSHOP_BROWSER_PREVIEW) document.documentElement.classList.add("app-ready");
+  if (BROWSER_PREVIEW) document.documentElement.classList.add("app-ready");
   else reveal();
   const root = document.getElementById("root");
   if (!root) return;
@@ -144,7 +150,7 @@ function renderStartupError(error: unknown) {
 }
 
 async function start() {
-  if (WORKSHOP_BROWSER_PREVIEW) {
+  if (BROWSER_PREVIEW) {
     document.documentElement.classList.add("app-ready");
     await bootstrap();
     return;

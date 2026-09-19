@@ -415,10 +415,34 @@ Require(resumed.ShouldLog && resumed.Suppressed == 1,
         "A marker carrying no ticket can never authorise a managed session.");
 }
 
+// The optional quick-knife rotation only moves which knife is the default.
+{
+    ushort[] rotation = [507, 515, 508, 500, 525, 512];
+    Require(KnifeShortcutPolicy.TryAdvance(true, rotation, 507, out ushort second) && second == 515,
+        "Advancing from the first shortcut knife must select the next one in the user's order.");
+    Require(KnifeShortcutPolicy.TryAdvance(true, rotation, 512, out ushort wrapped) && wrapped == 507,
+        "The rotation must wrap back to the first knife instead of stopping.");
+    Require(KnifeShortcutPolicy.TryAdvance(true, rotation, 526, out ushort entered) && entered == 507,
+        "A knife outside the rotation must still enter it from the start.");
+    Require(!KnifeShortcutPolicy.TryAdvance(false, rotation, 507, out _),
+        "A disabled shortcut must never change the player's knife.");
+    Require(!KnifeShortcutPolicy.TryAdvance(true, Array.Empty<ushort>(), 507, out _),
+        "An empty shortcut list must report that there is nothing to switch to.");
+
+    var shortcutConfig = new KnifeConfig
+    {
+        ShortcutKnifeDefIndexes = [507, 507, 0, 515, 508, 500, 525, 512, 522, 523, 509, 505, 519, 503, 521, 526, 514, 506],
+    };
+    shortcutConfig.Normalize();
+    Require(shortcutConfig.ShortcutKnifeDefIndexes.Count == KnifeShortcutPolicy.MaxShortcuts,
+        "The saved shortcut list must stay bounded.");
+    Require(shortcutConfig.ShortcutKnifeDefIndexes[0] == 507 && shortcutConfig.ShortcutKnifeDefIndexes[1] == 515,
+        "Normalising must keep the user's order and drop duplicates and empty entries.");
+}
+
 // Wear must land inside the band the PaintKit publishes.
 {
-    var skin = new WeaponSkinEntry { WeaponDefIndex = 7, Paint = 2, MinWear = 0.06f, MaxWear = 0.70f };
-    KnifePreset tooNew = new() { Paint = 2, Wear = 0.01f };
+    var skin = new WeaponSkinEntry { WeaponDefIndex = 7, Paint = 2, MinWear = 0.06f, MaxWear = 0.70f };    KnifePreset tooNew = new() { Paint = 2, Wear = 0.01f };
     Require(PresetWearClamp.Clamp(tooNew, skin) && Math.Abs(tooNew.Wear - 0.06f) < 1e-6f,
         "Wear below the PaintKit minimum must be clamped up instead of failing the whole apply.");
     KnifePreset tooWorn = new() { Paint = 2, Wear = 0.99f };

@@ -176,10 +176,14 @@ export type UiMemory = {
   entries: Record<string, string>;
 };
 
-export type DropKnivesState = {
+/** The optional quick-knife rotation. The Panel only stores which knives to
+ *  cycle and which key the user *wants*; binding the key stays the user's call,
+ *  so `bind_line` is rendered for them to copy into their own autoexec. */
+export type KnifeShortcutState = {
   bind_key: string;
-  selected: number[];
-  cfg_present: boolean;
+  defindexes: number[];
+  enabled: boolean;
+  bind_line: string;
   cs2_running: boolean;
 };
 
@@ -241,6 +245,8 @@ export type KnifeCustomizerConfig = {
   stickers_enabled: boolean;
   charms_enabled: boolean;
   agents_enabled: boolean;
+  knife_shortcut_enabled: boolean;
+  shortcut_knife_defindexes: number[];
 };
 
 export type KnifeCustomizerState = {
@@ -275,8 +281,9 @@ export type LaunchResult = {
 
 export type AppConfig = {
   language: string | null;
-  drop_knife_bind: string;
-  drop_knife_subclasses: number[];
+  /** Suggested key for the optional quick-knife bind. The Panel only records the
+   *  suggestion; it never writes a bind into the game. */
+  knife_shortcut_bind: string;
   csgo_path: string | null;
   first_run_done: boolean;
   first_run_step?: string | null;
@@ -359,7 +366,7 @@ export type RuntimeSnapshot = {
   directory: DirectoryInfo;
   process: Cs2ProcessInfo;
   files: FilesReport | null;
-  drop_knives: DropKnivesState | null;
+  knife_shortcut: KnifeShortcutState | null;
   isolation: IsolationStatus | null;
   installation: InstallationInspection | null;
 };
@@ -392,10 +399,10 @@ export const api = {
   launchLocalCosmetics: () => invoke<LaunchResult>("launch_local_cosmetics"),
   runInstallChecks: (csgo: string) =>
     invoke<InstallCheckReport>("run_install_checks", { csgo }),
-  getDropKnives: (csgo: string) =>
-    invoke<DropKnivesState>("get_drop_knives", { csgo }),
-  setDropKnives: (csgo: string, bindKey: string, selected: number[]) =>
-    invoke<DropKnivesState>("set_drop_knives", { csgo, bindKey, selected }),
+  getKnifeShortcut: (csgo: string) =>
+    invoke<KnifeShortcutState>("get_knife_shortcut", { csgo }),
+  setKnifeShortcut: (csgo: string, bindKey: string, defindexes: number[], enabled: boolean) =>
+    invoke<KnifeShortcutState>("set_knife_shortcut", { csgo, bindKey, defindexes, enabled }),
   getKnifeCustomizer: (csgo: string) =>
     invoke<KnifeCustomizerState>("get_knife_customizer", { csgo }),
   saveKnifeCustomizer: (csgo: string, config: KnifeCustomizerConfig) =>

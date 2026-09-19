@@ -31,6 +31,37 @@ public static class PresetWearClamp
     }
 }
 
+/// <summary>
+/// Rotation rules for the optional quick-knife command. The list is user ordered
+/// and each knife keeps its own saved preset, so advancing the rotation only
+/// moves which defindex is the team's default knife.
+/// </summary>
+public static class KnifeShortcutPolicy
+{
+    public const int MaxShortcuts = 16;
+
+    public static bool TryAdvance(
+        bool enabled,
+        IReadOnlyCollection<ushort> shortcuts,
+        ushort current,
+        out ushort next)
+    {
+        next = 0;
+        if (!enabled || shortcuts.Count == 0) return false;
+        int index = -1;
+        int position = 0;
+        foreach (ushort defIndex in shortcuts)
+        {
+            if (defIndex == current) { index = position; break; }
+            position++;
+        }
+        next = index < 0
+            ? shortcuts.First()
+            : shortcuts.ElementAt((index + 1) % shortcuts.Count);
+        return next != 0;
+    }
+}
+
 public static class StickerFailurePolicy
 {
     public static bool ShouldRestoreBaseSkin(bool stickerApplySucceeded) => !stickerApplySucceeded;
@@ -259,6 +290,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
         AddCommand("css_cs2bi_knives_reload", "Reload player knife presets", OnReloadCommand);
         AddCommand("css_cs2bi_knives_status", "Show player knife preset status", OnStatusCommand);
+        AddCommand("css_cs2bi_knife_next", "Switch to the next knife in the configured quick-knife rotation", OnKnifeNextCommand);
 
         try
         {
@@ -1425,6 +1457,30 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         command.ReplyToCommand($"[PlayerKnifeCustomizer] reloaded; enabled={_config.Enabled}, stickers={DecorationReleaseEnabled && _config.StickersEnabled}, charms={DecorationReleaseEnabled && _config.CharmsEnabled}, agents={DecorationReleaseEnabled && _config.AgentsEnabled}, sticker_catalog={_validStickers.Count}, charm_catalog={_validCharms.Count}, agent_catalog={_agentModels.Values.Sum(models => models.Count)}, ct_knives={_config.Loadouts.Ct.KnifePresets.Count}, t_knives={_config.Loadouts.T.KnifePresets.Count}, ct_guns={_config.Loadouts.Ct.GunPresets.Count}, t_guns={_config.Loadouts.T.GunPresets.Count}, music={_config.MusicKitId}{restart}");
     }
 
+    private void OnKnifeNextCommand(CCSPlayerController? player, CommandInfo command)
+    {
+        if (!CanApplyToPlayer(player)) return;
+        CosmeticTeam? team = GetCosmeticTeam(player);
+        if (team is null)
+        {
+            command.ReplyToCommand("[PlayerCosmetics] Pick a side before using the knife shortcut.");
+            return;
+        }
+        var loadout = _config.Loadouts.For(team.Value);
+        if (!KnifeShortcutPolicy.TryAdvance(_config.KnifeShortcutEnabled, _config.ShortcutKnifeDefIndexes,
+                loadout.DefaultKnifeDefIndex, out ushort next))
+        {
+            command.ReplyToCommand(_config.KnifeShortcutEnabled
+                ? "[PlayerCosmetics] Configure at least one shortcut knife in the Panel."
+                : "[PlayerCosmetics] The knife shortcut is disabled in the Panel.");
+            return;
+        }
+        loadout.DefaultKnifeDefIndex = next;
+        SaveConfig();
+        ScheduleApplyPipeline(player!.Handle, CosmeticApplyPhase.Knife);
+        command.ReplyToCommand($"[PlayerCosmetics] Knife shortcut -> defindex {next}.");
+    }
+
     private void OnStatusCommand(CCSPlayerController? player, CommandInfo command)
     {
         command.ReplyToCommand($"[PlayerKnifeCustomizer] enabled={_config.Enabled}, stickers={DecorationReleaseEnabled && _config.StickersEnabled}, charms={DecorationReleaseEnabled && _config.CharmsEnabled}, agents={DecorationReleaseEnabled && _config.AgentsEnabled}, signature={(_setAttrByName == null ? "missing" : "loaded")}, ct_knives={_config.Loadouts.Ct.KnifePresets.Count}, t_knives={_config.Loadouts.T.KnifePresets.Count}, ct_guns={_config.Loadouts.Ct.GunPresets.Count}, t_guns={_config.Loadouts.T.GunPresets.Count}, music={_config.MusicKitId}, catalog={_skinCatalog.Values.Sum(skins => skins.Count)}, sticker_catalog={_validStickers.Count}, charm_catalog={_validCharms.Count}, agent_catalog={_agentModels.Values.Sum(models => models.Count)}, active_generations={_applyTracker.ActiveCount}, schedules={_applyTracker.Schedules}, phase_completions={_applyTracker.PhaseCompletions}, retry_exhaustions={_applyTracker.RetryExhaustions}, context_invalidations={_applyTracker.ContextInvalidations}");
@@ -1687,6 +1743,17 @@ public sealed class KnifeConfig
     [JsonPropertyName("agents_enabled")]
     public bool AgentsEnabled { get; set; }
 
+    /// <summary>
+    /// The optional quick-knife rotation. It is off unless the user turns it on in
+    /// the Panel, and cycling only ever changes which knife model and saved preset
+    /// the player carries; it never creates ground entities or rewrites key binds.
+    /// </summary>
+    [JsonPropertyName("knife_shortcut_enabled")]
+    public bool KnifeShortcutEnabled { get; set; }
+
+    [JsonPropertyName("shortcut_knife_defindexes")]
+    public List<ushort> ShortcutKnifeDefIndexes { get; set; } = new();
+
     public static KnifeConfig FromLegacy(LegacyKnifeConfig legacy)
     {
         var baseLoadout = new TeamLoadout
@@ -1746,6 +1813,11 @@ public sealed class KnifeConfig
     public void Normalize()
     {
         SchemaVersion = CurrentSchemaVersion;
+        ShortcutKnifeDefIndexes ??= new List<ushort>();
+        var shortcuts = new List<ushort>();
+        foreach (ushort defIndex in ShortcutKnifeDefIndexes)
+            if (defIndex != 0 && shortcuts.IndexOf(defIndex) < 0) shortcuts.Add(defIndex);
+        ShortcutKnifeDefIndexes = shortcuts.Take(KnifeShortcutPolicy.MaxShortcuts).ToList();
         Loadouts ??= new TeamLoadoutCollection();
         Loadouts.Ct ??= new TeamLoadout();
         Loadouts.T ??= new TeamLoadout();

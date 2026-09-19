@@ -85,8 +85,8 @@ impl From<serde_json::Error> for AppError {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct AppConfig {
     language: Option<String>,
-    drop_knife_bind: String,
-    drop_knife_subclasses: Vec<u16>,
+    #[serde(default = "default_shortcut_bind")]
+    knife_shortcut_bind: String,
     csgo_path: Option<String>,
     first_run_done: bool,
     #[serde(default)]
@@ -103,8 +103,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             language: Some("schinese".into()),
-            drop_knife_bind: "\\".into(),
-            drop_knife_subclasses: vec![],
+            knife_shortcut_bind: default_shortcut_bind(),
             csgo_path: None,
             first_run_done: false,
             first_run_step: Some("language".into()),
@@ -153,11 +152,14 @@ struct LaunchResult {
     insecure: bool,
 }
 
-#[derive(Serialize)]
-struct DropKnivesState {
+#[derive(Clone, Debug, Serialize)]
+struct KnifeShortcutState {
     bind_key: String,
-    selected: Vec<u16>,
-    cfg_present: bool,
+    defindexes: Vec<u16>,
+    enabled: bool,
+    /// The exact line the user can put in their own autoexec. Rendering it is all
+    /// this does: nothing here writes into a cfg the user owns.
+    bind_line: String,
     cs2_running: bool,
 }
 
@@ -166,7 +168,7 @@ struct RuntimeSnapshot {
     directory: DirectoryInfo,
     process: Cs2ProcessInfo,
     files: Option<FilesReport>,
-    drop_knives: Option<DropKnivesState>,
+    knife_shortcut: Option<KnifeShortcutState>,
     isolation: Option<launch_isolation::IsolationStatus>,
     installation: Option<InstallationInspection>,
 }
@@ -341,6 +343,10 @@ struct KnifeCustomizerConfig {
     charms_enabled: bool,
     #[serde(default)]
     agents_enabled: bool,
+    #[serde(default)]
+    knife_shortcut_enabled: bool,
+    #[serde(default)]
+    shortcut_knife_defindexes: Vec<u16>,
 
     // Read-only v1 fields. They are migrated in memory and never serialized again.
     #[serde(default, skip_serializing)]
@@ -355,6 +361,12 @@ struct KnifeCustomizerConfig {
 
 fn default_true() -> bool {
     true
+}
+
+/// The documented candidate key. It is only a suggestion the Panel renders into a
+/// copyable bind line; this project never writes a key bind into the game.
+fn default_shortcut_bind() -> String {
+    "\\".into()
 }
 
 #[derive(Deserialize)]
@@ -406,6 +418,10 @@ fn valid_sticker_weapon_ids() -> &'static BTreeSet<u16> {
     })
 }
 
+/// The product's default quick-knife rotation: Karambit, Butterfly, M9 Bayonet,
+/// Bayonet, Skeleton Knife, Falchion Knife.
+const DEFAULT_SHORTCUT_KNIVES: [u16; 6] = [507, 515, 508, 500, 525, 512];
+
 impl Default for KnifeCustomizerConfig {
     fn default() -> Self {
         let mut shared_weapon_links = BTreeMap::new();
@@ -422,6 +438,10 @@ impl Default for KnifeCustomizerConfig {
             stickers_enabled: false,
             charms_enabled: false,
             agents_enabled: false,
+            // Off until the user opts in; the documented default rotation is
+            // pre-filled so enabling the feature has something to cycle.
+            knife_shortcut_enabled: false,
+            shortcut_knife_defindexes: DEFAULT_SHORTCUT_KNIVES.to_vec(),
             default_knife_defindex: 0,
             presets: BTreeMap::new(),
             gun_presets: BTreeMap::new(),
@@ -616,47 +636,6 @@ fn csgo_path(raw: &str) -> Result<PathBuf> {
         "The selected path is not a CS2 installation root, game directory, or game/csgo directory: {}",
         selected.display()
     )))
-}
-
-fn cfg_paths(csgo: &Path) -> [PathBuf; 2] {
-    // The quick-knife bind is still stored in the shipped gameplay cfgs; the
-    // cosmetics payload keeps those files, so this stays their single writer.
-    [
-        csgo.join("cfg/my_bot_normal_config.cfg"),
-        csgo.join("cfg/my_bot_ffa_config.cfg"),
-    ]
-}
-
-fn cfg_files_present(csgo: &Path) -> bool {
-    cfg_paths(csgo).iter().all(|path| path.is_file())
-}
-
-fn replace_managed_cfg_command(csgo: &Path, command: &str, replacement: &str) -> Result<()> {
-    for path in cfg_paths(csgo) {
-        replace_cfg_command(&path, command, replacement)?;
-    }
-    Ok(())
-}
-
-fn replace_cfg_command(path: &Path, command: &str, replacement: &str) -> Result<()> {
-    let text = fs::read_to_string(path)?;
-    let mut found = false;
-    let mut lines = Vec::new();
-    for line in text.lines() {
-        if line.trim_start().starts_with(command) {
-            if !found {
-                lines.push(replacement.to_string());
-                found = true;
-            }
-        } else {
-            lines.push(line.to_string());
-        }
-    }
-    if !found {
-        lines.push(replacement.to_string());
-    }
-    fs::write(path, format!("{}\r\n", lines.join("\r\n")))?;
-    Ok(())
 }
 
 #[tauri::command]
@@ -985,45 +964,55 @@ fn ensure_install_checks_pass(report: &InstallCheckReport) -> Result<()> {
 }
 
 #[tauri::command]
-fn get_drop_knives(app: AppHandle, csgo: String) -> Result<DropKnivesState> {
+fn get_knife_shortcut(app: AppHandle, csgo: String) -> Result<KnifeShortcutState> {
     let root = csgo_path(&csgo)?;
     let config = read_config(&app)?;
-    Ok(drop_knives_at(
-        &root,
-        &config,
-        inspect_cs2_process(Some(&root)).running,
-    ))
+    Ok(knife_shortcut_at(&root, &config, inspect_cs2_process(Some(&root)).running))
 }
 
-fn drop_knives_at(root: &Path, config: &AppConfig, running: bool) -> DropKnivesState {
-    DropKnivesState {
-        bind_key: config.drop_knife_bind.clone(),
-        selected: config.drop_knife_subclasses.clone(),
-        cfg_present: cfg_files_present(root),
+fn knife_shortcut_at(root: &Path, config: &AppConfig, running: bool) -> KnifeShortcutState {
+    let cosmetics = read_knife_config(root).ok();
+    let bind_key = config.knife_shortcut_bind.clone();
+    KnifeShortcutState {
+        defindexes: cosmetics.as_ref()
+            .map(|entry| normalize_shortcut_knives(&entry.shortcut_knife_defindexes)).unwrap_or_default(),
+        enabled: cosmetics.as_ref().is_some_and(|entry| entry.knife_shortcut_enabled),
+        bind_line: format!("bind {bind_key} \"css_cs2bi_knife_next\""),
         cs2_running: running,
+        bind_key,
     }
 }
 
 #[tauri::command]
-fn set_drop_knives(
+fn set_knife_shortcut(
     app: AppHandle,
     csgo: String,
     bind_key: String,
-    selected: Vec<u16>,
-) -> Result<DropKnivesState> {
+    defindexes: Vec<u16>,
+    enabled: bool,
+) -> Result<KnifeShortcutState> {
     let root = csgo_path(&csgo)?;
-    let commands = selected
-        .iter()
-        .map(|id| format!("subclass_create {id}"))
-        .collect::<Vec<_>>()
-        .join(";");
-    let line = format!("bind {bind_key} \"{commands}\"");
-    replace_managed_cfg_command(&root, "bind ", &line)?;
+    let mut cosmetics = read_knife_config(&root)?;
+    cosmetics.shortcut_knife_defindexes = normalize_shortcut_knives(&defindexes);
+    cosmetics.knife_shortcut_enabled = enabled;
+    save_knife_config(&root, &mut cosmetics)?;
+    app_storage::mirror_cosmetics(&root)?;
     let mut config = read_config(&app)?;
-    config.drop_knife_bind = bind_key;
-    config.drop_knife_subclasses = selected;
+    config.knife_shortcut_bind = bind_key.trim().to_string();
     write_config(&app, &config)?;
-    get_drop_knives(app, csgo)
+    get_knife_shortcut(app, csgo)
+}
+
+/// Knives only, de-duplicated, bounded, in the order the user chose.
+fn normalize_shortcut_knives(defindexes: &[u16]) -> Vec<u16> {
+    const MAX_SHORTCUTS: usize = 16;
+    let mut picked: Vec<u16> = Vec::new();
+    for defindex in defindexes {
+        if !(500..=526).contains(defindex) || picked.contains(defindex) { continue; }
+        picked.push(*defindex);
+        if picked.len() == MAX_SHORTCUTS { break; }
+    }
+    picked
 }
 
 fn knife_config_path(root: &Path) -> PathBuf {
@@ -1673,7 +1662,7 @@ fn get_runtime_snapshot_impl(app: AppHandle) -> Result<RuntimeSnapshot> {
             directory,
             process: inspect_cs2_process(None),
             files: None,
-            drop_knives: None,
+            knife_shortcut: None,
             isolation: None,
             installation: None,
         });
@@ -1699,7 +1688,7 @@ fn get_runtime_snapshot_impl(app: AppHandle) -> Result<RuntimeSnapshot> {
 
     Ok(RuntimeSnapshot {
         files: Some(validate_files_at(Some(&app), &root, false)?),
-        drop_knives: Some(drop_knives_at(&root, &config, running)),
+        knife_shortcut: Some(knife_shortcut_at(&root, &config, running)),
         isolation,
         directory,
         process,
@@ -2577,6 +2566,46 @@ mod tests {
         assert!(status.ticket_live);
         fs::remove_dir_all(base).unwrap();
     }
+
+    #[test]
+    fn shortcut_rotation_keeps_knives_only_in_the_order_the_user_chose() {
+        assert_eq!(
+            normalize_shortcut_knives(&[515, 500, 515, 7, 507, 527]),
+            vec![515, 500, 507],
+            "non-knife defindexes and repeats must not enter the rotation"
+        );
+        let every_knife: Vec<u16> = (500..=526).rev().collect();
+        let capped = normalize_shortcut_knives(&every_knife);
+        assert_eq!(capped.len(), 16, "the rotation must stay bounded");
+        assert_eq!(capped[0], 526, "the first entry wins, so the user's order is kept");
+    }
+
+    #[test]
+    fn knife_shortcut_is_read_back_from_the_game_and_only_renders_a_suggested_bind() {
+        let root = test_root();
+        let missing = knife_shortcut_at(&root, &AppConfig::default(), false);
+        assert!(!missing.enabled);
+        assert_eq!(
+            missing.defindexes,
+            DEFAULT_SHORTCUT_KNIVES.to_vec(),
+            "a directory without a saved preset still shows the documented rotation, off"
+        );
+        assert_eq!(missing.bind_line, "bind \\ \"css_cs2bi_knife_next\"");
+
+        let mut cosmetics = KnifeCustomizerConfig::default();
+        cosmetics.knife_shortcut_enabled = true;
+        cosmetics.shortcut_knife_defindexes = vec![508, 507];
+        save_knife_config(&root, &mut cosmetics).unwrap();
+
+        let config = AppConfig { knife_shortcut_bind: "z".into(), ..Default::default() };
+        let saved = knife_shortcut_at(&root, &config, true);
+        assert!(saved.enabled);
+        assert_eq!(saved.defindexes, vec![508, 507]);
+        assert_eq!(saved.bind_line, "bind z \"css_cs2bi_knife_next\"");
+        assert!(saved.cs2_running);
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 /// Close a launch-isolation transaction an earlier Panel process left behind.
@@ -2635,7 +2664,7 @@ pub fn run() {
             get_config, save_config, should_present_welcome_story,
             detect_directories, select_directory, validate_files,
             get_launch_isolation, launch_local_cosmetics,
-            get_drop_knives, set_drop_knives, get_knife_customizer, save_knife_customizer,
+            get_knife_shortcut, set_knife_shortcut, get_knife_customizer, save_knife_customizer,
             export_cosmetics_preset, import_cosmetics_preset,
             get_runtime_snapshot, get_cs2_process,
             inspect_installation, get_install_plan, install_payload, repair_payload,

@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Crosshair, Gem, Swords } from "lucide-react";
 import SubPage from "../components/SubPage";
+import Toggle from "../components/Toggle";
 import { useT } from "../i18n";
 import { api, type KnifeCustomizerConfig } from "../lib/api";
 import { useStore } from "../state/store";
 import { WEAPON_ICONS, type WeaponIcon } from "../data/weaponIcons";
 import { KNIFE_ICONS, type KnifeIcon } from "../data/knifeIcons";
+import { DEFAULT_SHORTCUT_KNIVES } from "../data/cosmeticOrder";
 import { itemName, localizedSkinName } from "../data/skinLocalization";
 import { captureKeyName } from "../lib/keycapture";
+import { writeClipboard } from "../lib/platform";
 import WeaponPresetModal from "./WeaponPresetModal";
 import KnifePresetModal from "./KnifePresetModal";
 import GlovePresetModal from "./GlovePresetModal";
@@ -20,25 +23,21 @@ import "./WeaponPresetsPanel.css";
 
 export default function WeaponPresetsPanel({ onBack }: { onBack?: () => void }) {
   const t = useT();
-  const { csgoPath, reportError, config: appConfig, dropKnives, applyDropKnives, dropKnivesPending } = useStore();
+  const { csgoPath, reportError, config: appConfig, knifeShortcut, applyKnifeShortcut } = useStore();
   const [config, setConfig] = useState<KnifeCustomizerConfig | null>(null);
   const [editing, setEditing] = useState<WeaponIcon | null>(null);
   const [editingKnife, setEditingKnife] = useState<KnifeIcon | null>(null);
   const [editingGlove, setEditingGlove] = useState(false);
   const [editingMusicKit, setEditingMusicKit] = useState(false);
   const [capturing, setCapturing] = useState(false);
-  const [dropDraft, setDropDraft] = useState<number[]>([]);
-  const dropSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const [copied, setCopied] = useState(false);
+  const shortcutSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [team, setTeam] = useCosmeticsTeam();
 
   useEffect(() => {
     if (!csgoPath) return setConfig(null);
     api.getKnifeCustomizer(csgoPath).then((state) => setConfig(state.config)).catch(reportError);
   }, [csgoPath, reportError]);
-
-  useEffect(() => {
-    setDropDraft(dropKnives?.selected ?? []);
-  }, [dropKnives?.selected]);
 
   const teamWeapons = WEAPON_ICONS.filter((weapon) => weapon.availability === team || weapon.availability === "shared");
   const exclusiveWeapons = teamWeapons.filter((weapon) => weapon.availability === team);
@@ -47,17 +46,25 @@ export default function WeaponPresetsPanel({ onBack }: { onBack?: () => void }) 
   const count = teamWeapons.filter((weapon) => !!presets[String(weapon.id)]).length;
   const selectedMusicKit = MUSIC_KITS.find((kit) => kit.def_index === (config?.music_kit_id ?? 0));
 
-  const bindKey = dropKnives?.bind_key ?? "\\";
-  const dropSelected = new Set(dropDraft);
-  const cfgPresent = dropKnives?.cfg_present ?? false;
-  const running = dropKnives?.cs2_running ?? false;
-  const bindDisabled = !csgoPath || !cfgPresent;
+  // The rotation is read back from the game directory on every snapshot, so the
+  // list the Panel shows is the list the plugin will cycle.
+  const bindKey = knifeShortcut?.bind_key ?? "\\";
+  const rotation = knifeShortcut?.defindexes ?? [];
+  const shortcutEnabled = knifeShortcut?.enabled ?? false;
+  const bindLine = knifeShortcut?.bind_line ?? `bind ${bindKey} "css_cs2bi_knife_next"`;
+  const rotationSpot = new Map(rotation.map((id, index) => [id, index + 1]));
+  const running = knifeShortcut?.cs2_running ?? false;
   const cosmeticsDisabled = !csgoPath;
   const ctLoadout = config?.loadouts?.ct;
   const tLoadout = config?.loadouts?.t;
 
   const status: Status =
-    !csgoPath ? "off" : !cfgPresent ? "red" : running && dropKnivesPending ? "yellow" : "green";
+    !csgoPath ? "off" : !knifeShortcut ? "unknown" : running ? "yellow" : "green";
+
+  const saveShortcut = (nextBind: string, nextRotation: number[], nextEnabled: boolean) => {
+    shortcutSaveQueue.current = shortcutSaveQueue.current
+      .then(() => applyKnifeShortcut(nextBind, nextRotation, nextEnabled));
+  };
 
   // Key capture: grab the first keydown after the box is clicked.
   useEffect(() => {
@@ -65,24 +72,30 @@ export default function WeaponPresetsPanel({ onBack }: { onBack?: () => void }) 
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const name = captureKeyName(e);
       setCapturing(false);
-      dropSaveQueue.current = dropSaveQueue.current.then(() => applyDropKnives(name, Array.from(dropSelected)));
+      saveShortcut(captureKeyName(e), rotation, shortcutEnabled);
     };
     window.addEventListener("keydown", onKey, { capture: true, once: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true } as any);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [capturing]);
+  }, [capturing, rotation, shortcutEnabled]);
 
-  const toggleDrop = (id: number) => {
-    if (bindDisabled) return;
-    const next = new Set(dropSelected);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    // keep numeric order for a stable bind string
-    const ordered = KNIFE_ICONS.map((k) => k.id).filter((i) => next.has(i));
-    setDropDraft(ordered);
-    dropSaveQueue.current = dropSaveQueue.current.then(() => applyDropKnives(bindKey, ordered));
+  // Clicking adds to the end of the rotation, clicking again removes it, so the
+  // order the user clicks in is the order the in-game key cycles through.
+  const toggleShortcutKnife = (id: number) => {
+    if (cosmeticsDisabled) return;
+    saveShortcut(bindKey, rotation.includes(id)
+      ? rotation.filter((knife) => knife !== id) : [...rotation, id], shortcutEnabled);
+  };
+
+  const copyBindLine = async () => {
+    try {
+      await writeClipboard(bindLine);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch (e) {
+      reportError(e);
+    }
   };
 
   const weaponGrid = (weapons: WeaponIcon[]) => <div className="wp__grid">
@@ -116,53 +129,70 @@ export default function WeaponPresetsPanel({ onBack }: { onBack?: () => void }) 
       <header className="cos-card__head">
         <span className="cos-card__icon cos-card__icon--knives" aria-hidden="true"><Swords size={18} /></span>
         <span className="cos-card__title">
-          <strong>{t("pre.dropKnives")}</strong>
-          <small>{t("cosmetics.dropCount", { n: dropSelected.size })}</small>
+          <strong>{t("pre.quickKnife")}</strong>
+          <small>{t("cosmetics.quickKnifeDesc")}</small>
         </span>
         <span className="wp__bind">
           <small className="wp__bind-hint">{t("cosmetics.leftRight")}</small>
           <span className="wp__bind-label">{t("pre.bind")}</span>
           <button
             className={`wp__bind-box ${capturing ? "is-capturing" : ""}`}
-            disabled={bindDisabled}
+            disabled={cosmeticsDisabled}
             onClick={() => setCapturing(true)}
             title={t("cosmetics.keyHint")}
           >
             {capturing ? t("pre.pressKey") : bindKey}
           </button>
+          <Toggle
+            checked={shortcutEnabled}
+            disabled={cosmeticsDisabled}
+            onChange={(next) => saveShortcut(bindKey, rotation, next)}
+            ariaLabel={t("pre.quickKnife")}
+          />
         </span>
       </header>
       <div className="cos-card__body">
-        <div className="wp__grid">
-          {KNIFE_ICONS.map((knife) => {
-            const name = itemName(localizedSkinName(appConfig?.language, knife.id, 0, `Knife ${knife.id}`));
-            const isDrop = dropSelected.has(knife.id);
-            const hasCt = ctLoadout?.default_knife_defindex === knife.id;
-            const hasT = tLoadout?.default_knife_defindex === knife.id;
-            return (
-              <button
-                key={knife.id}
-                className={`wp__weapon wp__knife ${isDrop ? "is-drop" : ""} ${hasCt || hasT ? "is-configured" : ""}`}
-                onClick={() => toggleDrop(knife.id)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  if (!cosmeticsDisabled) setEditingKnife(knife);
-                }}
-                disabled={cosmeticsDisabled}
-                title={`${name} · ${t("cosmetics.leftRight")}`}
-                aria-pressed={isDrop}
-              >
-                {(hasCt || hasT) && <span className="wp__team-tags" aria-hidden="true">
-                  {hasCt && <i className="is-ct">CT</i>}
-                  {hasT && <i className="is-t">T</i>}
-                </span>}
-                {isDrop && <i className="wp__drop-check" aria-hidden="true">✓</i>}
-                <img src={knife.url} alt={name} draggable={false} />
-                <span>{name}</span>
-              </button>
-            );
-          })}
+        <div className="wp__sub">
+          <h3>{t("cosmetics.rotationOrder")} · {t("cosmetics.rotationCount", { n: rotation.length })}</h3>
+          <div className="wp__grid">
+            {KNIFE_ICONS.map((knife) => {
+              const name = itemName(localizedSkinName(appConfig?.language, knife.id, 0, `Knife ${knife.id}`));
+              const spot = rotationSpot.get(knife.id);
+              const hasCt = ctLoadout?.default_knife_defindex === knife.id;
+              const hasT = tLoadout?.default_knife_defindex === knife.id;
+              return (
+                <button
+                  key={knife.id}
+                  className={`wp__weapon wp__knife ${spot ? "is-next" : ""} ${hasCt || hasT ? "is-configured" : ""}`}
+                  onClick={() => toggleShortcutKnife(knife.id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    if (!cosmeticsDisabled) setEditingKnife(knife);
+                  }}
+                  disabled={cosmeticsDisabled}
+                  title={`${name} · ${t("cosmetics.leftRight")}`}
+                  aria-pressed={!!spot}
+                >
+                  {(hasCt || hasT) && <span className="wp__team-tags" aria-hidden="true">
+                    {hasCt && <i className="is-ct">CT</i>}
+                    {hasT && <i className="is-t">T</i>}
+                  </span>}
+                  {spot && <i className="wp__order" aria-hidden="true">{spot}</i>}
+                  <img src={knife.url} alt={name} draggable={false} />
+                  <span>{name}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
+        <div className="wp__shortcut-foot">
+          <code className="wp__bind-line">{bindLine}</code>
+          <button className="wp__mini" onClick={() => void copyBindLine()}>{copied ? t("cosmetics.copied") : t("pre.copy")}</button>
+          <button className="wp__mini" disabled={cosmeticsDisabled} onClick={() => saveShortcut(bindKey, DEFAULT_SHORTCUT_KNIVES, shortcutEnabled)}>
+            {t("cosmetics.defaultRotation")}
+          </button>
+        </div>
+        {shortcutEnabled && rotation.length === 0 && <small className="wp__bind-hint">{t("cosmetics.quickKnifeEmpty")}</small>}
       </div>
     </section>
 

@@ -15,12 +15,12 @@ import {
   type Cs2ProcessInfo,
   type DirectoryInfo,
   type DiagnosticReport,
-  type DropKnivesState,
   type FilesReport,
   type InstallationInspection,
   type InstallPlan,
   type InstallTransactionResult,
   type IsolationStatus,
+  type KnifeShortcutState,
   type RestoreResult,
 } from "../lib/api";
 
@@ -35,10 +35,8 @@ export type Store = {
    *  the durable state is always clean, and a project search path only exists
    *  inside an explicit local-cosmetics launch window. */
   isolation: IsolationStatus | null;
-  /** Drop-knife "changed while CS2 running, pending restart" flag. Persisted,
-   *  so the yellow light survives a full close/reopen of the panel. */
-  dropKnivesPending: boolean;
-  dropKnives: DropKnivesState | null;
+  /** The optional quick-knife rotation, read back from the game directory. */
+  knifeShortcut: KnifeShortcutState | null;
   csgoPath: string | null;
   /** Last global error (for the error modal). */
   error: AppError | null;
@@ -59,29 +57,12 @@ export type Store = {
   restorePristineCs2: () => Promise<RestoreResult | null>;
   exportDiagnostics: () => Promise<DiagnosticReport | null>;
   launchLocalCosmetics: () => Promise<boolean>;
-  applyDropKnives: (
+  applyKnifeShortcut: (
     bindKey: string,
-    selected: number[]
-  ) => Promise<DropKnivesState | null>;
+    defindexes: number[],
+    enabled: boolean
+  ) => Promise<KnifeShortcutState | null>;
 };
-
-/** A boolean flag persisted in localStorage so it survives a full close/reopen
- *  of the panel (used for the per-section "changed while CS2 running" lights). */
-function usePersistedFlag(key: string): [boolean, (v: boolean) => void] {
-  const [value, setValue] = useState<boolean>(() => localStorage.getItem(key) === "1");
-  const set = useCallback(
-    (v: boolean) => {
-      setValue(v);
-      try {
-        localStorage.setItem(key, v ? "1" : "0");
-      } catch {
-        /* localStorage unavailable — fall back to in-memory only */
-      }
-    },
-    [key]
-  );
-  return [value, set];
-}
 
 const Ctx = createContext<Store | null>(null);
 
@@ -99,9 +80,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [installation, setInstallation] = useState<InstallationInspection | null>(null);
   const [files, setFiles] = useState<FilesReport | null>(null);
   const [isolation, setIsolation] = useState<IsolationStatus | null>(null);
-  const [dropKnivesPending, setDropKnivesPending] =
-    usePersistedFlag("cs2bi.dropKnivesPending");
-  const [dropKnives, setDropKnives] = useState<DropKnivesState | null>(null);
+  const [knifeShortcut, setKnifeShortcut] = useState<KnifeShortcutState | null>(null);
   const [error, setError] = useState<AppError | null>(null);
   const configRef = useRef<AppConfig | null>(null);
   const lastSnapshotErrorLogRef = useRef(0);
@@ -145,14 +124,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }
   }, [directory, reportError]);
 
-  const applyDropKnives = useCallback(
-    async (bindKey: string, selected: number[]) => {
+  const applyKnifeShortcut = useCallback(
+    async (bindKey: string, defindexes: number[], enabled: boolean) => {
       const csgo = directory?.valid ? directory.selected : null;
       if (!csgo) return null;
       try {
-        const info = await api.setDropKnives(csgo, bindKey, selected);
-        setDropKnives(info);
-        setDropKnivesPending(info.cs2_running);
+        const info = await api.setKnifeShortcut(csgo, bindKey, defindexes, enabled);
+        setKnifeShortcut(info);
         return info;
       } catch (e) {
         reportError(e);
@@ -193,11 +171,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setInstallation(snapshot.installation);
       setFiles(snapshot.files);
       setIsolation(snapshot.isolation);
-      setDropKnives(snapshot.drop_knives);
-
-      if (!snapshot.process.running) {
-        setDropKnivesPending(false);
-      }
+      setKnifeShortcut(snapshot.knife_shortcut);
     } catch (e) {
       // Keep the complete last-good snapshot, but refresh the process lock
       // independently so a transient disk scan cannot leave install disabled.
@@ -215,11 +189,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setInstallation(null);
       setFiles(null);
       setIsolation(null);
-      setDropKnives(null);
-      setDropKnivesPending(false);
+      setKnifeShortcut(null);
       reportError(e);
     }
-  }, [refreshProcess, reportError, setDropKnivesPending]);
+  }, [refreshProcess, reportError]);
 
   const updateConfig = useCallback(
     async (patch: Partial<AppConfig>) => {
@@ -428,8 +401,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     installation,
     files,
     isolation,
-    dropKnivesPending,
-    dropKnives,
+    knifeShortcut,
     csgoPath: directory?.valid ? directory.selected : null,
     error,
     clearError,
@@ -449,13 +421,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     restorePristineCs2,
     exportDiagnostics,
     launchLocalCosmetics,
-    applyDropKnives,
+    applyKnifeShortcut,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
-type PreviewStore = Pick<Store, "config" | "csgoPath" | "process" | "reportError">;
+type PreviewStore = Pick<Store, "config" | "csgoPath" | "process" | "reportError"> &
+  Partial<Pick<Store, "knifeShortcut" | "applyKnifeShortcut">>;
 
 // Scoped provider for browser-only component previews. It intentionally exposes
 // only the state consumed by the previewed surface and never invokes Tauri.

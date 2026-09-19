@@ -17,7 +17,7 @@
 .cos-card__body--rows { gap: 8px; }
 .wp__sub { display: grid; gap: 8px; }
 .wp__sub h3 { margin: 0; color: var(--text-tertiary); font-size: 10px; font-weight: 650; text-transform: uppercase; }
-.wp__drop-check { position: absolute; top: 5px; right: 5px; z-index: 1; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; background: var(--c-accent); color: #fff; font-size: 10px; font-style: normal; font-weight: 650; }
+.wp__order { position: absolute; top: 5px; right: 5px; z-index: 1; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; background: var(--c-accent); color: #fff; font-size: 10px; font-style: normal; font-weight: 650; }
 
 @media (prefers-reduced-motion: reduce) {
   .cos-card { animation: none; }
@@ -41,7 +41,7 @@
 .wp__weapon span { min-width: 0; height: 24px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 9px; line-height: 12px; font-weight: 650; text-align: center; overflow: hidden; overflow-wrap: anywhere; }
 .wp__dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--st-green); }
 
-/* Drop knives merged from the old presets page */
+/* Optional quick-knife rotation merged from the old presets page */
 .wp__bind { display: flex; align-items: center; gap: 9px; }
 .wp__bind-label { color: var(--text-secondary); font-size: 12px; font-weight: 650; }
 .wp__bind-box { min-width: 58px; min-height: 32px; padding: 0 13px; border: 1px solid rgba(0,0,0,.08); border-radius: var(--r-sm); background: rgba(255,255,255,.62); color: var(--text-primary); font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 13px; font-weight: 650; }
@@ -49,7 +49,12 @@
 .wp__bind-box.is-capturing { border-color: var(--c-accent); color: var(--c-accent-hover); box-shadow: 0 0 0 2px var(--c-accent-soft); }
 .wp__bind-box:disabled { opacity: .45; }
 .wp__bind-hint { color: var(--text-tertiary); font-size: 10px; }
-.wp__knife.is-drop { border-color: var(--c-accent-line); background: var(--c-accent-soft); box-shadow: 0 0 0 2px var(--c-accent-soft); }
+.wp__knife.is-next { border-color: var(--c-accent-line); background: var(--c-accent-soft); box-shadow: 0 0 0 2px var(--c-accent-soft); }
+.wp__shortcut-foot { display: flex; align-items: center; gap: 8px; }
+.wp__bind-line { flex: 1 1 auto; min-width: 0; padding: 7px 9px; border: 1px solid rgba(0,0,0,.07); border-radius: var(--r-sm); background: rgba(255,255,255,.48); color: var(--text-secondary); font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 11px; overflow-x: auto; white-space: nowrap; }
+.wp__mini { flex: 0 0 auto; min-height: 32px; padding: 0 12px; border: 1px solid rgba(0,0,0,.07); border-radius: var(--r-sm); background: rgba(255,255,255,.62); color: var(--text-primary); font-size: 11px; font-weight: 650; }
+.wp__mini:hover:not(:disabled) { background: var(--card); border-color: var(--line-strong); }
+.wp__mini:disabled { opacity: .45; }
 .wp__team-tags { position: absolute; top: 5px; left: 5px; display: flex; gap: 3px; z-index: 1; }
 .wp__team-tags i { padding: 1px 5px; border-radius: 5px; font-size: 8px; font-style: normal; font-weight: 650; }
 .wp__team-tags .is-ct { background: var(--track); color: var(--text-secondary); }
