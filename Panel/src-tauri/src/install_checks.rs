@@ -58,7 +58,7 @@ fn blocking_file_check(code: &str, title: &str, path: &Path, action: &str) -> In
 }
 
 fn source_file_check(code: &str, title: &str, payload_root: &Path, relative: &str) -> InstallCheckItem {
-    blocking_file_check(code, title, &payload_root.join(relative), "Download and extract the complete Plus package again")
+    blocking_file_check(code, title, &payload_root.join(relative), "Re-extract the complete release package and select that directory again")
 }
 
 fn target_file_check(code: &str, title: &str, target: &Path, relative: &str, installed: bool) -> InstallCheckItem {
@@ -102,7 +102,7 @@ fn component_check(code: &str, name: &str, path: PathBuf, missing_status: CheckS
     }
     let mut check = match pe_machine(&path) {
         Ok(0x8664) => item(code, CheckStatus::Pass, name, format!("{}; PE x64", path.display()), "File and expected architecture are present", "No action required"),
-        Ok(machine) => item(code, CheckStatus::Fail, name, format!("{}; PE machine 0x{machine:04x}", path.display()), "Component architecture does not match 64-bit CS2", "Repair installation with the Windows x64 Plus package"),
+        Ok(machine) => item(code, CheckStatus::Fail, name, format!("{}; PE machine 0x{machine:04x}", path.display()), "Component architecture does not match 64-bit CS2", "Repair from the Windows x64 release package"),
         Err(error) => item(code, CheckStatus::Fail, name, format!("{}: {error}", path.display()), "Component cannot be read as a PE image", "Repair installation or export diagnostics"),
     };
     check.blocking = blocking && check.status == CheckStatus::Fail;
@@ -124,7 +124,7 @@ fn managed_component_check(code: &str, name: &str, path: PathBuf, missing_status
             "The managed assembly is readable and contains a CLR metadata root",
             "No action required",
         ),
-        Ok(_) => item(code, CheckStatus::Fail, name, path.display().to_string(), "The file is not a readable managed .NET assembly", "Repair installation with the complete Plus package"),
+        Ok(_) => item(code, CheckStatus::Fail, name, path.display().to_string(), "The file is not a readable managed .NET assembly", "Repair the installation from the complete release package"),
         Err(error) => item(code, CheckStatus::Fail, name, format!("{}: {error}", path.display()), "The managed assembly cannot be read", "Repair installation or export diagnostics"),
     };
     check.blocking = blocking && check.status == CheckStatus::Fail;
@@ -194,7 +194,7 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
 
     match installer::verify_payload_for_target(payload_root, target) {
         Ok(manifest) => checks.push(blocker("PAYLOAD_HASHES", CheckStatus::Pass, "Payload manifest and hashes", format!("version {}; {} entries", manifest.package_version, manifest.entries.len()), "Every payload entry passed SHA-256 verification", "No action required")),
-        Err(error) => checks.push(blocker("PAYLOAD_HASHES", CheckStatus::Fail, "Payload manifest and hashes", error.detail, "The package is incomplete or modified", "Use the complete Plus package or download it again")),
+        Err(error) => checks.push(blocker("PAYLOAD_HASHES", CheckStatus::Fail, "Payload manifest and hashes", error.detail, "The package is incomplete or modified", "Re-extract the complete release package; a partially copied one is never installed")),
     }
     let installed = match installer::inspect(payload_root, state_root, target) {
         Ok(inspection) => {

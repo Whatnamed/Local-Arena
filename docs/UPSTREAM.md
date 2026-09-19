@@ -1,60 +1,68 @@
 # Upstream Policy
 
-## Base
+## Base and reference
 
-- Project: `ed0ard/CS2-Bot-Improver`
-- Packaged runtime base: `v1.4.1`
-- Synced upstream source version: `1.4.2`
-- Synced upstream commit: `43c455c6f85bbb6ffe80f137a5e911cfe0c903f2`
-- Plus release line: `1.4.2.1`
+- Main base: `numakkiyu/Local-Arena` — repository layout, player-cosmetics plugin, and Panel.
+- Reference upstream: `ed0ard/CS2-Bot-Improver` — what Local Arena itself derives from.
+- This product is **Local Cosmetics**: the player-cosmetics capability of that lineage, shipped
+  without the enhanced-bot runtime. Development happens on branches and worktrees of this
+  repository; upstream is never modified directly.
 
-The repository stores source and configuration deltas. Upstream has marked its Panel and source tree as 1.4.2 but has
-not published a v1.4.2 release archive. The Windows package script therefore obtains the last official v1.4.1 layout,
-then overlays the synced 1.4.2 sources, BotHider v0.3.0 data, pinned engine-compatible runtimes, and current Plus builds
-instead of committing generated or third-party binaries.
+Both projects are AGPL-3.0. The license, copyright notices, and authorship records that apply to
+inherited code stay in place; renaming a component or trimming the payload does not remove them.
 
-## Pinned Runtime Inputs
+## What is deliberately not carried over
 
-The machine-readable source of truth is `scripts/dependencies.json`.
+The packaging allowlist (`scripts/release-inventory.json`) and the workspace audit keep these out
+of the product and out of the release archive:
 
-- `CS2BotImprover.zip` supplies the official Windows runtime layout.
-- MetaMod 2.0.0-git1406 supplies the engine 26 loader.
-- CounterStrikeSharp v1.0.371 with its bundled .NET runtime replaces the stale v1.4.1 copy.
-- RayTrace v1.0.16 supplies both the native module and CounterStrikeSharp API/implementation.
-- `BotHider-windows-0.3.0.zip` supplies the native BotHider module.
-- BotAI includes the tested Windows signature refresh from upstream PR #75 (`3db93ba`).
-- BotAI, BotAimImprover, BotBuy, and NadeSystem are rebuilt from the pinned source tree so post-v1.4.1 fixes are not
-  replaced by older release DLLs.
-- BotAimImprover and NadeSystem receive `RayTraceApi.dll` from the verified v1.0.16 archive through an explicit
-  MSBuild property; clean builds do not depend on an ignored `libs` file left on the developer machine.
-- Plus-built `BotHiderImpl`, `BotHiderApi`, and `PlayerKnifeCustomizer` assemblies overlay their upstream locations.
-- The Plus Panel replaces the upstream Panel executable while retaining the same standalone workflow.
+- Enhanced bot AI, aim, buy, state, and randomizer plugins; NadeSystem and its grenade catalogs.
+- RayTrace and BotHider (native modules, loaders, and CounterStrikeSharp bridges).
+- Match coordination, round damage recap, offline telemetry, rating models, and demo/statistics.
+- `overrides/` bot profiles, `cfg/` game-mode and bot overlays.
+- The three launch modes and the "Cosmetics preview / Enhanced bots" split: this product has one
+  managed launch, described in `docs/PRODUCT-SCOPE.md`.
+- The signed GitHub-release online update channel. See below.
 
-Every downloaded archive and each critical runtime DLL is SHA-256 verified before packaging.
+## Pinned runtime inputs
 
-## Synchronizing
+The machine-readable source of truth is `scripts/dependencies.json`. Every downloaded archive and
+each critical loader DLL is SHA-256 verified before the package is assembled, and the assembled
+package is re-audited afterwards.
 
-1. Fetch `upstream/main` and inspect release notes, issues, and relevant PRs.
-2. Rebase or merge in an isolated branch.
-3. Preserve Plus-only modules and Panel routes.
-4. Reconcile I18N by keeping the entire new upstream key/dictionary set, then reapply Plus keys and translations.
-5. Refresh catalogs only from a traceable source and verify locale and entry counts.
-6. Build all three targets and create a disposable package before updating the pinned manifest.
+- MetaMod:Source `2.0.0-git1406` supplies the engine loader (`addons/metamod/**`).
+- CounterStrikeSharp `v1.0.371` with its bundled .NET runtime supplies the managed host
+  (`addons/counterstrikesharp/**` plus `addons/metamod/counterstrikesharp.vdf`).
+- `PlayerKnifeCustomizer` is built from this repository against `net10.0` and CounterStrikeSharp
+  API `1.0.371`; its packaged file set is pinned to that build output.
+- The Panel is the release Tauri build of `Panel/src-tauri`.
 
-## Third-Party Data
+Nothing else is downloaded, and nothing is copied from an upstream release archive and then
+trimmed.
 
-Weapon images and localized skin names are derived from `Nereziel/cs2-WeaponPaints`. Indonesian currently uses the
-English fallback because that source does not provide an Indonesian skin-name table. This fallback affects display
-only; item application uses numeric catalog identifiers.
+## Updating and synchronization
 
-BotHider is maintained at `XBribo/CS2-Bot-Hider`. The package tracks v0.3.0, which supplies the current Windows
-identity synchronization, team-join scope, entity-packing protection, and gamedata-driven
-`CServerSideClient::SetName` target. Packaging verifies the official release archive and native DLL hashes without
-binary patching.
+There is no in-Panel updater and no release-manifest fetch: an automatic channel that resolved an
+upstream repository could replace this fork's Panel or payload with the official Local Arena
+package, which is exactly what this product must not do. Installing a newer build means replacing
+the extracted release directory (or merging upstream in Git and rebuilding).
 
-`BotHiderImpl` supplements native name publication only for slots reported by BotHider as managed bots, through
-`CBasePlayerController.m_iszPlayerName`, and forces the Plus `bot_info.json` name source before bots are created. It
-does not write names for human-player slots. Steam IDs, avatars, cards,
-crosshair codes, ping, scoreboard flair, bot disguise, respawn behavior, and every upstream enhanced-bot module stay
-on their existing paths. The repository can verify this isolation and the package layout automatically, but the final
-host-local scoreboard result still requires an in-game Enhanced Bots practice match.
+Upstream changes are adopted only through Git review — fetch, inspect, then merge or cherry-pick on
+a branch — never by installing an upstream archive. `docs/PRODUCT-SCOPE.md` remains the boundary:
+a synchronization that would reintroduce a removed runtime component is not merged as-is.
+
+## Third-party data
+
+- Weapon skin images and the localized paint-kit name tables come from `Nereziel/cs2-WeaponPaints`
+  (GPL-3.0). Indonesian uses the English fallback because that source publishes no Indonesian
+  skin-name table; the fallback is display-only, and item application uses numeric catalog ids.
+- Sticker identifiers, names, and image metadata come from `ByMykel/CSGO-API` at a pinned commit,
+  regenerated by `scripts/generate-sticker-catalog.mjs` with the source commit and output hashes
+  recorded in `Panel/src/data/stickerCatalog.source.json`.
+- The supported-weapon schema reference comes from `SteamTracking/GameTracking-CS2` at a pinned
+  commit; that repository publishes no license file, so only factual identifiers are used.
+- Charm and agent placement data is generated from a local read-only weapon dump by
+  `scripts/generate-player-cosmetic-placements.mjs`.
+
+`scripts/verify-workspace.ps1` checks that the generated catalogs still match their recorded
+sources and hashes, and the Panel's About page lists the same projects with their licenses.
