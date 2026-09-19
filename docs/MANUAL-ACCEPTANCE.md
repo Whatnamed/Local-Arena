@@ -8,23 +8,34 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 
 ## A. 普通 Steam 启动隔离
 
+当前实现：`gameinfo.gi` 的常驻状态就是 clean，本项目 SearchPath 只存在于一次 Panel 启动所打开的窗口内，退出时由插件恢复，异常残留由 Panel 下次启动或插件自愈处理。因此需要覆盖"恢复发生了但没有被面板看到"的情况。
+
 - [ ] 完整退出 Panel 和 CS2。
+- [ ] 确认 `<csgo>\gameinfo.gi` 中不含 `csgo/addons/metamod` 行。
 - [ ] 直接从 Steam 启动 CS2。
 - [ ] 游戏可以正常进入普通环境，没有因为残留 `-insecure` 或 Mod SearchPath 造成模式异常。
 - [ ] 本项目 PlayerCosmetics 不应加载或改变真人玩家饰品。
-- [ ] 上一次曾经使用本地饰品模式，也不会改变上述结果。
+- [ ] 上一次曾经使用本地饰品模式并正常退出 CS2，也不会改变上述结果。
+- [ ] CS2 正常退出后，插件日志（CounterStrikeSharp 日志）出现 `Restored clean gameinfo.gi (plugin unload)`。
 - [ ] 曾经强退 Panel / CS2 后，再直接 Steam 启动仍是普通状态。
+- [ ] 强退 Panel 但 CS2 继续运行，再退出 CS2、再 Steam 启动：仍是普通 CS2。
+- [ ] 让 CS2 直接崩溃（或强杀进程）后立刻从 Steam 再启动一次：**这一次可能仍加载 Mod**（残留窗口），但插件日志应出现 `Restored clean gameinfo.gi (runtime loaded outside a Panel launch)`，并且**再下一次** Steam 启动必须是完全普通的 CS2。这是当前设计承认的残余限制，需要确认它确实只影响一次启动。
+- [ ] Panel 日志出现 `panel.isolation_recovered`（若上一次事务未完成）。
+- [ ] 如果你另外装有第三方 MetaMod，确认本项目**没有**移除它的 SearchPath。
 
 如需技术确认，可在退出游戏后把日志 / 当前 `gameinfo.gi` 状态交给 Agent 复审，但不要仅凭 Panel 文案认定隔离成功。
 
 ## B. 本地饰品模式启动
 
 - [ ] 打开 Panel，通过本项目入口启动本地饰品模式。
-- [ ] Panel 不要求永久修改 Steam Launch Options。
+- [ ] Panel 不要求永久修改 Steam Launch Options，也没有任何"模式"选项需要事先切换。
 - [ ] 该次启动使用 `-insecure`。
+- [ ] 启动后 `<csgo>\addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\panel_isolation.json` 被插件消费（该文件消失属正常）。
 - [ ] MetaMod、CounterStrikeSharp 和 PlayerCosmetics 正常加载。
+- [ ] **换地图 / 重开一局后饰品仍然生效**，且此时 `gameinfo.gi` 仍是 clean —— 这验证引擎只在进程启动时读取 gameinfo。
 - [ ] 使用的是 CS2 官方普通 Bot，而不是 Enhanced Bot AI。
 - [ ] Bot 瞄准、投掷物、购买和行为没有出现旧 Bot Improver 的增强逻辑。
+- [ ] 游戏内控制台 `css_cs2bi_knives_status` 报告的 `enabled`、catalog 数量和面板所见一致。
 
 ## C. 刀具
 
@@ -41,9 +52,11 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 
 ## D. 快捷刀
 
-若启用了快捷刀：
+快捷刀轮换默认关闭。先在 Panel 中启用、挑选轮换列表，并把 Panel 显示的 `bind …` 命令自行加入个人配置后再进游戏验证：
 
+- [ ] Panel 不会自动写入或改写任何 cfg / bind；未手动复制绑定命令时，按键完全不起作用。
 - [ ] 默认或自定义快捷列表按预期轮换。
+- [ ] 轮换顺序与在 Panel 中点击加入的顺序一致。
 - [ ] 不再像旧 cfg 一样一次在地面生成大量刀具实体。
 - [ ] 每把刀切换后恢复该刀自己的皮肤预设。
 - [ ] 快捷功能关闭时不修改 `\` 或其他按键。
@@ -120,7 +133,22 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] 恢复后 Steam Verify Integrity 能顺利回到官方文件状态。
 - [ ] 恢复后再直接 Steam 启动，没有本项目 runtime 残留。
 
-## L. 回归记录建议
+## L. 运行中热更新
+
+CS2 正在跑本地饰品模式时，从 Panel 改配置应在几十毫秒到一次安全事件内生效，不需要重启游戏，也不需要重新开局。
+
+- [ ] 改刀皮：只有刀具外观刷新，手套 / 枪械外观不变。
+- [ ] 改手套：只有手套与相关 bodygroup 变化，不出现裸手、模型重叠或持续闪烁。
+- [ ] 只改某一把枪的枪皮：只有该型号且属于你自己的武器变化，其他枪不动。
+- [ ] 保存同一个配置（不改动任何值后再次点保存）不应产生可见的重复应用或闪烁。
+- [ ] 玩家死亡瞬间保存：不崩溃，效果推迟到下一次安全事件（重生 / 换队）正确生效。
+- [ ] 连续快速保存多次编辑：最终状态正确，不出现队列堆积或长时间无响应。
+- [ ] 把 `player_knife_presets.json` 手动改成非法 JSON 再保存 Panel 侧改动：游戏内饰品保持上一次仍然有效的外观，CounterStrikeSharp 日志记录加载失败，不崩溃。
+- [ ] 手工把一个 Wear 改成超出该 PaintKit 区间（例如 `0.99`）：重生后应看到该 PaintKit 允许的最旧磨损，而不是皮肤消失。
+- [ ] StatTrak 击杀计数在运行中累加并写回配置文件，不应触发整把武器的重复应用或视觉抖动。
+- [ ] 关闭 Panel 后本局饰品继续生效；重开 Panel 后预设仍在且不产生重新应用风暴。
+
+## M. 回归记录建议
 
 每次做完整回归时记录：
 
