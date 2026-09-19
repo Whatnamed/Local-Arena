@@ -24,7 +24,6 @@ const MANAGED_FILES: &[&str] = &[
     "addons/metamod/RayTrace.vdf",
     "cfg/my_bot_normal_config.cfg",
     "cfg/my_bot_ffa_config.cfg",
-    "overrides/botprofile.vpk",
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -307,7 +306,7 @@ mod tests {
         let base = root();
         let target = base.join("game/csgo");
         let state = base.join("state");
-        let managed = target.join("overrides/botprofile.vpk");
+        let managed = target.join(MANAGED_FILES[0]);
         let disabled = disabled_path(&managed);
         fs::create_dir_all(managed.parent().unwrap()).unwrap();
         fs::write(&disabled, b"old difficulty").unwrap();

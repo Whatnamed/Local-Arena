@@ -143,7 +143,7 @@ impl Default for AppearanceConfig {
 }
 
 fn default_brand_name() -> String {
-    "Local Arena".into()
+    "Local Cosmetics".into()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -349,7 +349,7 @@ pub fn import_appearance(source: String) -> Result<AppearanceConfig> {
     }
     let bundle: AppearanceBundle = serde_json::from_slice(&fs::read(source)?)?;
     if bundle.schema_version != THEME_SCHEMA_VERSION || bundle.kind != THEME_KIND {
-        return Err(AppError::invalid("Unsupported Local Arena theme"));
+        return Err(AppError::invalid("Unsupported Local Cosmetics theme"));
     }
     validate(&bundle.appearance)?;
     let path = appearance_path()?;
@@ -370,7 +370,7 @@ mod tests {
         let config = AppearanceConfig::default();
         assert!(matches!(config.palette, AppearancePalette::Terracotta));
         assert_eq!(config.accent_color, "#d97757");
-        assert_eq!(config.brand_name, "Local Arena");
+        assert_eq!(config.brand_name, "Local Cosmetics");
         assert!(config.team_theme.is_none());
         validate(&config).unwrap();
     }

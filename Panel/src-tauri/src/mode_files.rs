@@ -10,12 +10,11 @@ pub(crate) type ModeResult<T> = std::result::Result<T, String>;
 pub(crate) enum LaunchMode {
     Online,
     Preview,
-    Bots,
 }
 
 const LAUNCH_STATE_DIR: &str = "launch-isolation";
 const LAUNCH_JOURNAL: &str = "transaction.json";
-const OWNED_SEARCH_PATHS: [&str; 2] = ["csgo/addons/metamod", "csgo/overrides/botprofile.vpk"];
+const OWNED_SEARCH_PATHS: [&str; 1] = ["csgo/addons/metamod"];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct LaunchJournal {
@@ -29,7 +28,9 @@ impl LaunchMode {
         match value {
             Some("online") => Ok(Self::Online),
             Some("preview") => Ok(Self::Preview),
-            Some("bots") => Ok(Self::Bots),
+            // Legacy config values remain readable, but Cosmetics-only local
+            // mode never enables an enhanced bot profile.
+            Some("bots") => Ok(Self::Preview),
             _ => Err("Select a valid game mode before launching CS2".into()),
         }
     }
@@ -45,12 +46,6 @@ pub(crate) fn contains_metamod_search_path(bytes: &[u8]) -> bool {
         .contains("csgo/addons/metamod")
 }
 
-pub(crate) fn contains_botprofile_search_path(bytes: &[u8]) -> bool {
-    String::from_utf8_lossy(bytes)
-        .to_ascii_lowercase()
-        .contains("csgo/overrides/botprofile.vpk")
-}
-
 fn game_path_value(line: &str) -> Option<&str> {
     let content = line.split_once("//").map_or(line, |(content, _)| content);
     let mut fields = content.split_whitespace();
@@ -64,7 +59,7 @@ fn game_path_value(line: &str) -> Option<&str> {
     Some(value)
 }
 
-fn rewrite_gameinfo(bytes: &[u8], include_bot_runtime: bool) -> ModeResult<Vec<u8>> {
+fn rewrite_gameinfo(bytes: &[u8], include_local_runtime: bool) -> ModeResult<Vec<u8>> {
     let text = std::str::from_utf8(bytes)
         .map_err(|error| format!("gameinfo.gi is not valid UTF-8: {error}"))?;
     let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
@@ -80,19 +75,18 @@ fn rewrite_gameinfo(bytes: &[u8], include_bot_runtime: bool) -> ModeResult<Vec<u
         }) {
             continue;
         }
-        if include_bot_runtime
+        if include_local_runtime
             && !inserted
             && game_path_value(line).is_some_and(|value| value.eq_ignore_ascii_case("csgo"))
         {
             let indent: String = line.chars().take_while(|ch| ch.is_whitespace()).collect();
             output.push(format!("{indent}Game\tcsgo/addons/metamod"));
-            output.push(format!("{indent}Game\tcsgo/overrides/botprofile.vpk"));
             inserted = true;
         }
         output.push(line.to_string());
     }
 
-    if include_bot_runtime && !inserted {
+    if include_local_runtime && !inserted {
         return Err("gameinfo.gi has no primary 'Game csgo' SearchPath".into());
     }
 
@@ -237,9 +231,6 @@ pub(crate) fn prepare_local_launch(
     if !contains_metamod_search_path(&installed) {
         return Err("Local CS2 launch was not prepared with MetaMod SearchPath".into());
     }
-    if mode == LaunchMode::Bots && !contains_botprofile_search_path(&installed) {
-        return Err("Bot launch was not prepared with the selected bot profile SearchPath".into());
-    }
     Ok(())
 }
 
@@ -275,14 +266,12 @@ mod tests {
         prepare_local_launch(&state, &root, LaunchMode::Preview).unwrap();
         let local = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
         assert_eq!(local.matches("csgo/addons/metamod").count(), 1);
-        assert_eq!(local.matches("csgo/overrides/botprofile.vpk").count(), 1);
         assert!(local.contains("csgo/addons/foreign"));
         assert!(launch_journal_path(&state, &root).is_file());
 
         restore_clean_launch(&state, &root).unwrap();
         let clean = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
         assert!(!clean.contains("csgo/addons/metamod"));
-        assert!(!clean.contains("csgo/overrides/botprofile.vpk"));
         assert!(clean.contains("csgo/addons/foreign"));
         assert!(clean.contains("SteamSetting\tbefore"));
         assert!(!launch_journal_path(&state, &root).exists());
@@ -301,7 +290,6 @@ mod tests {
         prepare_local_launch(&state, &root, LaunchMode::Preview).unwrap();
         let repeated = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
         assert_eq!(repeated.matches("csgo/addons/metamod").count(), 1);
-        assert_eq!(repeated.matches("csgo/overrides/botprofile.vpk").count(), 1);
 
         fs::write(
             root.join("gameinfo.gi"),
@@ -311,7 +299,6 @@ mod tests {
         assert!(recover_launch_transaction(&state, &root).unwrap());
         let recovered = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
         assert!(!recovered.contains("csgo/addons/metamod"));
-        assert!(!recovered.contains("csgo/overrides/botprofile.vpk"));
         assert!(recovered.contains("csgo/steam-update"));
         assert!(recovered.contains("NewDepotSetting\t2"));
         fs::remove_dir_all(base).unwrap();

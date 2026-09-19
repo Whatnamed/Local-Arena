@@ -1,6 +1,5 @@
 use crate::{AppError, Result, atomic_fs, mode_files, steam};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -10,58 +9,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-fn match_metadata(csgo: &Path) -> serde_json::Value {
-    let root = csgo.join(".csbip/matches");
-    let mut entries = Vec::new();
-    for directory in fs::read_dir(root).into_iter().flatten().flatten() {
-        let path = directory.path();
-        if !path.is_dir() { continue; }
-        for name in ["request.json", "result.json"] {
-            let file = path.join(name);
-            if let Ok(metadata) = fs::metadata(&file) {
-                entries.push(serde_json::json!({
-                    "session_id": directory.file_name().to_string_lossy(),
-                    "kind": name,
-                    "path": file.to_string_lossy(),
-                    "size": metadata.len(),
-                    "modified_unix": metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|value| value.as_secs()),
-                }));
-            }
-        }
-    }
-    serde_json::Value::Array(entries)
-}
-
 fn runtime_mount_metadata(csgo: &Path) -> serde_json::Value {
     let gameinfo = csgo.join("gameinfo.gi");
     let gameinfo_bytes = fs::read(&gameinfo).ok();
-    let vpks = [
-        ("active", csgo.join("overrides/botprofile.vpk")),
-        ("low", csgo.join("overrides/Low/botprofile.vpk")),
-        ("medium", csgo.join("overrides/Medium/botprofile.vpk")),
-        ("high", csgo.join("overrides/High/botprofile.vpk")),
-    ]
-    .into_iter()
-    .map(|(name, path)| {
-        let metadata = fs::metadata(&path).ok();
-        let sha256 = fs::read(&path)
-            .ok()
-            .map(|bytes| format!("{:x}", Sha256::digest(bytes)));
-        serde_json::json!({
-            "name": name,
-            "path": path.to_string_lossy(),
-            "present": metadata.is_some(),
-            "size": metadata.map(|value| value.len()),
-            "sha256": sha256,
-        })
-    })
-    .collect::<Vec<_>>();
     serde_json::json!({
         "gameinfo_path": gameinfo.to_string_lossy(),
         "gameinfo_present": gameinfo_bytes.is_some(),
         "metamod_search_path": gameinfo_bytes.as_deref().is_some_and(mode_files::contains_metamod_search_path),
-        "botprofile_search_path": gameinfo_bytes.as_deref().is_some_and(mode_files::contains_botprofile_search_path),
-        "botprofile_vpks": vpks,
     })
 }
 
@@ -168,13 +122,6 @@ fn add_named_files(collector: &mut Collector, prefix: &str, paths: impl IntoIter
     Ok(())
 }
 
-fn recent_match_records(csgo: &Path) -> Vec<PathBuf> {
-    recent_files_recursive(&csgo.join(".csbip/matches"), 12, 2)
-        .into_iter()
-        .filter(|path| matches!(path.file_name().and_then(|name| name.to_str()), Some("request.json" | "result.json")))
-        .collect()
-}
-
 fn steam_log_files(_csgo: &Path) -> Vec<PathBuf> {
     steam::client_log_files(&[
         "content_log.txt",
@@ -230,7 +177,7 @@ fn crash_dump_metadata() -> serde_json::Value {
     let directory = PathBuf::from(local).join("CrashDumps");
     for path in recent_files(&directory, 50) {
         let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_ascii_lowercase();
-        if !name.contains("cs2") && !name.contains("cs2botimprover") { continue; }
+        if !name.contains("cs2") { continue; }
         if let Ok(metadata) = fs::metadata(&path) {
             dumps.push(serde_json::json!({
                 "path": path.to_string_lossy(),
@@ -298,7 +245,7 @@ fn wer_reports() -> Vec<PathBuf> {
     for root in roots {
         for directory in fs::read_dir(root).into_iter().flatten().flatten() {
             let name = directory.file_name().to_string_lossy().to_ascii_lowercase();
-            if !name.contains("cs2") && !name.contains("cs2botimprover") { continue; }
+            if !name.contains("cs2") { continue; }
             let report = directory.path().join("Report.wer");
             if report.is_file() { reports.push(report); }
         }
@@ -372,7 +319,7 @@ pub fn cleanup_archives(state_root: &Path) -> std::io::Result<usize> {
 }
 
 fn archive_name(timestamp: u64) -> String {
-    format!("LALog_{timestamp}.zip")
+    format!("LocalCosmeticsLog_{timestamp}.zip")
 }
 
 pub fn export(state_root: &Path, csgo: Option<&Path>, snapshot: &serde_json::Value) -> Result<DiagnosticArchive> {
@@ -417,12 +364,7 @@ pub fn export(state_root: &Path, csgo: Option<&Path>, snapshot: &serde_json::Val
 
     if let Some(csgo) = csgo {
         collector.add_json("report/runtime-mounts.json", &runtime_mount_metadata(csgo))?;
-        collector.add_json("matches/metadata.json", &match_metadata(csgo))?;
-        add_named_files(&mut collector, "matches/recent", recent_match_records(csgo))?;
         for (name, path) in [
-            ("runtime/match-runtime.json", csgo.join(".csbip/match-runtime.json")),
-            ("runtime/aim-runtime.json", csgo.join(".csbip/aim-runtime.json")),
-            ("runtime/purchase-runtime.json", csgo.join(".csbip/purchase-runtime.json")),
             ("logs/cs2/console.log", csgo.join("console.log")),
             ("logs/cs2/console-history.txt", csgo.join("console_history.txt")),
             ("logs/metamod/metamod-fatal.log", csgo.join("addons/metamod/metamod-fatal.log")),
@@ -455,7 +397,7 @@ mod tests {
 
     #[test]
     fn diagnostic_archive_name_uses_local_arena_prefix() {
-        assert_eq!(archive_name(1234567890), "LALog_1234567890.zip");
+        assert_eq!(archive_name(1234567890), "LocalCosmeticsLog_1234567890.zip");
     }
 
     #[test]
@@ -464,22 +406,15 @@ mod tests {
         let csgo = root.join("game/csgo");
         fs::create_dir_all(root.join("logs/panel")).unwrap();
         fs::create_dir_all(csgo.join("logs")).unwrap();
-        fs::create_dir_all(csgo.join(".csbip/matches/session-1")).unwrap();
-        fs::create_dir_all(csgo.join("overrides/Medium")).unwrap();
         fs::write(root.join("logs/panel/panel-current.jsonl"), b"test").unwrap();
         fs::write(csgo.join("logs/console.log"), b"cs2 test log").unwrap();
         fs::write(
             csgo.join("gameinfo.gi"),
-            b"SearchPaths\n{\nGame csgo/addons/metamod\nGame csgo/overrides/botprofile.vpk\nGame csgo\n}\n",
-        ).unwrap();
-        fs::write(csgo.join("overrides/Medium/botprofile.vpk"), b"vpk").unwrap();
-        fs::write(
-            csgo.join(".csbip/matches/session-1/request.json"),
-            br#"{"schema_version":1,"session_id":"session-1"}"#,
+            b"SearchPaths\n{\nGame csgo/addons/metamod\nGame csgo\n}\n",
         ).unwrap();
         let archive = export(&root, Some(&csgo), &serde_json::json!({"ok": true})).unwrap();
         let archive_name = Path::new(&archive.path).file_name().and_then(|name| name.to_str()).unwrap();
-        assert!(archive_name.starts_with("LALog_"));
+        assert!(archive_name.starts_with("LocalCosmeticsLog_"));
         assert!(archive_name.ends_with(".zip"));
         let file = File::open(&archive.path).unwrap();
         let mut zip = zip::ZipArchive::new(file).unwrap();
@@ -489,7 +424,6 @@ mod tests {
         assert!(zip.by_name("report/appearance.json").is_ok());
         assert!(zip.by_name("logs/panel/00-panel-current.jsonl").is_ok());
         assert!(zip.by_name("logs/cs2/recent/00-console.log").is_ok());
-        assert!(zip.by_name("matches/recent/00-request.json").is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 }

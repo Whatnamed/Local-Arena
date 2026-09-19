@@ -58,7 +58,7 @@ fn blocking_file_check(code: &str, title: &str, path: &Path, action: &str) -> In
 }
 
 fn source_file_check(code: &str, title: &str, payload_root: &Path, relative: &str) -> InstallCheckItem {
-    blocking_file_check(code, title, &payload_root.join(relative), "Download and extract the complete Plus package again")
+    blocking_file_check(code, title, &payload_root.join(relative), "Download and extract the complete Cosmetics-only package again")
 }
 
 fn target_file_check(code: &str, title: &str, target: &Path, relative: &str, installed: bool) -> InstallCheckItem {
@@ -131,7 +131,7 @@ fn managed_component_check(code: &str, name: &str, path: PathBuf, missing_status
     check
 }
 
-pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: bool, selected_map: Option<&str>) -> Result<InstallCheckReport> {
+pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: bool, _selected_map: Option<&str>) -> Result<InstallCheckReport> {
     let mut checks = Vec::new();
     checks.push(if target.is_dir() { blocker("INSTALL_TARGET", CheckStatus::Pass, "CS2 game/csgo directory", target.display().to_string(), "Selected directory exists", "No action required") }
         else { blocker("INSTALL_TARGET", CheckStatus::Fail, "CS2 game/csgo directory", target.display().to_string(), "Selected path is unavailable", "Select the CS2 installation root, game directory, or game/csgo directory") });
@@ -147,17 +147,9 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
         Some(Ok(activity)) => blocker("STEAM_APP_ACTIVITY", CheckStatus::Pass, "Steam App 730 activity", activity.evidence(), "Steam may remain open because App 730 is idle", "No action required"),
     });
     checks.push(blocking_file_check("GAMEINFO_GI", "gameinfo.gi", &target.join("gameinfo.gi"), "Verify CS2 files in Steam"));
-    if let Some(map) = selected_map {
-        checks.push(blocking_file_check("MATCH_MAP", "Selected match map", &target.join("maps").join(format!("{map}.vpk")), "Verify CS2 files in Steam or install the selected map"));
-    }
     checks.push(if cs2_running { blocker("CS2_PROCESS_LOCK", CheckStatus::Fail, "CS2 process and file locks", "cs2.exe is running", "CS2 can lock plugins, configs, and Demo sessions", "Fully close CS2 and wait for cs2.exe to exit") }
         else { blocker("CS2_PROCESS_LOCK", CheckStatus::Pass, "CS2 process and file locks", "No selected cs2.exe process", "No active game lock detected", "No action required") });
     if target.is_dir() { checks.push(atomic_probe(target, "TARGET_ATOMIC_WRITE", "Target atomic write")); }
-    let match_state = target.join(".csbip");
-    match fs::create_dir_all(&match_state) {
-        Ok(()) => checks.push(atomic_probe(&match_state, "MATCH_STATE_ATOMIC_WRITE", "Match state atomic write")),
-        Err(error) => checks.push(blocker("MATCH_STATE_ATOMIC_WRITE", CheckStatus::Fail, "Match state atomic write", format!("{}: {error}", match_state.display()), "The per-installation match state directory cannot be created", "Check CS2 folder permissions and Controlled folder access")),
-    }
     checks.push(atomic_probe(state_root, "PANEL_STATE_ATOMIC_WRITE", "Panel state and backup atomic write"));
 
     match installer::inspect_space_requirements(payload_root, state_root, target) {
@@ -191,7 +183,7 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
 
     match installer::verify_payload_for_target(payload_root, target) {
         Ok(manifest) => checks.push(blocker("PAYLOAD_HASHES", CheckStatus::Pass, "Payload manifest and hashes", format!("version {}; {} entries", manifest.package_version, manifest.entries.len()), "Every payload entry passed SHA-256 verification", "No action required")),
-        Err(error) => checks.push(blocker("PAYLOAD_HASHES", CheckStatus::Fail, "Payload manifest and hashes", error.detail, "The package is incomplete or modified", "Use the complete Plus package or download it again")),
+        Err(error) => checks.push(blocker("PAYLOAD_HASHES", CheckStatus::Fail, "Payload manifest and hashes", error.detail, "The package is incomplete or modified", "Use the complete Cosmetics-only package or download it again")),
     }
     let installed = match installer::inspect(payload_root, state_root, target) {
         Ok(inspection) => {
@@ -211,8 +203,6 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
         ("METAMOD_X64", "MetaMod", "addons/metamod/bin/win64/server.dll"),
         ("CSS_X64", "CounterStrikeSharp", "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll"),
         ("CSS_DOTNET_X64", "CounterStrikeSharp .NET runtime", "addons/counterstrikesharp/dotnet/dotnet.exe"),
-        ("RAYTRACE_X64", "RayTrace", "addons/RayTrace/bin/win64/RayTrace.dll"),
-        ("BOTHIDER_X64", "BotHider", "addons/BotHider/bin/win64/BotHider.dll"),
     ] {
         checks.push(component_check(
             &format!("TARGET_{code}"),
@@ -230,9 +220,7 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
         ));
     }
     for (code, name, relative) in [
-        ("MATCH_COORDINATOR_MANAGED", "PlusMatchCoordinator", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/PlusMatchCoordinator.dll"),
-        ("MATCH_CORE_MANAGED", "MatchCore", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/MatchCore.dll"),
-        ("BOTHIDER_API_MANAGED", "BotHider API", "addons/counterstrikesharp/shared/BotHiderApi/BotHiderApi.dll"),
+        ("PLAYER_COSMETICS_MANAGED", "PlayerCosmetics", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll"),
     ] {
         checks.push(managed_component_check(
             &format!("TARGET_{code}"),
@@ -249,37 +237,12 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
             true,
         ));
     }
-    {
-        let name = "TeamLineupInjector";
-        let relative = "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.dll";
-        checks.push(managed_component_check(
-            "TARGET_TEAM_LINEUP_MANAGED",
-            &format!("Installed {name}"),
-            target.join(relative),
-            if installed { CheckStatus::Fail } else { CheckStatus::Warn },
-            false,
-        ));
-        checks.push(managed_component_check(
-            "PAYLOAD_TEAM_LINEUP_MANAGED",
-            &format!("Package {name}"),
-            payload_root.join(relative),
-            CheckStatus::Fail,
-            false,
-        ));
-    }
     for (code, title, relative) in [
-        ("MATCH_CATALOG", "Match catalog", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/match_catalog.json"),
-        ("OPEN_RATING_MODEL", "OpenRating model", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/open-rating-3.0-proxy-v1.json"),
-        ("BOTHIDER_IDENTITIES", "BotHider identity catalog", "addons/BotHider/bot_info.json"),
+        ("COSMETIC_CATALOG", "PlayerCosmetics catalog", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json"),
+        ("WEAPON_CATALOG", "PlayerCosmetics weapon catalog", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/weapon_skins.json"),
     ] {
         checks.push(target_file_check(&format!("TARGET_{code}"), &format!("Installed {title}"), target, relative, installed));
         checks.push(source_file_check(&format!("PAYLOAD_{code}"), &format!("Package {title}"), payload_root, relative));
-    }
-    for difficulty in ["Low", "Medium", "High"] {
-        let relative = format!("addons/counterstrikesharp/plugins/PlusMatchCoordinator/profiles/{difficulty}/botprofile.db");
-        let suffix = difficulty.to_ascii_uppercase();
-        checks.push(target_file_check(&format!("TARGET_MATCH_PROFILE_{suffix}"), &format!("Installed {difficulty} match Bot profiles"), target, &relative, installed));
-        checks.push(source_file_check(&format!("PAYLOAD_MATCH_PROFILE_{suffix}"), &format!("Package {difficulty} match Bot profiles"), payload_root, &relative));
     }
 
     let pass_count = checks.iter().filter(|check| check.status == CheckStatus::Pass).count();
