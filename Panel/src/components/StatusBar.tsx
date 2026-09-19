@@ -1,20 +1,15 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import StatusDot, { type Status } from "./StatusDot";
 import Modal from "./Modal";
-import { api, type OnlineUpdateSnapshot } from "../lib/api";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
+import { isolationPhase, ISOLATION_PRESENTATION } from "../lib/launchGate";
 import "./StatusBar.css";
 
 export default function StatusBar({ onOpenSettings }: { onOpenSettings?: () => void }) {
-  const { directory, files, ready, installation } = useStore();
+  const { directory, files, ready, installation, isolation, csgoPath, process: cs2Process } = useStore();
   const t = useT();
   const [showMissing, setShowMissing] = useState(false);
-  const [updates, setUpdates] = useState<OnlineUpdateSnapshot | null>(null);
-
-  useEffect(() => {
-    void api.getUpdateSnapshot().then(setUpdates).catch(() => {});
-  }, []);
 
   const dirStatus: Status = !ready
     ? "unknown"
@@ -41,8 +36,11 @@ export default function StatusBar({ onOpenSettings }: { onOpenSettings?: () => v
     ? "yellow"
     : "green";
 
-  const updateAvailable = !!updates && (updates.panel.update_available || updates.plugin.update_available);
-  const updateStatus: Status = !updates ? "off" : updateAvailable ? "yellow" : "green";
+  // The launch row repeats the Overview card in one line, with the same wording:
+  // what is observable on disk right now, never a "mode".
+  const phase = isolationPhase(csgoPath, isolation, !!cs2Process?.running);
+  const isolationStatus: Status = ISOLATION_PRESENTATION[phase].status;
+  const isolationHint = t(ISOLATION_PRESENTATION[phase].title);
 
   const dirHint = !directory?.steam_found
     ? t("st.steamNotFound")
@@ -111,16 +109,14 @@ export default function StatusBar({ onOpenSettings }: { onOpenSettings?: () => v
 
         <div className="statusbar__divider" />
 
-        <div className={`statusbar__item ${onOpenSettings ? "is-clickable" : ""}`} onClick={onOpenSettings} title={onOpenSettings ? t("set.updates") : undefined}>
+        <div className="statusbar__item">
           <div className="statusbar__text">
-            <span className="statusbar__label">{t("st.update")}</span>
-            <span className="statusbar__hint">
-              {updates
-                ? t(updateAvailable ? "update.available" : "update.current")
-                : "—"}
+            <span className="statusbar__label">{t("launch.state")}</span>
+            <span className="statusbar__hint" title={isolationHint}>
+              {isolationHint}
             </span>
           </div>
-          <StatusDot status={updateStatus} size={12} />
+          <StatusDot status={isolationStatus} size={12} pulse={!ready} />
         </div>
       </section>
 

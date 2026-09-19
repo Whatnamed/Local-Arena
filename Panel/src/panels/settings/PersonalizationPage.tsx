@@ -1,6 +1,5 @@
-import { useRef, useState, type ChangeEvent } from "react";
-import { Check, Download, Image, LoaderCircle, RotateCcw, Shield, Type, Upload, X } from "lucide-react";
-import Modal from "../../components/Modal";
+import { useState, type ChangeEvent } from "react";
+import { Download, Image, RotateCcw, Type, Upload, X } from "lucide-react";
 import Segmented from "../../components/Segmented";
 import { useToast } from "../../components/Toast";
 import { useT, type I18nKey } from "../../i18n";
@@ -19,7 +18,6 @@ import {
   PALETTES,
 } from "../../lib/appearance";
 import { openDialog, saveDialog } from "../../lib/platform";
-import { applyTeamTheme, TEAM_THEMES } from "../../lib/teamThemes";
 import { useAppearance } from "../../state/appearance";
 import { useStore } from "../../state/store";
 import appLogo from "../../assets/app-logo.png";
@@ -132,9 +130,6 @@ export default function PersonalizationPage() {
   const { reportError } = useStore();
   const { appearance, updateAppearance, replaceAppearance, resetAppearance } = useAppearance();
   const [busy, setBusy] = useState<"import" | "export" | null>(null);
-  const [teamBusy, setTeamBusy] = useState<string | null>(null);
-  const [pendingTheme, setPendingTheme] = useState<string | null>(null);
-  const teamBusyRef = useRef(false);
 
   const update = <K extends keyof AppearanceConfig>(key: K, value: AppearanceConfig[K]) => {
     updateAppearance((current) => ({ ...current, [key]: value }));
@@ -217,33 +212,6 @@ export default function PersonalizationPage() {
     toast.show(t("personal.resetDone"), "green");
   };
 
-  const applyTheme = async (themeId: string) => {
-    if (teamBusyRef.current) return;
-    const theme = TEAM_THEMES.find((entry) => entry.id === themeId);
-    if (!theme) return;
-    teamBusyRef.current = true;
-    setTeamBusy(theme.id);
-    try {
-      replaceAppearance(await applyTeamTheme(appearance, theme));
-      toast.show(`${t("personal.teamApplied")} ${theme.name}`, "green");
-    } catch (error) {
-      reportError(error);
-      toast.show(t("personal.teamApplyFailed"), "red");
-    } finally {
-      teamBusyRef.current = false;
-      setTeamBusy(null);
-    }
-  };
-
-  const chooseTeamTheme = (themeId: string) => {
-    if (teamBusyRef.current) return;
-    if (themeId !== appearance.team_theme && (appearance.logo || appearance.background)) {
-      setPendingTheme(themeId);
-      return;
-    }
-    void applyTheme(themeId);
-  };
-
   const previewStyle = appearance.background ? {
     backgroundImage: `linear-gradient(rgba(0, 0, 0, ${appearance.background.dim / 100}), rgba(0, 0, 0, ${appearance.background.dim / 100})), url("${appearance.background.data_url}")`,
     backgroundSize: appearance.background.fit,
@@ -266,32 +234,6 @@ export default function PersonalizationPage() {
         <div className="personal-preview__cards"><i /><i /></div>
       </div>
       <em>{t("personal.livePreview")}</em>
-    </section>
-
-    <section className="personal-section">
-      <header><span><Shield size={17} /><strong>{t("personal.teamThemes")}</strong></span><small>{t("personal.teamThemesDesc")}</small></header>
-      <div className="personal-team-grid">
-        {TEAM_THEMES.map((theme) => {
-          const active = appearance.team_theme === theme.id;
-          const loading = teamBusy === theme.id;
-          return <button
-            key={theme.id}
-            className={active ? "personal-team-card is-active" : "personal-team-card"}
-            disabled={!!teamBusy}
-            onClick={() => void chooseTeamTheme(theme.id)}
-            aria-pressed={active}
-          >
-            <span className="personal-team-card__visual"><img src={theme.background} alt="" loading="lazy" /></span>
-            <span className="personal-team-card__meta">
-              <strong>{theme.name}</strong>
-              <span className="personal-team-card__swatches" aria-hidden="true">
-                {theme.colors.map((color) => <i key={color} style={{ background: color }} />)}
-              </span>
-              <small>{loading ? <LoaderCircle className="is-spinning" size={14} /> : active ? <Check size={14} /> : null}{loading ? t("personal.teamApplying") : active ? t("personal.teamActive") : t("personal.teamApply")}</small>
-            </span>
-          </button>;
-        })}
-      </div>
     </section>
 
     <section className="personal-section">
@@ -396,17 +338,5 @@ export default function PersonalizationPage() {
       <button onClick={() => void importTheme()} disabled={!!busy}><Upload size={15} />{busy === "import" ? t("personal.importing") : t("personal.import")}</button>
       <button className="is-primary" onClick={() => void exportTheme()} disabled={!!busy}><Download size={15} />{busy === "export" ? t("personal.exporting") : t("personal.export")}</button>
     </footer>
-
-    <Modal
-      open={!!pendingTheme}
-      title={TEAM_THEMES.find((entry) => entry.id === pendingTheme)?.name ?? t("personal.teamThemes")}
-      onClose={() => setPendingTheme(null)}
-      footer={<>
-        <button className="btn-secondary" onClick={() => setPendingTheme(null)}>{t("common.cancel")}</button>
-        <button className="btn-primary" onClick={() => { const themeId = pendingTheme; setPendingTheme(null); if (themeId) void applyTheme(themeId); }}>{t("personal.teamApply")}</button>
-      </>}
-    >
-      <p className="personal-confirm-copy">{t("personal.teamOverwriteConfirm")}</p>
-    </Modal>
   </div>;
 }

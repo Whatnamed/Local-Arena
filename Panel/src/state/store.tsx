@@ -12,26 +12,16 @@ import {
   toAppError,
   type AppConfig,
   type AppError,
-  type AimValue,
-  type BotItemKey,
-  type BotItemsState,
-  type DifficultyInfo,
-  type DifficultyLevel,
-  type DirectoryInfo,
   type Cs2ProcessInfo,
+  type DirectoryInfo,
+  type DiagnosticReport,
   type DropKnivesState,
   type FilesReport,
-  type GameMode,
-  type ModeInfo,
-  type NadesValue,
-  type PresetsState,
-  type TeamLineupState,
-  type TeamLineupInput,
   type InstallationInspection,
   type InstallPlan,
   type InstallTransactionResult,
+  type IsolationStatus,
   type RestoreResult,
-  type DiagnosticReport,
 } from "../lib/api";
 
 export type Store = {
@@ -41,24 +31,13 @@ export type Store = {
   process: Cs2ProcessInfo | null;
   installation: InstallationInspection | null;
   files: FilesReport | null;
-  difficulty: DifficultyInfo | null;
-  mode: ModeInfo | null;
-  botItems: BotItemsState | null;
-  presets: PresetsState | null;
-  teamLineup: TeamLineupState | null;
-  timescaleToggleEnabled: boolean;
-  /** Per-section "changed while CS2 running, pending restart" flags. Persisted,
-   *  so each yellow light survives a full close/reopen of the panel. */
-  aimPending: boolean;
-  nadesPending: boolean;
-  teamLineupPending: boolean;
-  modePending: boolean;
-  difficultyPending: boolean;
+  /** Observable launch-isolation state of `gameinfo.gi`. There is no "mode":
+   *  the durable state is always clean, and a project search path only exists
+   *  inside an explicit local-cosmetics launch window. */
+  isolation: IsolationStatus | null;
+  /** Drop-knife "changed while CS2 running, pending restart" flag. Persisted,
+   *  so the yellow light survives a full close/reopen of the panel. */
   dropKnivesPending: boolean;
-  /** Per Bot Item "changed while CS2 running, pending restart" flags — each
-   *  toggle has its own yellow light; the panel's header light is yellow if any
-   *  one of them is. */
-  botItemsPending: Record<BotItemKey, boolean>;
   dropKnives: DropKnivesState | null;
   csgoPath: string | null;
   /** Last global error (for the error modal). */
@@ -67,7 +46,7 @@ export type Store = {
   reportError: (e: unknown) => void;
   refreshDirectory: () => Promise<DirectoryInfo | null>;
   refreshFiles: () => Promise<void>;
-  refreshDifficulty: () => Promise<void>;
+  refreshIsolation: () => Promise<IsolationStatus | null>;
   refreshProcess: (silent?: boolean) => Promise<Cs2ProcessInfo | null>;
   refreshAll: (silent?: boolean) => Promise<void>;
   updateConfig: (patch: Partial<AppConfig>) => Promise<boolean>;
@@ -79,13 +58,7 @@ export type Store = {
   restorePayload: () => Promise<RestoreResult | null>;
   restorePristineCs2: () => Promise<RestoreResult | null>;
   exportDiagnostics: () => Promise<DiagnosticReport | null>;
-  applyDifficulty: (level: DifficultyLevel) => Promise<DifficultyInfo | null>;
-  applyMode: (mode: GameMode) => Promise<ModeInfo | null>;
-  applyBotItem: (item: BotItemKey, on: boolean) => Promise<BotItemsState | null>;
-  applyAim: (value: AimValue) => Promise<PresetsState | null>;
-  applyNades: (value: NadesValue) => Promise<PresetsState | null>;
-  applyTeamLineup: (input: TeamLineupInput) => Promise<TeamLineupState | null>;
-  applyTimescaleToggle: (enabled: boolean) => Promise<boolean>;
+  launchLocalCosmetics: () => Promise<boolean>;
   applyDropKnives: (
     bindKey: string,
     selected: number[]
@@ -110,58 +83,6 @@ function usePersistedFlag(key: string): [boolean, (v: boolean) => void] {
   return [value, set];
 }
 
-const BOT_ITEM_KEYS: BotItemKey[] = ["skins", "profiles", "agents", "music"];
-
-function emptyBotItemFlags(): Record<BotItemKey, boolean> {
-  return { skins: false, profiles: false, agents: false, music: false };
-}
-
-/** Like usePersistedFlag, but a per-key map (one yellow light per Bot Item)
- *  stored as a single JSON entry so all four survive a close/reopen together. */
-function usePersistedFlagMap(
-  key: string
-): [
-  Record<BotItemKey, boolean>,
-  (item: BotItemKey, v: boolean) => void,
-  () => void
-] {
-  const [map, setMap] = useState<Record<BotItemKey, boolean>>(() => {
-    const base = emptyBotItemFlags();
-    try {
-      const raw = JSON.parse(localStorage.getItem(key) || "{}");
-      for (const k of BOT_ITEM_KEYS) if (raw[k] === true) base[k] = true;
-    } catch {
-      /* missing or legacy value — start all-false */
-    }
-    return base;
-  });
-  const persist = useCallback(
-    (next: Record<BotItemKey, boolean>) => {
-      try {
-        localStorage.setItem(key, JSON.stringify(next));
-      } catch {
-        /* localStorage unavailable — in-memory only */
-      }
-    },
-    [key]
-  );
-  const setOne = useCallback(
-    (item: BotItemKey, v: boolean) =>
-      setMap((prev) => {
-        const next = { ...prev, [item]: v };
-        persist(next);
-        return next;
-      }),
-    [persist]
-  );
-  const clearAll = useCallback(() => {
-    const next = emptyBotItemFlags();
-    persist(next);
-    setMap(next);
-  }, [persist]);
-  return [map, setOne, clearAll];
-}
-
 const Ctx = createContext<Store | null>(null);
 
 export function useStore(): Store {
@@ -177,24 +98,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [process, setProcess] = useState<Cs2ProcessInfo | null>(null);
   const [installation, setInstallation] = useState<InstallationInspection | null>(null);
   const [files, setFiles] = useState<FilesReport | null>(null);
-  const [difficulty, setDifficulty] = useState<DifficultyInfo | null>(null);
-  const [mode, setMode] = useState<ModeInfo | null>(null);
-  const [botItems, setBotItems] = useState<BotItemsState | null>(null);
-  const [presets, setPresets] = useState<PresetsState | null>(null);
-  const [teamLineup, setTeamLineup] = useState<TeamLineupState | null>(null);
-  const [timescaleToggleEnabled, setTimescaleToggleEnabled] = useState(false);
-  // Per-section "changed while CS2 running, pending restart" flags. Persisted in
-  // localStorage so each light survives a full close/reopen of the panel while
-  // CS2 keeps running (the boot refreshAll clears them once CS2 is not running).
-  const [aimPending, setAimPending] = usePersistedFlag("cs2bi.aimPending");
-  const [nadesPending, setNadesPending] = usePersistedFlag("cs2bi.nadesPending");
-  const [teamLineupPending, setTeamLineupPending] = usePersistedFlag("cs2bi.teamLineupPending");
-  const [modePending, setModePending] = usePersistedFlag("cs2bi.modePending");
-  const [difficultyPending, setDifficultyPending] = usePersistedFlag("cs2bi.difficultyPending");
+  const [isolation, setIsolation] = useState<IsolationStatus | null>(null);
   const [dropKnivesPending, setDropKnivesPending] =
     usePersistedFlag("cs2bi.dropKnivesPending");
-  const [botItemsPending, setBotItemPending, clearBotItemsPending] =
-    usePersistedFlagMap("cs2bi.botItemsPending");
   const [dropKnives, setDropKnives] = useState<DropKnivesState | null>(null);
   const [error, setError] = useState<AppError | null>(null);
   const configRef = useRef<AppConfig | null>(null);
@@ -222,36 +128,22 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }
   }, [directory, reportError]);
 
-  const refreshDifficulty = useCallback(async () => {
+  const refreshIsolation = useCallback(async () => {
     const csgo = directory?.valid ? directory.selected : null;
     if (!csgo) {
-      setDifficulty(null);
-      return;
+      setIsolation(null);
+      return null;
     }
     try {
-      setDifficulty(await api.getDifficulty(csgo));
+      const status = await api.getLaunchIsolation(csgo);
+      setIsolation(status);
+      return status;
     } catch (e) {
-      setDifficulty(null);
+      setIsolation(null);
       reportError(e);
+      return null;
     }
   }, [directory, reportError]);
-
-  const applyDifficulty = useCallback(
-    async (level: DifficultyLevel) => {
-      const csgo = directory?.valid ? directory.selected : null;
-      if (!csgo) return null;
-      try {
-        const info = await api.setDifficulty(csgo, level);
-        setDifficulty(info);
-        setDifficultyPending(info.cs2_running);
-        return info;
-      } catch (e) {
-        reportError(e);
-        return null;
-      }
-    },
-    [directory, reportError]
-  );
 
   const applyDropKnives = useCallback(
     async (bindKey: string, selected: number[]) => {
@@ -261,115 +153,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const info = await api.setDropKnives(csgo, bindKey, selected);
         setDropKnives(info);
         setDropKnivesPending(info.cs2_running);
-        return info;
-      } catch (e) {
-        reportError(e);
-        return null;
-      }
-    },
-    [directory, reportError]
-  );
-
-  const applyAim = useCallback(
-    async (value: AimValue) => {
-      const csgo = directory?.valid ? directory.selected : null;
-      if (!csgo) return null;
-      try {
-        const info = await api.setAim(csgo, value);
-        setPresets(info);
-        // Yellow (pending restart) only if the change was made while running.
-        setAimPending(info.cs2_running);
-        return info;
-      } catch (e) {
-        reportError(e);
-        return null;
-      }
-    },
-    [directory, reportError]
-  );
-
-  const applyNades = useCallback(
-    async (value: NadesValue) => {
-      const csgo = directory?.valid ? directory.selected : null;
-      if (!csgo) return null;
-      try {
-        const info = await api.setNades(csgo, value);
-        setPresets(info);
-        setNadesPending(info.cs2_running);
-        return info;
-      } catch (e) {
-        reportError(e);
-        return null;
-      }
-    },
-    [directory, reportError]
-  );
-
-  const applyTeamLineup = useCallback(
-    async (input: TeamLineupInput) => {
-      const csgo = directory?.valid ? directory.selected : null;
-      if (!csgo) return null;
-      try {
-        const info = await api.setTeamLineup(csgo, input);
-        setTeamLineup(info);
-        setTeamLineupPending(
-          info.enabled !== input.enabled
-          || info.friendly_team_index !== input.friendly_team_index
-          || info.enemy_team_index !== input.enemy_team_index
-          || info.excluded_player !== input.excluded_player
-          ? false : false
-        );
-        return info;
-      } catch (e) {
-        reportError(e);
-        return null;
-      }
-    },
-    [directory, reportError]
-  );
-
-  const applyTimescaleToggle = useCallback(
-    async (enabled: boolean) => {
-      setTimescaleToggleEnabled(enabled);
-      const csgo = directory?.valid ? directory.selected : null;
-      if (!csgo) return false;
-      try {
-        const result = await api.setTimescaleToggle(csgo, enabled);
-        return result;
-      } catch (e) {
-        reportError(e);
-        return false;
-      }
-    },
-    [directory, reportError]
-  );
-
-  const applyBotItem = useCallback(
-    async (item: BotItemKey, on: boolean) => {
-      const csgo = directory?.valid ? directory.selected : null;
-      if (!csgo) return null;
-      try {
-        const info = await api.setBotItem(csgo, item, on);
-        setBotItems(info);
-        // Only this item's light goes yellow, and only if changed while running.
-        setBotItemPending(item, info.cs2_running);
-        return info;
-      } catch (e) {
-        reportError(e);
-        return null;
-      }
-    },
-    [directory, reportError]
-  );
-
-  const applyMode = useCallback(
-    async (m: GameMode) => {
-      const csgo = directory?.valid ? directory.selected : null;
-      if (!csgo) return null;
-      try {
-        const info = await api.setMode(csgo, m);
-        setMode(info);
-        setModePending(info.cs2_running);
         return info;
       } catch (e) {
         reportError(e);
@@ -409,28 +192,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setProcess(snapshot.process);
       setInstallation(snapshot.installation);
       setFiles(snapshot.files);
-      setDifficulty(snapshot.difficulty);
-      setMode(snapshot.mode);
-      setBotItems(snapshot.bot_items);
-      setPresets(snapshot.presets);
+      setIsolation(snapshot.isolation);
       setDropKnives(snapshot.drop_knives);
 
       if (!snapshot.process.running) {
-        setAimPending(false);
-setNadesPending(false);
-      setTeamLineupPending(false);
-        setTeamLineupPending(false);
-        setModePending(false);
-        setDifficultyPending(false);
-        clearBotItemsPending();
         setDropKnivesPending(false);
       }
-
-      const csgo = snapshot.directory?.valid ? snapshot.directory.selected : null;
-      if (csgo) {
-        api.getTeamLineup(csgo).then(setTeamLineup).catch(() => {});
-      }
-      api.getTimescaleToggle().then(setTimescaleToggleEnabled).catch(() => {});
     } catch (e) {
       // Keep the complete last-good snapshot, but refresh the process lock
       // independently so a transient disk scan cannot leave install disabled.
@@ -447,22 +214,12 @@ setNadesPending(false);
       setProcess(null);
       setInstallation(null);
       setFiles(null);
-      setDifficulty(null);
-      setMode(null);
-      setBotItems(null);
-      setPresets(null);
+      setIsolation(null);
       setDropKnives(null);
-      setAimPending(false);
-setNadesPending(false);
-        setTeamLineupPending(false);
-        setModePending(false);
-      setDifficultyPending(false);
-      clearBotItemsPending();
       setDropKnivesPending(false);
       reportError(e);
     }
-  }, [clearBotItemsPending, refreshProcess, reportError, setAimPending, setDifficultyPending,
-    setDropKnivesPending, setModePending, setNadesPending]);
+  }, [refreshProcess, reportError, setDropKnivesPending]);
 
   const updateConfig = useCallback(
     async (patch: Partial<AppConfig>) => {
@@ -557,6 +314,22 @@ setNadesPending(false);
     catch (e) { reportError(e); return null; }
   }, [directory, reportError]);
 
+  // The only launch path this product has: the Panel arms the temporary search
+  // path, starts CS2 with -insecure, and the clean state is restored afterwards.
+  // Success here is "CS2 was started", so the visible state is read back from
+  // disk instead of inferred from the call.
+  const launchLocalCosmetics = useCallback(async () => {
+    try {
+      await api.launchLocalCosmetics();
+      await refreshAll();
+      return true;
+    } catch (e) {
+      reportError(e);
+      await refreshAll().catch(() => {});
+      return false;
+    }
+  }, [refreshAll, reportError]);
+
   // Global safety net: surface any unexpected error/rejection as a modal so the
   // UI never fails silently.
   useEffect(() => {
@@ -572,7 +345,9 @@ setNadesPending(false);
     };
   }, [reportError]);
 
-  // Boot: load config then detect dir + validate files.
+  // Boot: load config, then take one consolidated runtime snapshot. The Panel
+  // never writes launch options or gameinfo.gi at startup; recovery of an
+  // interrupted launch transaction belongs to the Rust side.
   useEffect(() => {
     (async () => {
       try {
@@ -581,28 +356,7 @@ setNadesPending(false);
       } catch (e) {
         reportError(e);
       }
-      // Enforce the launch-option rule: disk follows the remembered -insecure.
-      try {
-        await api.reconcileLaunchOptions();
-      } catch (e) {
-        reportError(e);
-      }
-      const info = await refreshDirectory();
-      const csgo = info?.valid ? info.selected : null;
-      if (csgo) {
-        try {
-          await api.cleanupBackups(csgo);
-        } catch {
-          /* best-effort cleanup of legacy .bak files */
-        }
-        try {
-          // Bring CounterStrikeSharp's core.json FollowCS2ServerGuidelines in
-          // line with the current Skins state on every launch.
-          await api.reconcileCoreJson(csgo);
-        } catch {
-          /* best-effort: core.json / core.example.json may be absent */
-        }
-      }
+      await refreshDirectory();
       await refreshAll();
       setReady(true);
     })();
@@ -673,19 +427,8 @@ setNadesPending(false);
     process,
     installation,
     files,
-    difficulty,
-    mode,
-    botItems,
-presets,
-teamLineup,
-    timescaleToggleEnabled,
-    aimPending,
-nadesPending,
-    teamLineupPending,
-    modePending,
-    difficultyPending,
+    isolation,
     dropKnivesPending,
-    botItemsPending,
     dropKnives,
     csgoPath: directory?.valid ? directory.selected : null,
     error,
@@ -693,7 +436,7 @@ nadesPending,
     reportError,
     refreshDirectory,
     refreshFiles,
-    refreshDifficulty,
+    refreshIsolation,
     refreshProcess,
     refreshAll,
     updateConfig,
@@ -705,13 +448,7 @@ nadesPending,
     restorePayload,
     restorePristineCs2,
     exportDiagnostics,
-    applyDifficulty,
-    applyMode,
-    applyBotItem,
-    applyAim,
-    applyNades,
-    applyTeamLineup,
-    applyTimescaleToggle,
+    launchLocalCosmetics,
     applyDropKnives,
   };
 

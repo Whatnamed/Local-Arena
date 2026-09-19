@@ -1,29 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  BarChart3,
   BookOpenText,
   Command,
   Crosshair,
-  History,
   LayoutDashboard,
   Settings2,
-  SlidersHorizontal,
   Sticker,
-  Swords,
   type LucideIcon,
 } from "lucide-react";
 import TitleBar from "./components/TitleBar";
 import ErrorModal from "./components/ErrorModal";
 import Modal from "./components/Modal";
 import OverviewDashboard, { type DashboardTarget } from "./panels/OverviewDashboard";
-import PresetsPanel from "./panels/PresetsPanel";
 import CommandsPanel from "./panels/CommandsPanel";
 import WeaponPresetsPanel from "./panels/WeaponPresetsPanel";
-import MatchPanel from "./panels/MatchPanel";
-import MatchHistoryPanel from "./panels/MatchHistoryPanel";
-import StatsDashboard from "./panels/StatsDashboard";
 import GuideView from "./panels/GuideView";
-import SettingsView from "./panels/settings/SettingsView";
+import SettingsView, { type SettingsEntry } from "./panels/settings/SettingsView";
 import StickersPanel from "./panels/StickersPanel";
 import FirstRunLanguages from "./panels/settings/FirstRunLanguages";
 import { useStore } from "./state/store";
@@ -38,7 +30,7 @@ import "./App.css";
 
 type View = "main" | "stickers" | DashboardTarget;
 
-const VIEWS: View[] = ["main", "match", "matchHistory", "stats", "settings", "presets", "commands", "weaponPresets", "stickers", "guide"];
+const VIEWS: View[] = ["main", "settings", "installation", "languages", "weaponPresets", "commands", "stickers", "guide"];
 const VIEW_KEY = "cs2bi.view";
 const WELCOME_STORY_URL = "https://api.hypcvgm.top/la";
 
@@ -51,7 +43,7 @@ export default function App() {
   // Remember the open view in the portable Panel memory.
   const [view, setView] = useState<View>(() => {
     const stored = localStorage.getItem(VIEW_KEY);
-    const saved = (stored === "botItems" ? "presets" : stored) as View | null;
+    const saved = stored as View | null;
     return saved && VIEWS.includes(saved) ? saved : "main";
   });
   useEffect(() => {
@@ -95,23 +87,29 @@ export default function App() {
 
   const NAV: { view: View; key: I18nKey; icon: LucideIcon }[] = [
     { view: "main", key: "nav.overview", icon: LayoutDashboard },
-    { view: "match", key: "match.title", icon: Swords },
-    { view: "matchHistory", key: "match.history", icon: History },
-    { view: "stats", key: "stats.globalHistory", icon: BarChart3 },
-    { view: "presets", key: "pre.title", icon: SlidersHorizontal },
-    { view: "commands", key: "cmd.title", icon: Command },
     { view: "weaponPresets", key: "weapons.title", icon: Crosshair },
     ...(stickersVisible ? [{ view: "stickers" as View, key: "stickers.title" as I18nKey, icon: Sticker }] : []),
+    { view: "commands", key: "cmd.title", icon: Command },
     { view: "guide", key: "nav.guide", icon: BookOpenText },
     { view: "settings", key: "set.title", icon: Settings2 },
   ];
+
+  // The Settings surface owns three sidebar/dashboard targets and opens on a
+  // different page for each one.
+  const settingsPage: SettingsEntry | undefined =
+    view === "installation" ? "installation"
+      : view === "languages" ? "languages"
+        : view === "settings" ? undefined
+          : undefined;
+  const inSettings = view === "settings" || view === "installation" || view === "languages";
+  const settingsOpen = () => setView((v) => (v === "settings" ? "main" : "settings"));
 
   return (
     <div className="shell">
       <TitleBar
         title={`${appearance.brand_name} v${APP_DISPLAY_VERSION}`}
         showSettings
-        onSettings={() => setView((v) => (v === "settings" ? "main" : "settings"))}
+        onSettings={settingsOpen}
       />
 
       <div className="shell__frame">
@@ -134,9 +132,9 @@ export default function App() {
             {NAV.map(({ view: target, key, icon: Icon }) => (
               <button
                 key={target}
-                className={`sidebar__item ${view === target ? "is-active" : ""}`}
+                className={`sidebar__item ${view === target || (target === "settings" && inSettings) ? "is-active" : ""}`}
                 onClick={() => setView(target)}
-                aria-current={view === target ? "page" : undefined}
+                aria-current={view === target || (target === "settings" && inSettings) ? "page" : undefined}
               >
                 <Icon size={18} strokeWidth={1.9} />
                 <span>{t(key)}</span>
@@ -151,22 +149,14 @@ export default function App() {
         </aside>
 
         <main className="workspace">
-          {view === "settings" ? (
-            <SettingsView />
-          ) : view === "presets" ? (
-            <PresetsPanel />
+          {inSettings ? (
+            <SettingsView key={view} initialPage={settingsPage} />
           ) : view === "commands" ? (
             <CommandsPanel />
           ) : view === "weaponPresets" ? (
             <WeaponPresetsPanel />
           ) : view === "stickers" ? (
             <StickersPanel />
-          ) : view === "match" ? (
-            <MatchPanel onOpenInstallation={() => setView("settings")} onOpenHistory={() => setView("matchHistory")} onOpenLineup={() => setView("presets")} />
-          ) : view === "matchHistory" ? (
-            <MatchHistoryPanel />
-          ) : view === "stats" ? (
-            <StatsDashboard />
           ) : view === "guide" ? (
             <GuideView anchor={guideAnchor} onAnchorHandled={clearGuideAnchor} />
           ) : (

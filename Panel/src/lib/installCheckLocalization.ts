@@ -8,10 +8,10 @@ const TITLE_KEYS: Partial<Record<string, I18nKey>> = {
   STEAM_APP_730: "install.checkTitle.steamApp",
   STEAM_APP_ACTIVITY: "install.checkTitle.steamActivity",
   GAMEINFO_GI: "install.checkTitle.gameInfo",
-  MATCH_MAP: "install.checkTitle.matchMap",
+  LAUNCH_ISOLATION_CLEAN: "install.checkTitle.launchIsolation",
   CS2_PROCESS_LOCK: "install.checkTitle.processLock",
   TARGET_ATOMIC_WRITE: "install.checkTitle.targetWrite",
-  MATCH_STATE_ATOMIC_WRITE: "install.checkTitle.matchWrite",
+  COSMETICS_STATE_ATOMIC_WRITE: "install.checkTitle.cosmeticsWrite",
   PANEL_STATE_ATOMIC_WRITE: "install.checkTitle.panelWrite",
   TARGET_DISK_SPACE: "install.checkTitle.targetSpace",
   BACKUP_DISK_SPACE: "install.checkTitle.backupSpace",
@@ -22,28 +22,20 @@ const TITLE_KEYS: Partial<Record<string, I18nKey>> = {
   INSTALL_RECORD: "install.checkTitle.record",
 };
 
-const COMPONENT_KEYS: Partial<Record<string, I18nKey>> = {
-  MATCH_CATALOG: "install.checkComponent.catalog",
-  OPEN_RATING_MODEL: "install.checkComponent.rating",
-  MATCH_PROFILE_LOW: "install.checkComponent.profileLow",
-  MATCH_PROFILE_MEDIUM: "install.checkComponent.profileMedium",
-  MATCH_PROFILE_HIGH: "install.checkComponent.profileHigh",
-};
-
 const COMPONENT_NAMES: Partial<Record<string, string>> = {
   METAMOD_X64: "MetaMod",
   CSS_X64: "CounterStrikeSharp",
   CSS_DOTNET_X64: "CounterStrikeSharp .NET runtime",
-  RAYTRACE_X64: "RayTrace",
-  BOTHIDER_X64: "BotHider",
-  MATCH_COORDINATOR_MANAGED: "PlusMatchCoordinator",
-  MATCH_CORE_MANAGED: "MatchCore",
+  COSMETICS_MANAGED: "PlayerKnifeCustomizer",
+  COSMETICS_CATALOG: "cosmetic catalog",
+  COSMETICS_KNIFE_PRESETS: "saved knife presets",
+  COSMETICS_GUN_PRESETS: "saved weapon presets",
+  METAMOD_CSS_VDF: "CounterStrikeSharp load file",
 };
 
-function componentName(code: string, t: Translate): string | null {
+function componentName(code: string): string | null {
   const normalized = code.replace(/^(TARGET|PAYLOAD)_/, "");
-  const key = COMPONENT_KEYS[normalized];
-  return key ? t(key) : COMPONENT_NAMES[normalized] ?? null;
+  return COMPONENT_NAMES[normalized] ?? null;
 }
 
 function failureKeys(check: InstallCheckItem): [I18nKey, I18nKey] | null {
@@ -51,11 +43,11 @@ function failureKeys(check: InstallCheckItem): [I18nKey, I18nKey] | null {
     case "INSTALL_TARGET": return ["install.checkCause.directory", "install.checkAction.directory"];
     case "STEAM_APP_730": return ["install.checkCause.steamApp", "install.checkAction.steamApp"];
     case "STEAM_APP_ACTIVITY": return ["install.checkCause.steamActivity", "install.checkAction.steamActivity"];
-    case "GAMEINFO_GI":
-    case "MATCH_MAP": return ["install.checkCause.gameFile", "install.checkAction.gameFile"];
+    case "GAMEINFO_GI": return ["install.checkCause.gameFile", "install.checkAction.gameFile"];
+    case "LAUNCH_ISOLATION_CLEAN": return ["install.checkCause.launchIsolation", "install.checkAction.launchIsolation"];
     case "CS2_PROCESS_LOCK": return ["install.checkCause.processLock", "install.checkAction.processLock"];
     case "TARGET_ATOMIC_WRITE":
-    case "MATCH_STATE_ATOMIC_WRITE":
+    case "COSMETICS_STATE_ATOMIC_WRITE":
     case "PANEL_STATE_ATOMIC_WRITE": return ["install.checkCause.write", "install.checkAction.write"];
     case "TARGET_DISK_SPACE":
     case "BACKUP_DISK_SPACE": return ["install.checkCause.space", "install.checkAction.space"];
@@ -77,7 +69,7 @@ function failureKeys(check: InstallCheckItem): [I18nKey, I18nKey] | null {
 
 export function localizeInstallCheck(check: InstallCheckItem, t: Translate) {
   const fixedTitle = TITLE_KEYS[check.code];
-  const name = componentName(check.code, t);
+  const name = componentName(check.code);
   const title = fixedTitle
     ? t(fixedTitle)
     : name

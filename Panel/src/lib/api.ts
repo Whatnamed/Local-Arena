@@ -1,13 +1,4 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import type {
-  Cs2ssOverviewResponse,
-  Cs2ssMatchSummary,
-  Cs2ssMatchDetailResponse,
-  Cs2ssPlayerDetailResponse,
-  Cs2ssMatchWithStats,
-  Cs2ssConfig,
-  Cs2ssDmOverview,
-} from "../data/cs2ssTypes";
 
 function invoke<T>(command: string, args?: Record<string, unknown>) {
   return tauriInvoke<T>(command, args);
@@ -185,41 +176,6 @@ export type UiMemory = {
   entries: Record<string, string>;
 };
 
-export type DifficultyLevel = "Low" | "Medium" | "High";
-
-export type DifficultyInfo = {
-  current: DifficultyLevel | null;
-  available: DifficultyLevel[];
-  active_present: boolean;
-  cs2_running: boolean;
-};
-
-export type BotItemKey = "skins" | "profiles" | "agents" | "music";
-
-export type BotItemsState = {
-  skins: boolean;
-  profiles: boolean;
-  agents: boolean;
-  music: boolean;
-  cfg_present: boolean;
-  cs2_running: boolean;
-};
-
-export type AimValue = "head" | "mixed" | "body";
-export type NadesValue = "max" | "more" | "normal" | "less" | "off";
-
-export type PresetsState = {
-  aim: AimValue | null;
-  aim_supported: boolean;
-  aim_active: boolean | null;
-  aim_transport: string | null;
-  aim_override_count: number | null;
-  aim_error_count: number | null;
-  nades: NadesValue | null;
-  cfg_present: boolean;
-  cs2_running: boolean;
-};
-
 export type DropKnivesState = {
   bind_key: string;
   selected: number[];
@@ -298,20 +254,19 @@ export type KnifeCustomizerState = {
 export type CosmeticsPresetExportResult = { path: string; size_bytes: number };
 export type CosmeticsPresetImportResult = { state: KnifeCustomizerState; backup_path: string | null };
 
-export type GameMode = "online" | "preview" | "bots";
-
-export type ModeInfo = {
-  current: GameMode | null;
-  online_present: boolean;
-  preview_present: boolean;
-  bots_present: boolean;
-  layout_healthy: boolean;
-  insecure: boolean;
-  user_count: number;
-  cs2_running: boolean;
-  // CS2 running and the on-disk gameinfo.gi doesn't match the remembered mode
-  // (the boot-time apply was skipped) — show the mode control yellow.
-  pending: boolean;
+/**
+ * Mirrors Rust `launch_isolation::IsolationStatus`.
+ *
+ * The durable state of `gameinfo.gi` is always the clean one; the project
+ * search path only exists inside an explicit local-cosmetics launch window.
+ * `pending` is the phase of an open transaction journal, never a "mode".
+ */
+export type IsolationStatus = {
+  gameinfo_present: boolean;
+  clean: boolean;
+  project_paths_present: string[];
+  pending: "prepared" | "inserted" | null;
+  ticket_live: boolean;
 };
 
 export type LaunchResult = {
@@ -319,45 +274,16 @@ export type LaunchResult = {
   insecure: boolean;
 };
 
-export type BotItems = {
-  skins: boolean;
-  profiles: boolean;
-  agents: boolean;
-  music: boolean;
-};
-
 export type AppConfig = {
   language: string | null;
-  difficulty: string | null;
-  mode: string | null;
-  insecure: boolean;
-  bot_items: BotItems;
-  aim: string | null;
-  nades: string | null;
   drop_knife_bind: string;
   drop_knife_subclasses: number[];
   csgo_path: string | null;
   first_run_done: boolean;
   first_run_step?: string | null;
   welcome_story_prompt_presented: boolean;
-  cosmetics_enabled_before_online?: boolean | null;
-  cosmetics_enabled_before_preview?: boolean | null;
   experimental_features_enabled?: boolean;
   experimental_stickers_enabled?: boolean;
-};
-
-export type TeamLineupInput = {
-  enabled: boolean;
-  friendly_team_index: string | null;
-  enemy_team_index: string | null;
-  excluded_player: string | null;
-};
-
-export type TeamLineupState = {
-  enabled: boolean;
-  friendly_team_index: string | null;
-  enemy_team_index: string | null;
-  excluded_player: string | null;
 };
 
 export type AppearanceStyle = "paper" | "clean" | "compact" | "immersive";
@@ -407,227 +333,6 @@ export type AppearanceConfig = {
 
 export type AppearanceExportResult = { path: string; size_bytes: number };
 
-export type UpdateComponentState = {
-  current_version: string;
-  latest_version: string | null;
-  update_available: boolean;
-  compatible: boolean;
-  status: string;
-  downloaded_bytes: number;
-  total_bytes: number;
-  error: string | null;
-};
-
-export type OnlineUpdateSnapshot = {
-  checked_at: number | null;
-  release_version: string | null;
-  release_notes_url: string | null;
-  panel: UpdateComponentState;
-  plugin: UpdateComponentState;
-  busy: boolean;
-  error: string | null;
-};
-
-export type UpdateProgress = {
-  component: "panel" | "plugin";
-  stage: string;
-  downloaded_bytes: number;
-  total_bytes: number;
-};
-
-export type UpdateResult = {
-  component: "panel" | "plugin";
-  version: string;
-  installed: boolean;
-  restart_required: boolean;
-  rollback_succeeded: boolean | null;
-  detail: string;
-};
-
-export type UpdateBatchResult = {
-  panel: UpdateResult | null;
-  plugin: UpdateResult | null;
-  restart_required: boolean;
-};
-
-export type RuntimeSnapshot = {
-  directory: DirectoryInfo;
-  process: Cs2ProcessInfo;
-  files: FilesReport | null;
-  difficulty: DifficultyInfo | null;
-  mode: ModeInfo | null;
-  bot_items: BotItemsState | null;
-  presets: PresetsState | null;
-  drop_knives: DropKnivesState | null;
-  installation: InstallationInspection | null;
-};
-
-export type MatchMap = {
-  id: string;
-  display_name: string;
-  workshop_name: string;
-  thumbnail: string;
-  required_vpk: string;
-};
-
-export type MatchTeam = {
-  id: string;
-  name: string;
-  badge: string;
-  ranking: number | null;
-  players: string[];
-};
-
-export type MatchCatalog = {
-  schema_version: number;
-  catalog_version: string;
-  freeze_date: string;
-  source: string;
-  maps: MatchMap[];
-  teams: MatchTeam[];
-  difficulties: string[];
-};
-
-export type MatchPlayer = {
-  id: string;
-  name: string;
-  kind: "human" | "bot";
-  is_local_player: boolean;
-};
-
-export type MatchRequest = {
-  schema_version: number;
-  session_id: string;
-  created_at_unix: number;
-  map_id: string;
-  player_side: "ct" | "t";
-  difficulty: "low" | "medium" | "high";
-  opponent_kind: "featured_team" | "random";
-  opponent_team_id: string | null;
-  opponent_name: string;
-  record_demo: boolean;
-  player_team: MatchPlayer[];
-  opponent_team: MatchPlayer[];
-  result_path: string;
-  demo_path: string;
-};
-
-export type PrepareMatchInput = {
-  schema_version: 1;
-  map_id: string;
-  player_side: "random" | "ct" | "t";
-  difficulty: "low" | "medium" | "high";
-  opponent_kind: "featured_team" | "random";
-  opponent_team_id: string | null;
-  record_demo: boolean;
-};
-
-export type DemoStatus = {
-  state: "disabled" | "pending" | "recording" | "validating" | "ready" | "failed" | "interrupted";
-  path: string | null;
-  size_bytes: number;
-  error_code: string | null;
-  detail: string | null;
-};
-
-export type OpenRatingBreakdown = {
-  model_version: string;
-  kills: number;
-  damage: number;
-  survival: number;
-  kast: number;
-  multi_kills: number;
-  round_swing: number;
-  economy_adjustment: number;
-  open_rating?: number;
-  /** Legacy field emitted by matches created before the OpenRating migration. */
-  rating_plus?: number;
-};
-
-export type PlayerMatchStats = {
-  player_id: string;
-  name: string;
-  kind: "human" | "bot";
-  team: "ct" | "t";
-  kills: number;
-  deaths: number;
-  assists: number;
-  headshots: number;
-  damage: number;
-  rounds_played: number;
-  rounds_survived: number;
-  kast_rounds: number;
-  first_kills: number;
-  first_deaths: number;
-  mvps: number;
-  clutches: number;
-  trade_kills: number;
-  trade_denials: number;
-  failed_trades: number;
-  ct_kills: number;
-  t_kills: number;
-  round_swing: number;
-  economy_adjustment: number;
-  multi_kills: Record<string, number>;
-  rating: OpenRatingBreakdown | null;
-  difference: number;
-  adr: number;
-  kast_percent: number;
-  headshot_percent: number;
-};
-
-export type MatchResult = {
-  schema_version: number;
-  session_id: string;
-  state: "prepared" | "launching" | "loading" | "warmup" | "live" | "finished" | "interrupted";
-  map_id: string;
-  started_at_unix: number;
-  finished_at_unix: number;
-  player_score: number;
-  opponent_score: number;
-  opponent_name: string;
-  rating_model_version: string;
-  demo: DemoStatus;
-  players: PlayerMatchStats[];
-  interruption_reason: string | null;
-};
-
-export type MatchSession = {
-  schema_version: number;
-  session_id: string;
-  state: MatchResult["state"];
-  map_id: string;
-  opponent_name: string;
-  created_at_unix: number;
-  player_score: number;
-  opponent_score: number;
-  demo: DemoStatus;
-  result_path: string | null;
-};
-
-export type MapStatEntry = {
-  map: string;
-  avgRating: number;
-  avgAdr: number;
-  matches: number;
-};
-
-export type RatingTrendPoint = {
-  sessionId: string;
-  map: string;
-  timestamp: number;
-  rating: number;
-  adr: number;
-};
-
-export type MatchHistoryStats = {
-  avgRating: number;
-  avgAdr: number;
-  totalMatches: number;
-  perMap: MapStatEntry[];
-  ratingTrend: RatingTrendPoint[];
-};
-
 export type InstallCheckStatus = "pass" | "warn" | "fail";
 export type InstallCheckItem = {
   code: string;
@@ -649,6 +354,15 @@ export type InstallCheckReport = {
   blocking_fail_count: number;
   can_proceed: boolean;
   checks: InstallCheckItem[];
+};
+
+export type RuntimeSnapshot = {
+  directory: DirectoryInfo;
+  process: Cs2ProcessInfo;
+  files: FilesReport | null;
+  drop_knives: DropKnivesState | null;
+  isolation: IsolationStatus | null;
+  installation: InstallationInspection | null;
 };
 
 // ---- Command wrappers ----
@@ -673,52 +387,12 @@ export const api = {
   detectDirectories: () => invoke<DirectoryInfo>("detect_directories"),
   selectDirectory: (path: string) =>
     invoke<DirectoryInfo>("select_directory", { path }),
-  cleanupBackups: (csgo: string) => invoke<number>("cleanup_backups", { csgo }),
   validateFiles: (csgo: string) => invoke<FilesReport>("validate_files", { csgo }),
-  getDifficulty: (csgo: string) => invoke<DifficultyInfo>("get_difficulty", { csgo }),
-  setDifficulty: (csgo: string, level: DifficultyLevel) =>
-    invoke<DifficultyInfo>("set_difficulty", { csgo, level }),
-  getMode: (csgo: string) => invoke<ModeInfo>("get_mode", { csgo }),
-  setMode: (csgo: string, mode: GameMode) =>
-    invoke<ModeInfo>("set_mode", { csgo, mode }),
-  reconcileLaunchOptions: () => invoke<number>("reconcile_launch_options"),
-  launchCs2: () => invoke<LaunchResult>("launch_cs2"),
-  getMatchCatalog: (csgo: string | null) => invoke<MatchCatalog>("get_match_catalog", { csgo }),
-  prepareAndLaunchMatch: (csgo: string, input: PrepareMatchInput) =>
-    invoke<MatchRequest>("prepare_and_launch_match", { csgo, input }),
-  finishActiveMatch: (csgo: string, sessionId: string) =>
-    invoke<MatchSession>("finish_active_match", { csgo, sessionId }),
-  getActiveMatch: (csgo: string) => invoke<MatchSession | null>("get_active_match", { csgo }),
-  listMatchHistory: (csgo: string) => invoke<MatchSession[]>("list_match_history", { csgo }),
-  getMatchResult: (csgo: string, sessionId: string) =>
-    invoke<MatchResult>("get_match_result", { csgo, sessionId }),
-  deleteMatch: (csgo: string, sessionId: string, confirmed: boolean) =>
-    invoke<void>("delete_match", { csgo, sessionId, confirmed }),
-  getMatchHistoryStats: (csgo: string) =>
-    invoke<MatchHistoryStats>("get_match_history_stats", { csgo }),
-  playDemo: (csgo: string, demoPath: string) =>
-    invoke<void>("play_demo", { csgo, demoPath }),
-  openDemoFolder: (csgo: string, demoPath: string) =>
-    invoke<void>("open_demo_folder", { csgo, demoPath }),
-  runInstallChecks: (csgo: string, selectedMap: string | null = null) =>
-    invoke<InstallCheckReport>("run_install_checks", { csgo, selectedMap }),
-  reconcileCoreJson: (csgo: string) => invoke<void>("reconcile_core_json", { csgo }),
-  getBotItems: (csgo: string) => invoke<BotItemsState>("get_bot_items", { csgo }),
-  setBotItem: (csgo: string, item: BotItemKey, on: boolean) =>
-    invoke<BotItemsState>("set_bot_item", { csgo, item, on }),
-  getPresets: (csgo: string) => invoke<PresetsState>("get_presets", { csgo }),
-  setAim: (csgo: string, value: AimValue) =>
-    invoke<PresetsState>("set_aim", { csgo, value }),
-  setNades: (csgo: string, value: NadesValue) =>
-    invoke<PresetsState>("set_nades", { csgo, value }),
-  setTeamLineup: (csgo: string, input: TeamLineupInput) =>
-    invoke<TeamLineupState>("set_team_lineup", { csgo, input }),
-  getTeamLineup: (csgo: string) =>
-    invoke<TeamLineupState>("get_team_lineup", { csgo }),
-  setTimescaleToggle: (csgo: string, enabled: boolean) =>
-    invoke<boolean>("set_timescale_toggle", { csgo, enabled }),
-  getTimescaleToggle: () =>
-    invoke<boolean>("get_timescale_toggle"),
+  getLaunchIsolation: (csgo: string) =>
+    invoke<IsolationStatus>("get_launch_isolation", { csgo }),
+  launchLocalCosmetics: () => invoke<LaunchResult>("launch_local_cosmetics"),
+  runInstallChecks: (csgo: string) =>
+    invoke<InstallCheckReport>("run_install_checks", { csgo }),
   getDropKnives: (csgo: string) =>
     invoke<DropKnivesState>("get_drop_knives", { csgo }),
   setDropKnives: (csgo: string, bindKey: string, selected: number[]) =>
@@ -742,26 +416,4 @@ export const api = {
   restorePristineCs2: (csgo: string) => invoke<RestoreResult>("restore_pristine_cs2", { csgo }),
   exportDiagnostics: (csgo: string | null) =>
     invoke<DiagnosticReport>("export_diagnostics", { csgo }),
-  getUpdateSnapshot: () => invoke<OnlineUpdateSnapshot>("get_update_snapshot"),
-  checkOnlineUpdates: (force: boolean) =>
-    invoke<OnlineUpdateSnapshot>("check_online_updates", { force }),
-  installPanelUpdate: () => invoke<UpdateResult>("install_panel_update"),
-  installPluginUpdate: (csgo: string) =>
-    invoke<UpdateResult>("install_plugin_update", { csgo }),
-  installAllUpdates: (csgo: string | null) =>
-    invoke<UpdateBatchResult>("install_all_updates", { csgo }),
-  cancelUpdate: () => invoke<void>("cancel_update"),
-  // CS2SS telemetry
-  getCs2ssOverview: (csgo: string) => invoke<Cs2ssOverviewResponse>("get_cs2ss_overview", { csgo }),
-  listCs2ssMatches: (csgo: string) => invoke<Cs2ssMatchSummary[]>("list_cs2ss_matches", { csgo }),
-  getCs2ssMatchDetail: (csgo: string, matchId: number) => invoke<Cs2ssMatchDetailResponse>("get_cs2ss_match_detail", { csgo, matchId }),
-  getCs2ssPlayerDetail: (csgo: string, steamId: string) => invoke<Cs2ssPlayerDetailResponse>("get_cs2ss_player_detail", { csgo, steamId }),
-  listCs2ssMatchesWithStats: (csgo: string) => invoke<Cs2ssMatchWithStats[]>("list_cs2ss_matches_with_stats", { csgo }),
-  getCs2ssConfig: (csgo: string) => invoke<Cs2ssConfig>("get_cs2ss_config", { csgo }),
-  saveCs2ssConfig: (csgo: string, config: Cs2ssConfig) => invoke<void>("save_cs2ss_config", { csgo, config }),
-  getCs2ssDmOverview: (csgo: string, steamId: string) => invoke<Cs2ssDmOverview>("get_cs2ss_dm_overview", { csgo, steamId }),
-  deleteCs2ssMatches: (csgo: string, matchIds: number[]) =>
-    invoke<number>("delete_cs2ss_matches", { csgo, matchIds }),
-  pruneCs2ssBotPlayers: (csgo: string, matchId: number) =>
-    invoke<[number, number]>("prune_cs2ss_bot_players", { csgo, matchId }),
 };

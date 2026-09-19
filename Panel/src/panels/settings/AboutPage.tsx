@@ -1,4 +1,4 @@
-import { Boxes, ChevronRight, RefreshCw, ScrollText, ShieldCheck } from "lucide-react";
+import { Boxes, ChevronRight, ScrollText, ShieldCheck } from "lucide-react";
 import { useT } from "../../i18n";
 import { APP_DISPLAY_VERSION } from "../../lib/version";
 import bhcnSymbol from "../../assets/bhcn-symbol.svg";
@@ -8,10 +8,9 @@ export type AboutTarget = "aboutThirdParty" | "aboutAgreement" | "aboutPrivacy";
 
 type Props = {
   onOpen: (target: AboutTarget) => void;
-  onOpenUpdates: () => void;
 };
 
-export default function AboutPage({ onOpen, onOpenUpdates }: Props) {
+export default function AboutPage({ onOpen }: Props) {
   const t = useT();
 
   const links = [
@@ -27,10 +26,6 @@ export default function AboutPage({ onOpen, onOpenUpdates }: Props) {
         <h2>Local Arena</h2>
         <code>v{APP_DISPLAY_VERSION}</code>
         <p>{t("set.aboutTagline")}</p>
-        <button className="about-update" onClick={onOpenUpdates}>
-          <RefreshCw size={16} />
-          <span>{t("set.checkUpdates")}</span>
-        </button>
       </section>
 
       <section className="about-studio">

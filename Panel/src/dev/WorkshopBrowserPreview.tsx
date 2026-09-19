@@ -88,12 +88,6 @@ const previewConfig: KnifeCustomizerConfig = {
 
 const previewAppConfig: AppConfig = {
   language: "schinese",
-  difficulty: null,
-  mode: null,
-  insecure: false,
-  bot_items: { skins: true, profiles: true, agents: true, music: true },
-  aim: null,
-  nades: null,
   drop_knife_bind: "",
   drop_knife_subclasses: [],
   csgo_path: "browser-preview",
