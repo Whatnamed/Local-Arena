@@ -166,8 +166,54 @@ Require(linkedStickerConfig.Loadouts.T.GunPresets[9].Paint == 344
     && linkedStickerConfig.Loadouts.T.GunPresets[9].Charm?.Id == 38,
     "Shared CT/T normalization must synchronize base skin fields without replacing team decorations.");
 
+var provenance = new WeaponProvenanceTracker();
+nint provenancePlayer = (nint)0x5000;
+nint ownedWeapon = (nint)0x5100;
+nint pickedWeapon = (nint)0x5101;
+var ownedKey = provenance.MarkOwned(provenancePlayer, ownedWeapon);
+Require(ownedKey.Generation > 0 && provenance.IsOwned(provenancePlayer, ownedWeapon),
+    "A GiveNamedItem-created weapon must be recorded as owned by its player handle.");
+Require(!provenance.IsOwned(provenancePlayer, pickedWeapon),
+    "A different entity handle must remain unowned even when its DefIndex would match.");
+Require(provenance.MarkOwned(provenancePlayer, ownedWeapon).Generation == ownedKey.Generation,
+    "Repeated observations of one live entity must not create a new provenance generation.");
+provenance.ClearPlayer(provenancePlayer);
+var reusedKey = provenance.MarkOwned(provenancePlayer, ownedWeapon);
+Require(reusedKey.Generation > ownedKey.Generation,
+    "A reused entity handle must receive a new generation after player cleanup.");
+Require(provenance.TryGet(provenancePlayer, ownedWeapon, out var currentKey) && currentKey == reusedKey,
+    "The tracker must expose the current player/entity provenance key.");
+provenance.ClearWeapon(provenancePlayer, ownedWeapon);
+Require(!provenance.IsOwned(provenancePlayer, ownedWeapon) && provenance.OwnedCount == 0,
+    "Destroyed or explicitly cleared entities must leave no retained ownership state.");
+
+var unchangedConfig = new KnifeConfig { Enabled = true };
+unchangedConfig.Normalize();
+Require(!CosmeticConfigDiff.Between(unchangedConfig, unchangedConfig.Clone()).HasChanges,
+    "An identical cosmetics config must not schedule a live apply.");
+var gunChangedConfig = unchangedConfig.Clone();
+gunChangedConfig.Loadouts.Ct.GunPresets[16] = Preset(309);
+Require(CosmeticConfigDiff.Between(unchangedConfig, gunChangedConfig).Phases == CosmeticApplyPhase.Guns,
+    "A gun preset edit must schedule only the owned-gun phase.");
+var musicChangedConfig = unchangedConfig.Clone();
+musicChangedConfig.MusicKitId = 42;
+Require(CosmeticConfigDiff.Between(unchangedConfig, musicChangedConfig).Phases == CosmeticApplyPhase.Music,
+    "A music kit edit must schedule only the music phase.");
+var enabledConfig = unchangedConfig.Clone();
+enabledConfig.Enabled = false;
+var reenabledConfig = enabledConfig.Clone();
+reenabledConfig.Enabled = true;
+Require(CosmeticConfigDiff.Between(enabledConfig, reenabledConfig).Phases == CosmeticApplyPhase.All,
+    "Re-enabling cosmetics must schedule a complete bounded apply.");
+
 var tracker = new ApplyGenerationTracker();
 nint playerHandle = (nint)0x1000;
+
+long targetedGive = tracker.Begin(playerHandle, CosmeticApplyPhase.Guns, GunApplyScope.Targeted, (nint)0x5200);
+var targetedRequest = tracker.GetGunApplyRequest(playerHandle, targetedGive);
+Require(!targetedRequest.IncludeOwnedInventory && targetedRequest.TargetWeaponHandle == (nint)0x5200,
+    "A GiveNamedItem generation must target only the returned weapon entity.");
+tracker.Cancel(playerHandle);
 
 long initialSpawn = tracker.Begin(playerHandle, CosmeticApplyPhase.All);
 long firstGive = tracker.Begin(playerHandle, CosmeticApplyPhase.Guns);
