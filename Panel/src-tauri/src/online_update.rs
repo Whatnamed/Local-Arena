@@ -9,10 +9,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
-pub const MANIFEST_URL: &str =
-    "https://github.com/numakkiyu/Local-Arena/releases/latest/download/latest.json";
-const SIGNATURE_URL: &str =
-    "https://github.com/numakkiyu/Local-Arena/releases/latest/download/latest.json.sig";
+pub const MANIFEST_URL: &str = "";
+const SIGNATURE_URL: &str = "";
 const UPDATE_PUBLIC_KEY: &str = "RbIjlfASpYVu740SsmQMLuLO7ExxiDBYTdnYThfqU/4=";
 const CACHE_SECONDS: u64 = 6 * 60 * 60;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -272,7 +270,7 @@ fn component_state(
 }
 
 pub fn snapshot(plugin_version: Option<&str>) -> Result<OnlineUpdateSnapshot> {
-    let cached = cached_manifest(true).ok().flatten();
+    let cached: Option<(update_core::RemoteUpdateManifest, u64)> = None;
     let state = runtime()
         .lock()
         .map_err(|_| AppError::update("Update state lock is poisoned"))?
@@ -310,26 +308,7 @@ pub fn snapshot(plugin_version: Option<&str>) -> Result<OnlineUpdateSnapshot> {
     })
 }
 
-pub fn check(force: bool, plugin_version: Option<&str>) -> Result<OnlineUpdateSnapshot> {
-    if !force && cached_manifest(false)?.is_some() {
-        return snapshot(plugin_version);
-    }
-    let checked_at = unix_time();
-    let client = client(REQUEST_TIMEOUT)?;
-    let manifest = read_limited_response(
-        client.get(MANIFEST_URL).send().map_err(|error| {
-            AppError::update(format!("Cannot contact GitHub update service: {error}"))
-        })?,
-        update_core::MAX_MANIFEST_BYTES,
-    )?;
-    let signature = read_limited_response(
-        client.get(SIGNATURE_URL).send().map_err(|error| {
-            AppError::update(format!("Cannot download update signature: {error}"))
-        })?,
-        4096,
-    )?;
-    verify_manifest(&manifest, &signature)?;
-    write_cache(&manifest, &signature, checked_at)?;
+pub fn check(_force: bool, plugin_version: Option<&str>) -> Result<OnlineUpdateSnapshot> {
     if let Ok(mut state) = runtime().lock() {
         state.last_error = None;
     }
@@ -714,6 +693,10 @@ fn process_exists(_pid: u32) -> bool {
 }
 
 pub fn maybe_apply_panel_update() -> bool {
+    // Cosmetics-only v1 never installs a staged upstream Panel update.
+    return false;
+    #[allow(unreachable_code)]
+    {
     let mut arguments = std::env::args_os();
     let _ = arguments.next();
     if arguments.next().as_deref() != Some(std::ffi::OsStr::new("--apply-panel-update")) {
@@ -767,6 +750,7 @@ pub fn maybe_apply_panel_update() -> bool {
         }
     }
     true
+    }
 }
 
 trait EqIgnoreAsciiCasePath {

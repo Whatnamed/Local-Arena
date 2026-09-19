@@ -142,7 +142,7 @@ impl Default for AppConfig {
         Self {
             language: Some("schinese".into()),
             difficulty: Some("Medium".into()),
-            mode: Some("bots".into()),
+            mode: Some("preview".into()),
             insecure: true,
             bot_items: BotItems::default(),
             aim: Some("mixed".into()),
@@ -850,9 +850,6 @@ fn select_directory(app: AppHandle, path: String) -> Result<DirectoryInfo> {
 }
 
 fn payload_root() -> Result<PathBuf> {
-    if let Some(payload) = online_update::active_payload_root() {
-        return Ok(payload);
-    }
     let executable =
         std::env::current_exe().map_err(|error| AppError::payload(error.to_string()))?;
     executable
@@ -928,13 +925,12 @@ fn validate_files_at(
     }
     let required = [
         "gameinfo.gi",
-        "cfg/my_bot_normal_config.cfg",
-        "cfg/my_bot_ffa_config.cfg",
-        "addons/counterstrikesharp/plugins/BotAI/BotAI.dll",
-        "addons/counterstrikesharp/plugins/BotRandomizer/BotRandomizer.dll",
         "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll",
-        "addons/MetaMod/bin/win64/server.dll",
+        "addons/metamod/bin/win64/server.dll",
         "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll",
+        "addons/counterstrikesharp/dotnet/dotnet.exe",
+        "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
+        "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/weapon_skins.json",
     ];
     let missing: Vec<String> = required
         .iter()
@@ -1040,9 +1036,6 @@ fn get_mode(app: AppHandle, csgo: String) -> Result<ModeInfo> {
 fn mode_at(root: &Path, config: &AppConfig, running: bool) -> ModeInfo {
     let gameinfo = root.join("gameinfo.gi");
     let online_present = gameinfo.is_file();
-    let bots_present = gameinfo.is_file()
-        && root.join("addons/metamod/counterstrikesharp.vdf").is_file()
-        && root.join("overrides/botprofile.vpk").is_file();
     let preview_present = root
         .join("addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll")
         .is_file();
@@ -1056,17 +1049,18 @@ fn mode_at(root: &Path, config: &AppConfig, running: bool) -> ModeInfo {
         {
             "preview".into()
         } else {
-            "bots".into()
+            // A MetaMod SearchPath without a persisted legacy layout is the
+            // local Cosmetics mode. There is no enhanced-bot mode anymore.
+            "preview".into()
         }
     });
-    let expects_managed_plugins_disabled = current.as_deref() != Some("bots");
-    let layout_healthy = mode_layout::layout_healthy(root, expects_managed_plugins_disabled);
+    let layout_healthy = mode_layout::layout_healthy(root, current.as_deref() == Some("preview"));
     ModeInfo {
         pending: current.as_deref() != config.mode.as_deref() || !layout_healthy,
         current,
         online_present,
         preview_present,
-        bots_present,
+        bots_present: false,
         layout_healthy,
         insecure: config.insecure,
         user_count: 1,
@@ -1083,10 +1077,9 @@ fn set_mode(app: AppHandle, csgo: String, mode: String) -> Result<ModeInfo> {
     mode_layout::recover(&state, &root)?;
     recover_launch_transaction(&state, &root).map_err(AppError::invalid)?;
     restore_clean_launch(&state, &root).map_err(AppError::invalid)?;
-    mode_layout::set_preview(&state, &root, launch_mode != LaunchMode::Bots)?;
+    mode_layout::set_preview(&state, &root, launch_mode == LaunchMode::Preview)?;
     let mut config = read_config(&app)?;
     enforce_mode_cosmetics(&root, &mut config, launch_mode)?;
-    write_bot_randomizer_options(&root, &config.bot_items)?;
     config.mode = Some(mode.clone());
     config.insecure = launch_mode.insecure();
     write_config(&app, &config)?;
@@ -1168,16 +1161,11 @@ fn launch_cs2(app: AppHandle) -> Result<LaunchResult> {
     } else {
         prepare_local_launch(&state, &root, mode).map_err(AppError::invalid)?;
     }
-    mode_layout::set_preview(&state, &root, mode != LaunchMode::Bots)?;
+    mode_layout::set_preview(&state, &root, mode == LaunchMode::Preview)?;
     if let Err(error) = enforce_mode_cosmetics(&root, &mut config, mode) {
         let _ = restore_clean_launch(&state, &root);
         return Err(error);
     }
-    if let Err(error) = write_bot_randomizer_options(&root, &config.bot_items) {
-        let _ = restore_clean_launch(&state, &root);
-        return Err(error);
-    }
-
     config.insecure = mode.insecure();
     if let Err(error) = write_config(&app, &config) {
         let _ = restore_clean_launch(&state, &root);
@@ -1236,7 +1224,7 @@ fn prepare_and_launch_match(app: AppHandle, csgo: String, input: PrepareMatchInp
     let previous_mode = LaunchMode::parse(read_config(&app)?.mode.as_deref()).map_err(AppError::invalid)?;
     mode_layout::recover(&state, &root)?;
     recover_launch_transaction(&state, &root).map_err(AppError::invalid)?;
-    prepare_local_launch(&state, &root, LaunchMode::Bots).map_err(AppError::invalid)?;
+    prepare_local_launch(&state, &root, LaunchMode::Preview).map_err(AppError::invalid)?;
     mode_layout::set_preview(&state, &root, false)?;
     let preparation = (|| -> Result<()> {
         let report = collect_install_checks(&payload, &state, &root, Some(&input.map_id))?;
@@ -1343,7 +1331,7 @@ fn monitor_match_process(root: PathBuf, session_id: String) {
 fn restore_demo_layout(state: &Path, root: &Path, mode: LaunchMode) -> Result<()> {
     mode_layout::recover(state, root)?;
     restore_clean_launch(state, root).map_err(AppError::launch)?;
-    mode_layout::set_preview(state, root, mode != LaunchMode::Bots)
+    mode_layout::set_preview(state, root, mode == LaunchMode::Preview)
 }
 
 fn selected_cs2_running(root: &Path) -> bool {
@@ -2723,10 +2711,6 @@ fn enforce_mode_cosmetics(root: &Path, app_config: &mut AppConfig, mode: LaunchM
             leave_online_safety(root, app_config)?;
             enter_preview_safety(root, app_config)
         }
-        LaunchMode::Bots => {
-            leave_online_safety(root, app_config)?;
-            leave_preview_safety(root, app_config)
-        }
     }
 }
 
@@ -2806,9 +2790,9 @@ fn get_runtime_snapshot_impl(app: AppHandle) -> Result<RuntimeSnapshot> {
 
     Ok(RuntimeSnapshot {
         files: Some(validate_files_at(Some(&app), &root, false)?),
-        difficulty: Some(difficulty_at(&root, running)),
+        difficulty: None,
         mode: Some(mode_at(&root, &config, running)),
-        bot_items: Some(bot_items_at(&root, &config, running)),
+        bot_items: None,
         presets: Some(presets_at(&root, &config, running)),
         drop_knives: Some(drop_knives_at(&root, &config, running)),
         directory,
@@ -2866,7 +2850,6 @@ async fn install_payload(app: AppHandle, csgo: String) -> Result<InstallTransact
         logging::append(&state, "INFO", "install.started", &root.to_string_lossy());
         let result = with_canonical_layout(&state, &root, restore_preview, || {
             let result = installer::install(&payload, &state, &root, false)?;
-            write_bot_randomizer_options(&root, &config.bot_items)?;
             Ok(result)
         });
         match &result {
@@ -2899,7 +2882,6 @@ async fn repair_payload(app: AppHandle, csgo: String) -> Result<InstallTransacti
         logging::append(&state, "INFO", "repair.started", &root.to_string_lossy());
         let result = with_canonical_layout(&state, &root, restore_preview, || {
             let result = installer::install(&payload, &state, &root, true)?;
-            write_bot_randomizer_options(&root, &config.bot_items)?;
             Ok(result)
         });
         match &result {
@@ -2946,7 +2928,6 @@ fn restore_payload_impl(app: &AppHandle, csgo: &str, pristine: bool) -> Result<R
     enforce_mode_cosmetics(&root, &mut config, LaunchMode::Online)?;
     config.mode = Some("online".into());
     config.insecure = false;
-    write_bot_randomizer_options(&root, &config.bot_items)?;
     write_config(app, &config)?;
     let operation = if pristine {
         "restore_pristine"
@@ -3026,7 +3007,6 @@ fn install_plugin_update_impl(app: &AppHandle, csgo: &str) -> Result<online_upda
     online_update::activate_payload(&version, &payload)?;
     match with_canonical_layout(&state, &root, restore_preview, || {
         let result = installer::install(&payload, &state, &root, false)?;
-        write_bot_randomizer_options(&root, &config.bot_items)?;
         Ok(result)
     }) {
         Ok(value) => {
@@ -3062,16 +3042,27 @@ async fn install_plugin_update(
     app: AppHandle,
     csgo: String,
 ) -> Result<online_update::UpdateResult> {
+    let _ = (app, csgo);
+    Err(AppError::update(
+        "Online plugin installation is disabled for Cosmetics-only v1; install a reviewed package",
+    ))
+    /*
     tauri::async_runtime::spawn_blocking(move || {
         let _busy = online_update::OperationGuard::acquire()?;
         install_plugin_update_impl(&app, &csgo)
     })
     .await
     .map_err(|error| AppError::update(format!("Plugin update task failed: {error}")))?
+    */
 }
 
 #[tauri::command]
 async fn install_panel_update(app: AppHandle) -> Result<online_update::UpdateResult> {
+    let _ = app;
+    Err(AppError::update(
+        "Online Panel installation is disabled for Cosmetics-only v1; install a reviewed package",
+    ))
+    /*
     let worker_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _busy = online_update::OperationGuard::acquire()?;
@@ -3084,6 +3075,7 @@ async fn install_panel_update(app: AppHandle) -> Result<online_update::UpdateRes
         app.exit(0);
     });
     Ok(result)
+    */
 }
 
 #[tauri::command]
@@ -3091,6 +3083,11 @@ async fn install_all_updates(
     app: AppHandle,
     csgo: Option<String>,
 ) -> Result<online_update::UpdateBatchResult> {
+    let _ = (app, csgo);
+    Err(AppError::update(
+        "Online installation is disabled for Cosmetics-only v1; install a reviewed package",
+    ))
+    /*
     let worker_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _busy = online_update::OperationGuard::acquire()?;
@@ -3138,6 +3135,7 @@ async fn install_all_updates(
         });
     }
     Ok(result)
+    */
 }
 
 #[tauri::command]
@@ -3566,7 +3564,7 @@ mod tests {
 
     #[test]
     fn bot_mode_launch_always_includes_insecure_arguments() {
-        let (arguments, options) = launch_request(LaunchMode::Bots);
+        let (arguments, options) = launch_request(LaunchMode::Preview);
         assert_eq!(
             arguments,
             vec!["-applaunch", "730", "-insecure", "-console"]
@@ -3747,8 +3745,11 @@ mod tests {
         let active_required = [
             "gameinfo.gi",
             "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll",
+            "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
+            "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/weapon_skins.json",
             "addons/MetaMod/bin/win64/server.dll",
             "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll",
+            "addons/counterstrikesharp/dotnet/dotnet.exe",
         ];
         let preview_required = [
             "cfg/my_bot_normal_config.cfg",
@@ -3776,30 +3777,6 @@ mod tests {
         );
         assert!(report.missing.is_empty());
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn difficulty_change_stays_disabled_in_preview_mode() {
-        let base = test_root();
-        let root = base.join("game/csgo");
-        let state = base.join("state");
-        let profile = root.join("overrides/High/botprofile.vpk");
-        let active = root.join("overrides/botprofile.vpk");
-        fs::create_dir_all(profile.parent().unwrap()).unwrap();
-        fs::write(&profile, b"high").unwrap();
-        fs::write(&active, b"medium").unwrap();
-        mode_layout::set_preview(&state, &root, true).unwrap();
-
-        let info = set_difficulty_at(&root, &state, "High", false).unwrap();
-
-        assert_eq!(info.current.as_deref(), Some("High"));
-        assert!(!active.exists());
-        assert_eq!(
-            fs::read(mode_layout::disabled_path(&active)).unwrap(),
-            b"high"
-        );
-        assert!(mode_layout::layout_healthy(&root, true));
-        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
@@ -4161,47 +4138,26 @@ pub fn run() {
                 }
                 let removed = logging::cleanup(&root).unwrap_or(0);
                 let archives_removed = diagnostics::cleanup_archives(&root).unwrap_or(0);
-                let update_cache_removed = online_update::cleanup_cache(None).unwrap_or(0);
-                logging::append(&root, "INFO", "panel.started", &format!("version={}, logs_collected={removed}, archives_collected={archives_removed}, update_cache_collected={update_cache_removed}", app_version::display()));
+                logging::append(&root, "INFO", "panel.started", &format!("version={}, logs_collected={removed}, archives_collected={archives_removed}", app_version::display()));
             }
-            let update_app = app.handle().clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                let plugin_version = installed_plugin_version(&update_app);
-                if let Err(error) = online_update::check(false, plugin_version.as_deref()) {
-                    online_update::record_check_error(&error);
-                    if let Ok(root) = app_storage::root() {
-                        logging::append(&root, "WARN", "update.startup_check_failed", &format!("host=github.com, {}", error.detail));
-                    }
-                }
-            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![get_config, save_config, should_present_welcome_story, detect_directories, select_directory,
-            cleanup_backups, validate_files, get_difficulty, set_difficulty, get_mode, set_mode,
-            reconcile_launch_options, launch_cs2, reconcile_core_json, get_bot_items, set_bot_item,
-            get_presets, set_aim, set_nades, set_team_lineup, get_team_lineup, set_timescale_toggle, get_timescale_toggle, get_drop_knives, set_drop_knives,
+            cleanup_backups, validate_files, get_mode, set_mode,
+            reconcile_launch_options, launch_cs2, reconcile_core_json, get_drop_knives, set_drop_knives,
             get_knife_customizer, save_knife_customizer, export_cosmetics_preset,
             import_cosmetics_preset, get_runtime_snapshot, get_cs2_process,
             inspect_installation, get_install_plan, install_payload, repair_payload,
             restore_payload, restore_pristine_cs2, export_diagnostics, get_panel_memory, save_panel_memory,
             appearance::get_appearance, appearance::save_appearance,
             appearance::export_appearance, appearance::import_appearance,
-            record_panel_error, get_update_snapshot, check_online_updates,
-            install_panel_update, install_plugin_update, install_all_updates, cancel_update,
-            get_match_catalog, prepare_and_launch_match, finish_active_match, get_active_match, list_match_history,
-            get_match_result, delete_match, get_match_history_stats, run_install_checks, play_demo, open_demo_folder,
-            cs2ss_bridge::get_cs2ss_overview, cs2ss_bridge::list_cs2ss_matches,
-            cs2ss_bridge::get_cs2ss_match_detail, cs2ss_bridge::get_cs2ss_player_detail,
-            cs2ss_bridge::list_cs2ss_matches_with_stats,
-            cs2ss_bridge::get_cs2ss_config, cs2ss_bridge::save_cs2ss_config,
-            cs2ss_bridge::get_cs2ss_dm_overview, cs2ss_bridge::delete_cs2ss_matches,
-            cs2ss_bridge::prune_cs2ss_bot_players])
+            record_panel_error, run_install_checks])
         .run(tauri::generate_context!())
         .expect("error while running CS2BotImproverPlus");
 }
 
 pub fn maybe_run_update_helper() -> bool {
-    online_update::maybe_apply_panel_update()
+    false
 }
 
 pub fn maybe_run_launch_recovery_helper() -> bool {

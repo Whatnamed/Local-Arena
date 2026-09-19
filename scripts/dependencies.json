@@ -1,15 +1,4 @@
 {
-  "upstream": {
-    "repository": "https://github.com/ed0ard/CS2-Bot-Improver",
-    "baseCommit": "d1d83982db88fbdb686b2bf13aa8c6f9d65a4604",
-    "sourceCommit": "d1d83982db88fbdb686b2bf13aa8c6f9d65a4604",
-    "release": "v1.4.3",
-    "windowsAsset": {
-      "name": "CS2BotImprover.zip",
-      "url": "https://github.com/ed0ard/CS2-Bot-Improver/releases/download/v1.4.3/CS2BotImprover.zip",
-      "sha256": "b59800f0d33b306b9aa74b3607e4e4fa2cd87609816f00097da2fdc0da2c40a1"
-    }
-  },
   "metamod": {
     "repository": "https://github.com/alliedmodders/metamod-source",
     "release": "2.0.0-git1406",
@@ -29,31 +18,5 @@
       "sha256": "ab66ef273dfd41379f04777c80dd3c7fcae09c59cf3c689bd40b69b95b99af6e"
     },
     "windowsCoreSha256": "3faafeaf00f03774061b567f47be3a568c234cf130d4680d1106dd4a0818e708"
-  },
-  "rayTrace": {
-    "repository": "https://github.com/FUNPLAY-pro-CS2/Ray-Trace",
-    "release": "v1.0.16",
-    "cssAsset": {
-      "name": "RayTrace-CSS-API-v1.0.16.tar.gz",
-      "url": "https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases/download/v1.0.16/RayTrace-CSS-API-v1.0.16.tar.gz",
-      "sha256": "e865ca551da35af31dc70f271840d1dce932a84e1c1bd27aa5ad3191efe6e1d4"
-    },
-    "windowsAsset": {
-      "name": "RayTrace-MM-v1.0.16-windows.tar.gz",
-      "url": "https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases/download/v1.0.16/RayTrace-MM-v1.0.16-windows.tar.gz",
-      "sha256": "020b7b49cb249793a6840af3edfaf8d07c3c8a8069c8246972d113d047429c59"
-    },
-    "windowsDllSha256": "5b18a8d43acc500960368875dd8670b695b3ea3f467832bbf61fe4989ab44093",
-    "cssImplSha256": "301ac4ed23ae75c220ab88f6bb9604822eac32a94285fea8d2c388e5fd4420e0"
-  },
-  "botHider": {
-    "repository": "https://github.com/XBribo/CS2-Bot-Hider",
-    "release": "v0.3.3",
-    "windowsAsset": {
-      "name": "BotHider-windows-0.3.3.zip",
-      "url": "https://github.com/XBribo/CS2-Bot-Hider/releases/download/v0.3.3/BotHider-windows-0.3.3.zip",
-      "sha256": "838f23217687462d87bbfab49d9cd9b6ae602d65f80fad3cc0758b38533642bc"
-    },
-    "windowsDllSha256": "1c0559a2da917c60b8d3dbb3e4f2b673a499bb52b879241e63fe34b3f803cd9d"
   }
 }

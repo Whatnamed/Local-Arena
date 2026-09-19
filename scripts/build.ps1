@@ -38,8 +38,6 @@ if (-not $Rustc) { $Rustc = "rustc" }
 $DotNet = Resolve-ToolExecutable $DotNet "dotnet"
 $Cargo = Resolve-ToolExecutable $Cargo "cargo"
 $Rustc = Resolve-ToolExecutable $Rustc "rustc"
-$manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot "dependencies.json") -Raw | ConvertFrom-Json
-
 function Invoke-Checked {
     param([string]$FilePath, [string[]]$ArgumentList, [string]$WorkingDirectory = $repo)
     Push-Location $WorkingDirectory
@@ -52,54 +50,6 @@ function Invoke-Checked {
     finally {
         Pop-Location
     }
-}
-
-function Get-VerifiedAsset {
-    param($Asset, [string]$DestinationDirectory)
-    New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
-    $path = Join-Path $DestinationDirectory $Asset.name
-    $expected = $Asset.sha256.ToLowerInvariant()
-    if (Test-Path -LiteralPath $path) {
-        $cached = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($cached -eq $expected) { return $path }
-        Write-Host "Refreshing stale cached asset: $($Asset.name)"
-    }
-
-    $download = "$path.download"
-    try {
-        if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Force }
-        Invoke-WebRequest -Uri $Asset.url -OutFile $download
-        $actual = (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($actual -ne $expected) {
-            throw "SHA-256 mismatch for $($Asset.name): $actual"
-        }
-        Move-Item -LiteralPath $download -Destination $path -Force
-    }
-    finally {
-        if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Force }
-    }
-    return $path
-}
-
-function Get-RayTraceApi {
-    $inputs = Join-Path $cache "build-inputs\raytrace-$($manifest.rayTrace.release)"
-    $archive = Get-VerifiedAsset $manifest.rayTrace.cssAsset $inputs
-    $extract = Join-Path $inputs "extract"
-    $dll = Get-ChildItem -LiteralPath $extract -Filter "RayTraceApi.dll" -File -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match '[\\/]shared[\\/]RayTraceApi[\\/]' } |
-        Select-Object -First 1
-    if (-not $dll) {
-        if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
-        New-Item -ItemType Directory -Path $extract -Force | Out-Null
-        $tar = (Get-Command tar.exe -ErrorAction Stop).Source
-        & $tar -xzf $archive -C $extract
-        if ($LASTEXITCODE -ne 0) { throw "Failed to extract $archive" }
-        $dll = Get-ChildItem -LiteralPath $extract -Filter "RayTraceApi.dll" -File -Recurse |
-            Where-Object { $_.FullName -match '[\\/]shared[\\/]RayTraceApi[\\/]' } |
-            Select-Object -First 1
-    }
-    if (-not $dll) { throw "Pinned RayTraceApi.dll was not found in $archive" }
-    return $dll.FullName
 }
 
 $cargo = (Get-Command $Cargo -ErrorAction Stop).Source
@@ -175,33 +125,15 @@ try {
     }
     Invoke-Checked $npm @("run", "test:stickers") $panel
     Invoke-Checked $npm @("run", "test:install-gate") $panel
+    Invoke-Checked $npm @("run", "test:cosmetics-catalog") $panel
     Invoke-Checked $npm @("run", "build") $panel
 
-    $rayTraceApi = Get-RayTraceApi
     $pluginProjects = @(
-        @{ Path = "addons\counterstrikesharp\plugins\BotAI\BotAI.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\BotAimImprover\BotAimImprover.csproj"; Properties = @("-p:RayTraceApiPath=$rayTraceApi") },
-        @{ Path = "addons\counterstrikesharp\plugins\BotBuy\BotBuy.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\BotControllerImpl\BotControllerImpl.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\BotRandomizer\BotRandomizer.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\NadeSystem\NadeSystem.csproj"; Properties = @("-p:RayTraceApiPath=$rayTraceApi") },
-        @{ Path = "addons\counterstrikesharp\plugins\RoundDamageRecap\RoundDamageRecap.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\TeamLineupInjector\TeamLineupInjector.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\PlusMatchCoordinator\PlusMatchCoordinator.csproj"; Properties = @() }
+        @{ Path = "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.csproj"; Properties = @() }
     )
     foreach ($project in $pluginProjects) {
         Invoke-Checked $DotNet (@("build", $project.Path, "-c", "Release", "--nologo") + $project.Properties)
     }
-    Invoke-Checked $DotNet @("publish", "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\OfflineMatchTelemetry.csproj", "-c", "Release", "--nologo", "--self-contained", "false", "-o", (Join-Path $repo "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\bin\Release\net8.0"))
-    $omtBuild = Join-Path $repo "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\bin\Release\net8.0"
-    $sqliteNative = Join-Path $omtBuild "runtimes\win-x64\native\e_sqlite3.dll"
-    if (Test-Path -LiteralPath $sqliteNative) { Copy-Item -LiteralPath $sqliteNative -Destination $omtBuild -Force }
-    Invoke-Checked $DotNet @(
-        "run", "--project", "addons\counterstrikesharp\shared\MatchCore.Tests\MatchCore.Tests.csproj",
-        "-c", "Release", "--nologo"
-    )
     Invoke-Checked $DotNet @(
         "run", "--project", "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer.Tests\PlayerKnifeCustomizer.Tests.csproj",
         "-c", "Release"
