@@ -1,4 +1,4 @@
-use crate::{Result, atomic_fs, installer, steam};
+use crate::{Result, atomic_fs, installer, launch_isolation, steam};
 use serde::Serialize;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
@@ -131,7 +131,7 @@ fn managed_component_check(code: &str, name: &str, path: PathBuf, missing_status
     check
 }
 
-pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: bool, selected_map: Option<&str>) -> Result<InstallCheckReport> {
+pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: bool) -> Result<InstallCheckReport> {
     let mut checks = Vec::new();
     checks.push(if target.is_dir() { blocker("INSTALL_TARGET", CheckStatus::Pass, "CS2 game/csgo directory", target.display().to_string(), "Selected directory exists", "No action required") }
         else { blocker("INSTALL_TARGET", CheckStatus::Fail, "CS2 game/csgo directory", target.display().to_string(), "Selected path is unavailable", "Select the CS2 installation root, game directory, or game/csgo directory") });
@@ -147,16 +147,19 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
         Some(Ok(activity)) => blocker("STEAM_APP_ACTIVITY", CheckStatus::Pass, "Steam App 730 activity", activity.evidence(), "Steam may remain open because App 730 is idle", "No action required"),
     });
     checks.push(blocking_file_check("GAMEINFO_GI", "gameinfo.gi", &target.join("gameinfo.gi"), "Verify CS2 files in Steam"));
-    if let Some(map) = selected_map {
-        checks.push(blocking_file_check("MATCH_MAP", "Selected match map", &target.join("maps").join(format!("{map}.vpk")), "Verify CS2 files in Steam or install the selected map"));
-    }
+    checks.push(match launch_isolation::isolation_status(state_root, target, launch_isolation::unix_now()) {
+        Ok(status) if !status.gameinfo_present => blocker("LAUNCH_ISOLATION_CLEAN", CheckStatus::Fail, "Launch isolation state", format!("{} is unreadable", target.join("gameinfo.gi").display()), "The durable launch state cannot be established", "Verify CS2 files in Steam, then run the checks again"),
+        Ok(status) if !status.clean => blocker("LAUNCH_ISOLATION_CLEAN", CheckStatus::Fail, "Launch isolation state", format!("project search paths present: {}", status.project_paths_present.join(", ")), "A local cosmetics launch window is still open, so the Mod owns files right now", "Close CS2, let the Panel restore the clean launch state, then run the checks again"),
+        Ok(status) => blocker("LAUNCH_ISOLATION_CLEAN", CheckStatus::Pass, "Launch isolation state", format!("gameinfo.gi carries no project search path; pending={:?}", status.pending), "The durable state is a plain CS2, which is what a Steam-launched game needs", "No action required"),
+        Err(error) => blocker("LAUNCH_ISOLATION_CLEAN", CheckStatus::Fail, "Launch isolation state", error.detail, "gameinfo.gi could not be parsed as CS2 search paths", "Check the CS2 folder permissions, then run the checks again"),
+    });
     checks.push(if cs2_running { blocker("CS2_PROCESS_LOCK", CheckStatus::Fail, "CS2 process and file locks", "cs2.exe is running", "CS2 can lock plugins, configs, and Demo sessions", "Fully close CS2 and wait for cs2.exe to exit") }
         else { blocker("CS2_PROCESS_LOCK", CheckStatus::Pass, "CS2 process and file locks", "No selected cs2.exe process", "No active game lock detected", "No action required") });
     if target.is_dir() { checks.push(atomic_probe(target, "TARGET_ATOMIC_WRITE", "Target atomic write")); }
-    let match_state = target.join(".csbip");
-    match fs::create_dir_all(&match_state) {
-        Ok(()) => checks.push(atomic_probe(&match_state, "MATCH_STATE_ATOMIC_WRITE", "Match state atomic write")),
-        Err(error) => checks.push(blocker("MATCH_STATE_ATOMIC_WRITE", CheckStatus::Fail, "Match state atomic write", format!("{}: {error}", match_state.display()), "The per-installation match state directory cannot be created", "Check CS2 folder permissions and Controlled folder access")),
+    let cosmetics_state = target.join(".csbip");
+    match fs::create_dir_all(&cosmetics_state) {
+        Ok(()) => checks.push(atomic_probe(&cosmetics_state, "COSMETICS_STATE_ATOMIC_WRITE", "Cosmetics state atomic write")),
+        Err(error) => checks.push(blocker("COSMETICS_STATE_ATOMIC_WRITE", CheckStatus::Fail, "Cosmetics state atomic write", format!("{}: {error}", cosmetics_state.display()), "The per-installation state directory cannot be created", "Check CS2 folder permissions and Controlled folder access")),
     }
     checks.push(atomic_probe(state_root, "PANEL_STATE_ATOMIC_WRITE", "Panel state and backup atomic write"));
 
@@ -211,8 +214,6 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
         ("METAMOD_X64", "MetaMod", "addons/metamod/bin/win64/server.dll"),
         ("CSS_X64", "CounterStrikeSharp", "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll"),
         ("CSS_DOTNET_X64", "CounterStrikeSharp .NET runtime", "addons/counterstrikesharp/dotnet/dotnet.exe"),
-        ("RAYTRACE_X64", "RayTrace", "addons/RayTrace/bin/win64/RayTrace.dll"),
-        ("BOTHIDER_X64", "BotHider", "addons/BotHider/bin/win64/BotHider.dll"),
     ] {
         checks.push(component_check(
             &format!("TARGET_{code}"),
@@ -222,26 +223,6 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
             false,
         ));
         checks.push(component_check(
-            &format!("PAYLOAD_{code}"),
-            &format!("Package {name}"),
-            payload_root.join(relative),
-            CheckStatus::Fail,
-            true,
-        ));
-    }
-    for (code, name, relative) in [
-        ("MATCH_COORDINATOR_MANAGED", "PlusMatchCoordinator", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/PlusMatchCoordinator.dll"),
-        ("MATCH_CORE_MANAGED", "MatchCore", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/MatchCore.dll"),
-        ("BOTHIDER_API_MANAGED", "BotHider API", "addons/counterstrikesharp/shared/BotHiderApi/BotHiderApi.dll"),
-    ] {
-        checks.push(managed_component_check(
-            &format!("TARGET_{code}"),
-            &format!("Installed {name}"),
-            target.join(relative),
-            if installed { CheckStatus::Fail } else { CheckStatus::Warn },
-            false,
-        ));
-        checks.push(managed_component_check(
             &format!("PAYLOAD_{code}"),
             &format!("Package {name}"),
             payload_root.join(relative),
@@ -250,36 +231,37 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
         ));
     }
     {
-        let name = "TeamLineupInjector";
-        let relative = "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.dll";
+        let name = "PlayerKnifeCustomizer";
+        let relative = "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll";
         checks.push(managed_component_check(
-            "TARGET_TEAM_LINEUP_MANAGED",
+            "TARGET_COSMETICS_MANAGED",
             &format!("Installed {name}"),
             target.join(relative),
             if installed { CheckStatus::Fail } else { CheckStatus::Warn },
             false,
         ));
         checks.push(managed_component_check(
-            "PAYLOAD_TEAM_LINEUP_MANAGED",
+            "PAYLOAD_COSMETICS_MANAGED",
             &format!("Package {name}"),
             payload_root.join(relative),
             CheckStatus::Fail,
-            false,
+            true,
         ));
     }
     for (code, title, relative) in [
-        ("MATCH_CATALOG", "Match catalog", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/match_catalog.json"),
-        ("OPEN_RATING_MODEL", "OpenRating model", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/open-rating-3.0-proxy-v1.json"),
-        ("BOTHIDER_IDENTITIES", "BotHider identity catalog", "addons/BotHider/bot_info.json"),
+        ("METAMOD_CSS_VDF", "MetaMod CounterStrikeSharp load file", "addons/metamod/counterstrikesharp.vdf"),
+        ("COSMETICS_CATALOG", "Cosmetic catalog", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json"),
     ] {
         checks.push(target_file_check(&format!("TARGET_{code}"), &format!("Installed {title}"), target, relative, installed));
         checks.push(source_file_check(&format!("PAYLOAD_{code}"), &format!("Package {title}"), payload_root, relative));
     }
-    for difficulty in ["Low", "Medium", "High"] {
-        let relative = format!("addons/counterstrikesharp/plugins/PlusMatchCoordinator/profiles/{difficulty}/botprofile.db");
-        let suffix = difficulty.to_ascii_uppercase();
-        checks.push(target_file_check(&format!("TARGET_MATCH_PROFILE_{suffix}"), &format!("Installed {difficulty} match Bot profiles"), target, &relative, installed));
-        checks.push(source_file_check(&format!("PAYLOAD_MATCH_PROFILE_{suffix}"), &format!("Package {difficulty} match Bot profiles"), payload_root, &relative));
+    // The two preset files are player data, not package content: they only exist
+    // once a preset has been saved, and a missing one is never a blocker.
+    for (code, title, relative) in [
+        ("COSMETICS_KNIFE_PRESETS", "Saved knife presets", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_knife_presets.json"),
+        ("COSMETICS_GUN_PRESETS", "Saved weapon presets", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_gun_presets.json"),
+    ] {
+        checks.push(target_file_check(&format!("TARGET_{code}"), title, target, relative, installed));
     }
 
     let pass_count = checks.iter().filter(|check| check.status == CheckStatus::Pass).count();

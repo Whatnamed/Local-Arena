@@ -1,4 +1,4 @@
-use crate::{AppError, Result, atomic_fs, mode_layout};
+use crate::{AppError, Result, atomic_fs};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -462,9 +462,11 @@ fn try_transaction_lock(target: &Path) -> Result<Option<TransactionLock>> {
     }
 }
 
+/// Cosmetics-only means one layout: the canonical path is the only spelling a
+/// managed file can have, so no `*.csbip-disabled` fallback is ever consulted.
 fn managed_path(target: &Path, raw: &str) -> Option<PathBuf> {
     let canonical = target.join(raw.replace('/', "\\"));
-    mode_layout::active_or_disabled(&canonical)
+    canonical.is_file().then_some(canonical)
 }
 
 fn detect_source(state_root: &Path, target: &Path) -> SourceDetection {
@@ -565,6 +567,10 @@ fn read_manifest_document(payload_root: &Path) -> Result<PayloadManifest> {
     Ok(manifest)
 }
 
+/// Strict package verification without the same-directory allowance. Only the
+/// packaged-payload round trip test needs it now that the Panel installs through
+/// `verify_payload_for_target`.
+#[cfg(test)]
 fn read_manifest(payload_root: &Path) -> Result<PayloadManifest> {
     let manifest = read_manifest_document(payload_root)?;
     verify_manifest_files(payload_root, &manifest, false)?;
@@ -619,10 +625,6 @@ fn read_manifest_for_target(payload_root: &Path, target: &Path) -> Result<Payloa
         same_canonical_directory(payload_root, target),
     )?;
     Ok(manifest)
-}
-
-pub fn verify_payload(payload_root: &Path) -> Result<PayloadManifest> {
-    read_manifest(payload_root)
 }
 
 pub fn verify_payload_for_target(
@@ -700,13 +702,7 @@ fn inspect_impl(
     let mut missing = Vec::new();
     let mut corrupt = Vec::new();
     for (raw, expected, expected_size, restore_policy) in &entries {
-        let canonical = target.join(safe_relative(raw)?);
-        let disabled = mode_layout::disabled_path(&canonical);
-        let path = if canonical.is_file() {
-            canonical
-        } else {
-            disabled
-        };
+        let path = target.join(safe_relative(raw)?);
         if !path.is_file() {
             missing.push(raw.clone());
         } else if restore_policy == "preserve-config" {
@@ -803,11 +799,7 @@ fn inspect_space(manifest: &PayloadManifest, state_root: &Path, target: &Path) -
             }
         }
         let destination = target.join(&relative);
-        let existing = if destination.exists() {
-            destination.clone()
-        } else {
-            mode_layout::disabled_path(&destination)
-        };
+        let existing = destination.clone();
         if existing.exists() && !existing.is_file() {
             return Err(AppError::transaction(format!(
                 "A payload file target is occupied by a directory: {}",
@@ -873,7 +865,7 @@ pub fn plan(payload_root: &Path, state_root: &Path, target: &Path) -> Result<Ins
     let mut overwritten_files = 0;
     for entry in &manifest.entries {
         let destination = target.join(safe_relative(&entry.path)?);
-        if destination.exists() || mode_layout::disabled_path(&destination).exists() {
+        if destination.exists() {
             overwritten_files += 1;
         } else {
             new_files += 1;
@@ -1453,19 +1445,6 @@ pub fn restore_pristine(
                 canonical.clone(),
             );
         }
-        let disabled = mode_layout::disabled_path(&canonical);
-        if disabled.is_file() {
-            let disabled_relative = disabled.strip_prefix(target).map_err(|_| {
-                AppError::transaction(format!(
-                    "Disabled cleanup path escaped the selected CS2 directory: {}",
-                    disabled.display()
-                ))
-            })?;
-            candidates.insert(
-                disabled_relative.to_string_lossy().replace('\\', "/"),
-                disabled,
-            );
-        }
     }
     for raw in SUITE_OWNED_FILES {
         let relative = safe_relative(raw)?;
@@ -1474,19 +1453,6 @@ pub fn restore_pristine(
             candidates.insert(
                 relative.to_string_lossy().replace('\\', "/"),
                 canonical.clone(),
-            );
-        }
-        let disabled = mode_layout::disabled_path(&canonical);
-        if disabled.is_file() {
-            let disabled_relative = disabled.strip_prefix(target).map_err(|_| {
-                AppError::transaction(format!(
-                    "Disabled cleanup path escaped the selected CS2 directory: {}",
-                    disabled.display()
-                ))
-            })?;
-            candidates.insert(
-                disabled_relative.to_string_lossy().replace('\\', "/"),
-                disabled,
             );
         }
     }
@@ -1532,8 +1498,7 @@ pub fn restore_pristine(
             });
             write_json_atomic(&journal_path, &journal)?;
 
-            let canonical_raw = raw.strip_suffix(".csbip-disabled").unwrap_or(raw);
-            let known_unchanged = expected.get(canonical_raw).is_some_and(|hash| {
+            let known_unchanged = expected.get(raw).is_some_and(|hash| {
                 sha256(destination)
                     .map(|actual| actual.eq_ignore_ascii_case(hash))
                     .unwrap_or(false)
@@ -1685,7 +1650,7 @@ mod tests {
         );
         fs::write(&gun_presets, b"player-modified-guns").unwrap();
 
-        assert!(verify_payload(&target).is_err());
+        assert!(read_manifest(&target).is_err());
         verify_payload_for_target(&target, &target).unwrap();
         assert!(plan(&target, &state, &target).is_ok());
         assert!(install(&target, &state, &target, false).is_ok());

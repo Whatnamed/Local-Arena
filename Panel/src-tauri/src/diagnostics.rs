@@ -1,6 +1,5 @@
-use crate::{AppError, Result, atomic_fs, mode_files, steam};
+use crate::{AppError, Result, atomic_fs, launch_isolation, steam};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -10,58 +9,30 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-fn match_metadata(csgo: &Path) -> serde_json::Value {
-    let root = csgo.join(".csbip/matches");
-    let mut entries = Vec::new();
-    for directory in fs::read_dir(root).into_iter().flatten().flatten() {
-        let path = directory.path();
-        if !path.is_dir() { continue; }
-        for name in ["request.json", "result.json"] {
-            let file = path.join(name);
-            if let Ok(metadata) = fs::metadata(&file) {
-                entries.push(serde_json::json!({
-                    "session_id": directory.file_name().to_string_lossy(),
-                    "kind": name,
-                    "path": file.to_string_lossy(),
-                    "size": metadata.len(),
-                    "modified_unix": metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|value| value.as_secs()),
-                }));
-            }
-        }
-    }
-    serde_json::Value::Array(entries)
-}
-
-fn runtime_mount_metadata(csgo: &Path) -> serde_json::Value {
-    let gameinfo = csgo.join("gameinfo.gi");
-    let gameinfo_bytes = fs::read(&gameinfo).ok();
-    let vpks = [
-        ("active", csgo.join("overrides/botprofile.vpk")),
-        ("low", csgo.join("overrides/Low/botprofile.vpk")),
-        ("medium", csgo.join("overrides/Medium/botprofile.vpk")),
-        ("high", csgo.join("overrides/High/botprofile.vpk")),
-    ]
-    .into_iter()
-    .map(|(name, path)| {
-        let metadata = fs::metadata(&path).ok();
-        let sha256 = fs::read(&path)
-            .ok()
-            .map(|bytes| format!("{:x}", Sha256::digest(bytes)));
-        serde_json::json!({
-            "name": name,
-            "path": path.to_string_lossy(),
-            "present": metadata.is_some(),
-            "size": metadata.map(|value| value.len()),
-            "sha256": sha256,
-        })
-    })
-    .collect::<Vec<_>>();
+/// The state the launch-isolation transaction leaves behind: the durable
+/// `gameinfo.gi` condition, any pending journal, and whether the plugin handshake
+/// marker is present. This is what tells support whether a Mod can load at all.
+fn launch_metadata(state_root: &Path, csgo: &Path) -> serde_json::Value {
+    let marker = csgo.join(launch_isolation::MARKER_RELATIVE);
+    let isolation = match launch_isolation::isolation_status(
+        state_root,
+        csgo,
+        launch_isolation::unix_now(),
+    ) {
+        Ok(status) => serde_json::json!({
+            "gameinfo_present": status.gameinfo_present,
+            "clean": status.clean,
+            "project_paths_present": status.project_paths_present,
+            "pending": status.pending,
+            "ticket_live": status.ticket_live,
+        }),
+        Err(error) => serde_json::json!({ "error": error.detail }),
+    };
     serde_json::json!({
-        "gameinfo_path": gameinfo.to_string_lossy(),
-        "gameinfo_present": gameinfo_bytes.is_some(),
-        "metamod_search_path": gameinfo_bytes.as_deref().is_some_and(mode_files::contains_metamod_search_path),
-        "botprofile_search_path": gameinfo_bytes.as_deref().is_some_and(mode_files::contains_botprofile_search_path),
-        "botprofile_vpks": vpks,
+        "gameinfo_path": launch_isolation::gameinfo_path(csgo).to_string_lossy(),
+        "marker_path": marker.to_string_lossy(),
+        "marker_present": marker.is_file(),
+        "isolation": isolation,
     })
 }
 
@@ -69,7 +40,11 @@ const MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ARCHIVE_INPUT_BYTES: usize = 32 * 1024 * 1024;
 const ARCHIVE_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 const MAX_ARCHIVES: usize = 10;
+// Only the real `wevtutil` query reads these, and that query is compiled out of
+// tests and non-Windows hosts.
+#[cfg(all(windows, not(test)))]
 const EVENT_LOG_WINDOW_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+#[cfg(all(windows, not(test)))]
 const EVENT_LOG_LIMIT: u32 = 250;
 
 #[derive(Debug, Serialize)]
@@ -166,13 +141,6 @@ fn add_named_files(collector: &mut Collector, prefix: &str, paths: impl IntoIter
         let _ = collector.add_file(&format!("{prefix}/{index:02}-{name}"), &path)?;
     }
     Ok(())
-}
-
-fn recent_match_records(csgo: &Path) -> Vec<PathBuf> {
-    recent_files_recursive(&csgo.join(".csbip/matches"), 12, 2)
-        .into_iter()
-        .filter(|path| matches!(path.file_name().and_then(|name| name.to_str()), Some("request.json" | "result.json")))
-        .collect()
 }
 
 fn steam_log_files(_csgo: &Path) -> Vec<PathBuf> {
@@ -416,19 +384,19 @@ pub fn export(state_root: &Path, csgo: Option<&Path>, snapshot: &serde_json::Val
     }
 
     if let Some(csgo) = csgo {
-        collector.add_json("report/runtime-mounts.json", &runtime_mount_metadata(csgo))?;
-        collector.add_json("matches/metadata.json", &match_metadata(csgo))?;
-        add_named_files(&mut collector, "matches/recent", recent_match_records(csgo))?;
+        collector.add_json("report/launch-isolation.json", &launch_metadata(state_root, csgo))?;
+        let presets = csgo.join("addons/counterstrikesharp/plugins/PlayerKnifeCustomizer");
         for (name, path) in [
-            ("runtime/match-runtime.json", csgo.join(".csbip/match-runtime.json")),
-            ("runtime/aim-runtime.json", csgo.join(".csbip/aim-runtime.json")),
-            ("runtime/purchase-runtime.json", csgo.join(".csbip/purchase-runtime.json")),
+            ("config/live-knife-presets.json", presets.join("player_knife_presets.json")),
+            ("config/live-gun-presets.json", presets.join("player_gun_presets.json")),
             ("logs/cs2/console.log", csgo.join("console.log")),
             ("logs/cs2/console-history.txt", csgo.join("console_history.txt")),
             ("logs/metamod/metamod-fatal.log", csgo.join("addons/metamod/metamod-fatal.log")),
         ] {
             let _ = collector.add_file(name, &path)?;
         }
+        add_named_files(&mut collector, "cosmetics/backups",
+            recent_files_recursive(&csgo.join(".csbip/cosmetics-backups"), 12, 3))?;
         add_named_files(&mut collector, "logs/cs2/recent",
             recent_files_recursive(&csgo.join("logs"), 20, 2))?;
         add_named_files(&mut collector, "logs/counterstrikesharp",
@@ -462,21 +430,14 @@ mod tests {
     fn diagnostic_export_is_a_readable_zip() {
         let root = std::env::temp_dir().join(format!("cs2bi-diagnostics-{}", unix_time()));
         let csgo = root.join("game/csgo");
+        let presets = csgo.join("addons/counterstrikesharp/plugins/PlayerKnifeCustomizer");
         fs::create_dir_all(root.join("logs/panel")).unwrap();
         fs::create_dir_all(csgo.join("logs")).unwrap();
-        fs::create_dir_all(csgo.join(".csbip/matches/session-1")).unwrap();
-        fs::create_dir_all(csgo.join("overrides/Medium")).unwrap();
+        fs::create_dir_all(&presets).unwrap();
         fs::write(root.join("logs/panel/panel-current.jsonl"), b"test").unwrap();
         fs::write(csgo.join("logs/console.log"), b"cs2 test log").unwrap();
-        fs::write(
-            csgo.join("gameinfo.gi"),
-            b"SearchPaths\n{\nGame csgo/addons/metamod\nGame csgo/overrides/botprofile.vpk\nGame csgo\n}\n",
-        ).unwrap();
-        fs::write(csgo.join("overrides/Medium/botprofile.vpk"), b"vpk").unwrap();
-        fs::write(
-            csgo.join(".csbip/matches/session-1/request.json"),
-            br#"{"schema_version":1,"session_id":"session-1"}"#,
-        ).unwrap();
+        fs::write(csgo.join("gameinfo.gi"), b"SearchPaths\n{\n\tGame\tcsgo\n}\n").unwrap();
+        fs::write(presets.join("player_knife_presets.json"), br#"{"schema_version":5}"#).unwrap();
         let archive = export(&root, Some(&csgo), &serde_json::json!({"ok": true})).unwrap();
         let archive_name = Path::new(&archive.path).file_name().and_then(|name| name.to_str()).unwrap();
         assert!(archive_name.starts_with("LALog_"));
@@ -485,11 +446,24 @@ mod tests {
         let mut zip = zip::ZipArchive::new(file).unwrap();
         assert!(zip.by_name("report/runtime-snapshot.json").is_ok());
         assert!(zip.by_name("report/windows-event-logs.json").is_ok());
-        assert!(zip.by_name("report/runtime-mounts.json").is_ok());
+        assert!(zip.by_name("report/launch-isolation.json").is_ok());
         assert!(zip.by_name("report/appearance.json").is_ok());
+        assert!(zip.by_name("config/live-knife-presets.json").is_ok());
         assert!(zip.by_name("logs/panel/00-panel-current.jsonl").is_ok());
         assert!(zip.by_name("logs/cs2/recent/00-console.log").is_ok());
-        assert!(zip.by_name("matches/recent/00-request.json").is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn launch_metadata_reports_the_durable_clean_state() {
+        let root = std::env::temp_dir().join(format!("cs2bi-diagnostics-state-{}", unix_time()));
+        let csgo = root.join("game/csgo");
+        fs::create_dir_all(&csgo).unwrap();
+        fs::write(csgo.join("gameinfo.gi"), b"SearchPaths\n{\n\tGame\tcsgo\n}\n").unwrap();
+        let value = launch_metadata(&root, &csgo);
+        assert_eq!(value["isolation"]["clean"], serde_json::json!(true));
+        assert_eq!(value["isolation"]["gameinfo_present"], serde_json::json!(true));
+        assert_eq!(value["marker_present"], serde_json::json!(false));
         fs::remove_dir_all(root).unwrap();
     }
 }
