@@ -112,3 +112,26 @@ Phase A 输出：当前事实基线与"保留 / 修改 / 删除 / 暂缓"模块�
 8. 快捷刀当前实现是往 4 个 `cfg/my_bot_*.cfg` 写 `bind ... "subclass_create 500;…;526"`（`lib.rs:2006-2022`）→ 与 `PRODUCT-SCOPE.md:105` 直接冲突。注意：插件内已改用 `AcceptInput("ChangeSubclass")` 就地变形（`:496-501`），地上刷刀只存在于 cfg bind 路径。
 9. `Panel/src/data/weaponSkins.json` 与插件 `weapon_skins.json` 是 2106 条完全等值的重复数据（脚本核对 key set 全等），且**没有生成脚本**，属手工/vendor 产物。
 10. 前端零测试框架、零 lint；`tsconfig` 开了 `noUnusedLocals`/`noUnusedParameters` → 删页面必须连带清 `store.tsx`/`api.ts`，否则 `tsc` 直接失败。
+
+## 6. Phase B 可构建基线（2026-09-19 实测）
+
+选定基线：本 fork HEAD（等同 upstream `main` @ `81a71004`）。所有结果在 `E:\CS2MOD\wt-agent-b` 本机构建得到，未启动 CS2。
+
+| 目标 | 命令 | 结果 |
+| --- | --- | --- |
+| Panel 前端类型检查 + 打包 | `npm ci`、`npm run build`（`tsc && vite build`） | 通过；产物 8.32 MB JS / 159.79 kB CSS（`skinNames.json` 等 catalog 全量进 bundle，Phase G 需复核） |
+| Node 断言脚本 | `node scripts/test-install-gate.mjs`、`node scripts/test-sticker-editor.mjs` | 通过（4 断言 / 全部贴纸-挂件-探员断言） |
+| PlayerCosmetics 插件 | `dotnet build PlayerKnifeCustomizer.csproj -c Release` | 通过，0 warning 0 error |
+| 插件测试 | `dotnet run --project PlayerKnifeCustomizer.Tests -c Release` | 通过（67 断言） |
+| MatchCore 测试 | `dotnet run --project MatchCore.Tests -c Release`（需 `DOTNET_ROLL_FORWARD=LatestMajor`） | 通过（约 57 断言） |
+| Panel Rust 测试 | `cargo test --manifest-path Panel/src-tauri/Cargo.toml --lib` | 通过，120 passed / 0 failed / 1 ignored |
+| Panel release 构建 | `cargo build --target x86_64-pc-windows-msvc --release --locked --features tauri/custom-protocol` | 通过（见下节的环境限制） |
+| 仓库级校验 | `pwsh ./scripts/verify-workspace.ps1`（工作区模式） | 通过；报告 Bot identities 1941 / Weapon skins 2106 / Glove skins 91 / Music kits 101 |
+| 打包 | `pwsh ./scripts/package.ps1` | **未执行**：`build.ps1:148-161` 要求 `cargo-xwin` 与 LLVM（`clang-cl`/`lld-link`/`llvm-rc`），本机没有 |
+
+### 环境结论
+
+- 失败原因分类：**全部是环境缺失，没有上游已坏或 fork 缺陷**。基线本身可构建、可测试。
+- 本机没有 .NET SDK（只有 6/7/8 runtime），插件要 `net10.0`。已在 `.cache/build-inputs/dotnet`（gitignored）放 portable SDK `10.0.401`，通过仓库自身的 `.local-build.ps1` 钩子注入（`build.ps1:20-23` dot-source 它，`verify-workspace.ps1:51-54` 又要求它存在）。系统级 .NET 安装未被改动。
+- `build.ps1` 走 `cargo xwin` 是为没有 MSVC 的机器交叉编译。本机已有 MSVC 14.43（`D:\Visual Studio\product`）与 Windows SDK 10.0.22621（`D:\Windows Kits\10`），直接 `--target x86_64-pc-windows-msvc` 即可，因此不需要装 LLVM/xwin。Phase G 的脚本收缩会让本地打包路径变得可跑。
+- `addons/**/*.csproj` 的 NuGet 版本三套并存（`1.0.371`/net10、`1.0.367`/net8、`1.0.362`），且 `disabled/BotAI_for_Linux` 的 `HintPath` 指向仓库外绝对路径。Cosmetics-only 只保留 net10 + `1.0.371` 一条线。
