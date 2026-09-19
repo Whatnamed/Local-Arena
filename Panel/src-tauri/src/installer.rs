@@ -10,21 +10,20 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const MANIFEST_FILE: &str = "plus-payload-manifest.json";
-pub const PANEL_UPDATE_MARKER: &str = "csbip-panel-update.json";
 
-const SUPERSEDED_PAYLOAD_PATHS: &[(&str, &str)] = &[
-    (
-        "addons/counterstrikesharp/plugins/PlusMatchCoordinator/rating-plus-3.0-proxy-v1.json",
-        "addons/counterstrikesharp/plugins/PlusMatchCoordinator/open-rating-3.0-proxy-v1.json",
-    ),
-];
-
+/// Evidence that a game directory already carries this project's cosmetics
+/// runtime, even when no installation record survives. Read-only: nothing here
+/// authorises a deletion.
 const PLUS_MARKERS: &[&str] = &[
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_knife_presets.json",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_gun_presets.json",
 ];
 
+/// Evidence of a full Local Arena / CS2-Bot-Improver install, which this product
+/// descends from but no longer ships. Three or more of these means the enhanced
+/// bot suite is recognisable and can be migrated from; one or two means the
+/// environment cannot be classified and every operation on it fails closed.
 const UPSTREAM_MARKERS: &[&str] = &[
     "addons/counterstrikesharp/plugins/BotAI/BotAI.dll",
     "addons/counterstrikesharp/plugins/BotAimImprover/BotAimImprover.dll",
@@ -36,49 +35,31 @@ const UPSTREAM_MARKERS: &[&str] = &[
     "addons/metamod/RayTrace.vdf",
 ];
 
+/// The directories this product's own payload can create. `restore_pristine`
+/// deletes only inside these and inside the manifest / record, so a third-party
+/// plugin that happens to live in `addons/counterstrikesharp/plugins/` or a
+/// loader file in `addons/metamod/` is never collected.
 const SUITE_OWNED_ROOTS: &[&str] = &[
-    "addons/BotHider",
-    "addons/BotController",
-    "addons/RayTrace",
     "addons/counterstrikesharp/api",
     "addons/counterstrikesharp/bin",
+    "addons/counterstrikesharp/configs",
     "addons/counterstrikesharp/dotnet",
     "addons/counterstrikesharp/gamedata",
     "addons/counterstrikesharp/lang",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer",
     "addons/counterstrikesharp/shared",
     "addons/counterstrikesharp/source",
-    "addons/counterstrikesharp/plugins/BotAI",
-    "addons/counterstrikesharp/plugins/BotAimImprover",
-    "addons/counterstrikesharp/plugins/BotBuy",
-    "addons/counterstrikesharp/plugins/BotControllerImpl",
-    "addons/counterstrikesharp/plugins/BotHiderImpl",
-    "addons/counterstrikesharp/plugins/BotRandomizer",
-    "addons/counterstrikesharp/plugins/BotState",
-    "addons/counterstrikesharp/plugins/NadeSystem",
-    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer",
-    "addons/counterstrikesharp/plugins/RayTraceImpl",
-    "addons/counterstrikesharp/plugins/RoundDamageRecap",
-    "addons/counterstrikesharp/plugins/TeamLineupInjector",
-    "addons/counterstrikesharp/plugins/OfflineMatchTelemetry",
-    "addons/counterstrikesharp/plugins/disabled/BotAI_for_Linux",
-    "addons/counterstrikesharp/plugins/disabled/BotAimImprover_for_Linux",
-    "addons/counterstrikesharp/plugins/disabled/CS2_ExecAfter",
     "addons/metamod/bin",
-    "overrides",
 ];
 
+/// Single files outside those roots that the payload writes. Deliberately no
+/// `cfg/` entry: a config overlay is something the user may have edited, so it is
+/// only ever removed when the manifest or the installation record names it.
 const SUITE_OWNED_FILES: &[&str] = &[
+    "addons/metamod.vdf",
     "addons/metamod_x64.vdf",
-    "addons/metamod/BotController.vdf",
-    "addons/metamod/BotHider.vdf",
-    "addons/metamod/RayTrace.vdf",
     "addons/metamod/counterstrikesharp.vdf",
     "addons/metamod/metaplugins.ini",
-    "cfg/bot_buy.cfg",
-    "cfg/my_bot_ffa_config.cfg",
-    "cfg/my_bot_ffa_config_rules_unchanged.cfg",
-    "cfg/my_bot_normal_config.cfg",
-    "cfg/my_bot_normal_config_rules_unchanged.cfg",
 ];
 
 const FILE_RETRY_DELAYS: &[Duration] = &[
@@ -537,18 +518,11 @@ fn detect_source(state_root: &Path, target: &Path) -> SourceDetection {
 fn read_manifest_document(payload_root: &Path) -> Result<PayloadManifest> {
     let path = payload_root.join(MANIFEST_FILE);
     let bytes = fs::read(&path).map_err(|_| {
-        if payload_root.join(PANEL_UPDATE_MARKER).is_file() {
-            AppError::payload(format!(
-                "This is the Panel-only online-update component, not the complete installer. Download and extract LocalArena-v{}-windows.zip for a first installation.",
-                crate::app_version::display()
-            ))
-        } else {
-            AppError::payload(format!(
-                "The complete plugin payload is missing. Keep LocalArena.exe beside addons, cfg, overrides, and {}. Expected: {}",
-                MANIFEST_FILE,
-                path.display()
-            ))
-        }
+        AppError::payload(format!(
+            "The Cosmetics-only payload is not beside the Panel. Keep the Panel executable, \
+             addons/, and {MANIFEST_FILE} in the same extracted directory. Expected: {}",
+            path.display()
+        ))
     })?;
     let manifest: PayloadManifest = serde_json::from_slice(&bytes)
         .map_err(|error| AppError::payload(format!("Invalid payload manifest: {error}")))?;
@@ -1128,55 +1102,6 @@ pub fn install(
             installed_files += 1;
         }
 
-        for (superseded_path, replacement_path) in SUPERSEDED_PAYLOAD_PATHS {
-            if !manifest.entries.iter().any(|entry| entry.path == *replacement_path) {
-                continue;
-            }
-            let Some(previous) = old_entries.get(*superseded_path) else {
-                continue;
-            };
-            let relative = safe_relative(superseded_path)?;
-            let destination = target.join(&relative);
-            if !destination.is_file() {
-                record_entries.remove(*superseded_path);
-                continue;
-            }
-            if !sha256(&destination)?.eq_ignore_ascii_case(&previous.installed_sha256) {
-                continue;
-            }
-
-            let transaction_backup = transaction_root.join(&relative);
-            copy_file_for(
-                "superseded payload rollback backup",
-                &destination,
-                &transaction_backup,
-            )?;
-            journal.changes.push(TransactionChange {
-                path: (*superseded_path).to_string(),
-                existed: true,
-                backup: Some(format!(
-                    "{transaction_name}/{}",
-                    superseded_path.replace('\\', "/")
-                )),
-            });
-            write_json_atomic(&journal_path, &journal)?;
-
-            if previous.original_existed {
-                let original = previous.original_backup.as_ref().ok_or_else(|| {
-                    AppError::transaction(format!(
-                        "Original backup is missing for superseded payload: {superseded_path}"
-                    ))
-                })?;
-                copy_file_for(
-                    "superseded payload original restore",
-                    &directory.join(original),
-                    &destination,
-                )?;
-            } else {
-                fs::remove_file(&destination).map_err(AppError::transaction_io)?;
-            }
-            record_entries.remove(*superseded_path);
-        }
         Ok(())
     })();
 
@@ -1343,6 +1268,8 @@ pub fn restore(payload_root: &Path, state_root: &Path, target: &Path) -> Result<
     write_json_atomic(&journal_path, &journal)?;
     let _ = fs::remove_dir_all(&transaction_root);
     fs::remove_file(&journal_path).map_err(AppError::transaction_io)?;
+    // The payload is gone, so no launch window may stay armed for it.
+    crate::launch_isolation::forget_launch_window(state_root, target);
 
     Ok(RestoreResult {
         restored_files,
@@ -1534,6 +1461,7 @@ pub fn restore_pristine(
     for raw in SUITE_OWNED_ROOTS.iter().rev() {
         let _ = remove_empty_tree(&target.join(raw.replace('/', "\\")));
     }
+    crate::launch_isolation::forget_launch_window(state_root, target);
 
     Ok(RestoreResult {
         restored_files: 0,
@@ -1660,23 +1588,6 @@ mod tests {
         assert!(verify_payload_for_target(&target, &target).is_err());
         fs::remove_dir_all(base).unwrap();
     }
-
-    fn add_payload_file(payload: &Path, raw: &str, bytes: &[u8]) {
-        let path = payload.join(raw.replace('/', "\\"));
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, bytes).unwrap();
-        let mut manifest = read_manifest_document(payload).unwrap();
-        manifest.entries.push(PayloadEntry {
-            path: raw.to_string(),
-            size: bytes.len() as u64,
-            sha256: sha256(&path).unwrap(),
-            component: "match-rating".to_string(),
-            ownership: "plus".to_string(),
-            restore_policy: "restore".to_string(),
-        });
-        write_json_atomic(&payload.join(MANIFEST_FILE), &manifest).unwrap();
-    }
-
     fn marker(target: &Path, raw: &str) {
         let path = target.join(raw.replace('/', "\\"));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1734,93 +1645,27 @@ mod tests {
     }
 
     #[test]
-    fn managed_upgrade_replaces_the_unchanged_rating_plus_model_with_open_rating() {
-        let base = root("open-rating-upgrade");
-        let old_payload = base.join("old-payload");
-        let new_payload = base.join("new-payload");
-        let target = base.join("target");
-        let state = base.join("state");
-        fixture(&old_payload, &target);
-        add_payload_file(&old_payload, SUPERSEDED_PAYLOAD_PATHS[0].0, b"old-model");
-        install(&old_payload, &state, &target, false).unwrap();
-
-        fixture(&new_payload, &base.join("new-fixture-target"));
-        add_payload_file(&new_payload, SUPERSEDED_PAYLOAD_PATHS[0].1, b"open-model");
-        install(&new_payload, &state, &target, false).unwrap();
-
-        assert!(!target.join(SUPERSEDED_PAYLOAD_PATHS[0].0.replace('/', "\\")).exists());
-        assert_eq!(
-            fs::read(target.join(SUPERSEDED_PAYLOAD_PATHS[0].1.replace('/', "\\"))).unwrap(),
-            b"open-model"
-        );
-        let record = read_record(&installation_dir(&state, &target)).unwrap();
-        assert!(!record.entries.iter().any(|entry| entry.path == SUPERSEDED_PAYLOAD_PATHS[0].0));
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn managed_upgrade_restores_a_pre_plus_file_at_the_superseded_model_path() {
-        let base = root("open-rating-original-restore");
-        let old_payload = base.join("old-payload");
-        let new_payload = base.join("new-payload");
-        let target = base.join("target");
-        let state = base.join("state");
-        fixture(&old_payload, &target);
-        let old_model = target.join(SUPERSEDED_PAYLOAD_PATHS[0].0.replace('/', "\\"));
-        fs::create_dir_all(old_model.parent().unwrap()).unwrap();
-        fs::write(&old_model, b"pre-plus-model").unwrap();
-        add_payload_file(&old_payload, SUPERSEDED_PAYLOAD_PATHS[0].0, b"old-model");
-        install(&old_payload, &state, &target, false).unwrap();
-
-        fixture(&new_payload, &base.join("new-fixture-target"));
-        add_payload_file(&new_payload, SUPERSEDED_PAYLOAD_PATHS[0].1, b"open-model");
-        install(&new_payload, &state, &target, false).unwrap();
-
-        assert_eq!(fs::read(&old_model).unwrap(), b"pre-plus-model");
-        assert!(target.join(SUPERSEDED_PAYLOAD_PATHS[0].1.replace('/', "\\")).is_file());
-        let record = read_record(&installation_dir(&state, &target)).unwrap();
-        assert!(!record.entries.iter().any(|entry| entry.path == SUPERSEDED_PAYLOAD_PATHS[0].0));
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn open_rating_install_preserves_an_untracked_legacy_model() {
-        let base = root("open-rating-untracked-file");
+    fn a_managed_upgrade_and_a_pristine_restore_leave_unowned_legacy_files_alone() {
+        // A file an older full Local Arena install left behind is not in this
+        // product's manifest, record, or owned roots, so neither action may touch
+        // it. This is the ownership boundary Phase H narrows on purpose.
+        let base = root("unowned-legacy-file");
         let payload = base.join("payload");
         let target = base.join("target");
         let state = base.join("state");
         fixture(&payload, &target);
-        let old_model = target.join(SUPERSEDED_PAYLOAD_PATHS[0].0.replace('/', "\\"));
-        fs::create_dir_all(old_model.parent().unwrap()).unwrap();
-        fs::write(&old_model, b"untracked-model").unwrap();
-        add_payload_file(&payload, SUPERSEDED_PAYLOAD_PATHS[0].1, b"open-model");
+        let legacy = target.join(
+            "addons/counterstrikesharp/plugins/PlusMatchCoordinator/match_catalog.json",
+        );
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, b"legacy-catalog").unwrap();
 
         install(&payload, &state, &target, false).unwrap();
+        assert_eq!(fs::read(&legacy).unwrap(), b"legacy-catalog");
 
-        assert_eq!(fs::read(old_model).unwrap(), b"untracked-model");
-        assert!(target.join(SUPERSEDED_PAYLOAD_PATHS[0].1.replace('/', "\\")).is_file());
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn managed_upgrade_preserves_a_modified_legacy_rating_model() {
-        let base = root("open-rating-user-file");
-        let old_payload = base.join("old-payload");
-        let new_payload = base.join("new-payload");
-        let target = base.join("target");
-        let state = base.join("state");
-        fixture(&old_payload, &target);
-        add_payload_file(&old_payload, SUPERSEDED_PAYLOAD_PATHS[0].0, b"old-model");
-        install(&old_payload, &state, &target, false).unwrap();
-        let old_model = target.join(SUPERSEDED_PAYLOAD_PATHS[0].0.replace('/', "\\"));
-        fs::write(&old_model, b"user-modified-model").unwrap();
-
-        fixture(&new_payload, &base.join("new-fixture-target"));
-        add_payload_file(&new_payload, SUPERSEDED_PAYLOAD_PATHS[0].1, b"open-model");
-        install(&new_payload, &state, &target, false).unwrap();
-
-        assert_eq!(fs::read(old_model).unwrap(), b"user-modified-model");
-        assert!(target.join(SUPERSEDED_PAYLOAD_PATHS[0].1.replace('/', "\\")).is_file());
+        restore_pristine(&payload, &state, &target).unwrap();
+        assert_eq!(fs::read(&legacy).unwrap(), b"legacy-catalog");
+        assert!(!target.join("cfg/test.cfg").exists());
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -1875,6 +1720,43 @@ mod tests {
             b"player-knives"
         );
         assert!(!inspect(&payload, &state, &target).unwrap().installed);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn restore_removes_every_trace_of_the_launch_window_and_keeps_personal_cfg() {
+        let base = root("restore-residue");
+        let payload = base.join("payload");
+        let target = base.join("target");
+        let state = base.join("state");
+        cosmetics_fixture(&payload, &target);
+        fs::create_dir_all(target.join("cfg")).unwrap();
+        fs::write(target.join("cfg/autoexec.cfg"), b"bind x jump").unwrap();
+        fs::write(target.join("cfg/my_bot_normal_config.cfg"), b"user tuned").unwrap();
+        fs::write(
+            target.join("gameinfo.gi"),
+            "SearchPaths\r\n{\r\n\tGame\tcsgo\r\n}\r\nNewDepotSetting\t1\r\n",
+        )
+        .unwrap();
+        install(&payload, &state, &target, false).unwrap();
+        let now = crate::launch_isolation::unix_now();
+        crate::launch_isolation::prepare_local_launch(&state, &target, now).unwrap();
+        let marker = target.join(
+            "addons\\counterstrikesharp\\plugins\\PlayerKnifeCustomizer\\panel_isolation.json",
+        );
+        assert!(marker.is_file());
+
+        restore(&payload, &state, &target).unwrap();
+
+        assert!(!marker.is_file(), "the single-use marker must not outlive the payload");
+        let status = crate::launch_isolation::isolation_status(&state, &target, now).unwrap();
+        assert!(status.clean, "restore must leave gameinfo.gi in its durable clean state");
+        assert!(status.pending.is_none(), "the launch transaction journal must be closed");
+        assert_eq!(fs::read(target.join("cfg/autoexec.cfg")).unwrap(), b"bind x jump");
+        assert_eq!(
+            fs::read(target.join("cfg/my_bot_normal_config.cfg")).unwrap(),
+            b"user tuned"
+        );
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -2090,20 +1972,18 @@ mod tests {
     }
 
     #[test]
-    fn panel_only_update_package_has_an_actionable_first_install_error() {
-        let base = root("panel-only-marker");
-        let payload = base.join("panel-only");
+    fn a_payload_without_a_manifest_names_the_expected_layout() {
+        let base = root("missing-manifest");
+        let payload = base.join("loose-extract");
         fs::create_dir_all(&payload).unwrap();
-        fs::write(payload.join(PANEL_UPDATE_MARKER), b"{}").unwrap();
 
         let error = read_manifest_document(&payload).unwrap_err();
 
         assert_eq!(error.code, "E1301");
-        assert!(error.detail.contains("Panel-only online-update component"));
-        assert!(error.detail.contains(&format!(
-            "LocalArena-v{}-windows.zip",
-            crate::app_version::display()
-        )));
+        assert!(error.detail.contains(MANIFEST_FILE));
+        assert!(error.detail.contains("addons/"));
+        assert!(!error.detail.contains("overrides"));
+        assert!(!error.detail.contains("cfg,"));
         fs::remove_dir_all(base).unwrap();
     }
 

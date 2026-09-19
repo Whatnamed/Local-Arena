@@ -130,6 +130,7 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] 原旧 Bot Improver 不再作为运行依赖。
 - [ ] “修复安装”不会清空自己的饰品预设。
 - [ ] “恢复 / 卸载”不会删除未知第三方插件或个人 cfg。
+- [ ] 恢复后 `<csgo>\gameinfo.gi` 仍是 clean，且 `addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\panel_isolation.json` 与 Panel 侧 launch journal 都没有残留。
 - [ ] 恢复后 Steam Verify Integrity 能顺利回到官方文件状态。
 - [ ] 恢复后再直接 Steam 启动，没有本项目 runtime 残留。
 

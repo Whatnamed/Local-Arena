@@ -310,6 +310,22 @@ pub(crate) fn restore_clean(state_root: &Path, target: &Path) -> Result<bool> {
     Ok(changed)
 }
 
+/// Drop every trace of a launch window. The installer calls this once the payload
+/// is gone: an uninstalled game must not keep the project search path, the
+/// single-use marker, or an open transaction journal. Best effort on purpose —
+/// a completed restore is never reported as failed because residue was locked.
+pub(crate) fn forget_launch_window(state_root: &Path, target: &Path) {
+    let _ = restore_clean(state_root, target);
+    let marker = marker_path(target);
+    if marker.is_file() {
+        let _ = fs::remove_file(&marker);
+    }
+    let journal = journal_path(state_root, target);
+    if journal.is_file() {
+        let _ = fs::remove_file(&journal);
+    }
+}
+
 /// Finish or abandon the transaction a previous Panel process left behind. A
 /// running game keeps its search path, because the engine already read the file
 /// and the plugin restores it on shutdown.
