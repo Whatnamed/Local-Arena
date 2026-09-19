@@ -207,6 +207,8 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private bool _stickersSanitizedDuringLoad;
     private readonly ApplyGenerationTracker _applyTracker = new();
     private readonly WeaponProvenanceTracker _provenanceTracker = new();
+    private FileSystemWatcher? _configWatcher;
+    private readonly DebounceScheduler _debounceScheduler = new(150);
 
     private string ConfigPath => Path.Combine(ModuleDirectory, "player_knife_presets.json");
     private string GunConfigPath => Path.Combine(ModuleDirectory, "player_gun_presets.json");
@@ -220,6 +222,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         LoadStickerCatalog();
         LoadPlayerCosmeticCatalog();
         LoadConfig();
+        StartConfigWatcher();
 
         AddCommand("css_cs2bi_knives_reload", "Reload player knife presets", OnReloadCommand);
         AddCommand("css_cs2bi_knives_status", "Show player knife preset status", OnStatusCommand);
@@ -253,7 +256,9 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     public override void Unload(bool hotReload)
     {
+        StopConfigWatcher();
         _applyTracker.CancelAll();
+        _provenanceTracker.ClearAll();
         VirtualFunctions.GiveNamedItemFunc.Unhook(OnGiveNamedItemPost, HookMode.Post);
     }
 
@@ -908,6 +913,188 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             LoadGunConfig();
             Logger.LogError("[PlayerKnifeCustomizer] Config load failed: {Message}", ex.Message);
         }
+    }
+
+    private void StartConfigWatcher()
+    {
+        try
+        {
+            if (!Directory.Exists(ModuleDirectory)) return;
+
+            _configWatcher = new FileSystemWatcher(ModuleDirectory)
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+                Filter = "*.json",
+                EnableRaisingEvents = true,
+            };
+
+            FileSystemEventHandler handler = (sender, e) =>
+            {
+                string name = Path.GetFileName(e.FullPath);
+                if (name.Equals("player_knife_presets.json", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("player_gun_presets.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    _debounceScheduler.Schedule(() => OnConfigFileChangedDebounced());
+                }
+            };
+
+            _configWatcher.Changed += handler;
+            _configWatcher.Created += handler;
+            _configWatcher.Renamed += (sender, e) => handler(sender, e);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning("[PlayerKnifeCustomizer] Failed to initialize config FileSystemWatcher: {Message}", ex.Message);
+        }
+    }
+
+    private void StopConfigWatcher()
+    {
+        if (_configWatcher != null)
+        {
+            _configWatcher.EnableRaisingEvents = false;
+            _configWatcher.Dispose();
+            _configWatcher = null;
+        }
+        _debounceScheduler.Dispose();
+    }
+
+    private void OnConfigFileChangedDebounced()
+    {
+        try
+        {
+            if (!File.Exists(ConfigPath)) return;
+
+            string text = ReadFileWithRetry(ConfigPath, 3);
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            KnifeConfig loaded;
+            try
+            {
+                loaded = JsonSerializer.Deserialize<KnifeConfig>(text, JsonOptions) ?? new KnifeConfig();
+                loaded.Normalize();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning("[PlayerKnifeCustomizer] Invalid config during live reload; preserving active config: {Message}", ex.Message);
+                return;
+            }
+
+            if (File.Exists(GunConfigPath))
+            {
+                try
+                {
+                    string gunText = ReadFileWithRetry(GunConfigPath, 3);
+                    if (!string.IsNullOrWhiteSpace(gunText))
+                    {
+                        var gunConfig = JsonSerializer.Deserialize<TeamGunConfig>(gunText, JsonOptions);
+                        if (gunConfig != null)
+                        {
+                            loaded.Loadouts.Ct.GunPresets = gunConfig.Ct ?? new Dictionary<ushort, KnifePreset>();
+                            loaded.Loadouts.T.GunPresets = gunConfig.T ?? new Dictionary<ushort, KnifePreset>();
+                            loaded.SharedWeaponLinks = gunConfig.SharedWeaponLinks ?? new Dictionary<ushort, bool>();
+                            loaded.Normalize();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning("[PlayerKnifeCustomizer] Error parsing gun config during live reload: {Message}", ex.Message);
+                }
+            }
+
+            var diff = CosmeticConfigDiffEngine.Diff(_config, loaded);
+            if (!diff.HasChanges)
+            {
+                return;
+            }
+
+            _config = loaded;
+            Logger.LogInformation("[PlayerKnifeCustomizer] Live config updated (sections={Sections}, guns={GunCount})",
+                diff.Sections, diff.ChangedGunDefIndexes.Count);
+
+            Server.NextFrame(() => ApplyLiveCosmeticDiff(diff));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("[PlayerKnifeCustomizer] Live reload error: {Message}", ex.Message);
+        }
+    }
+
+    private void ApplyLiveCosmeticDiff(CosmeticDiff diff)
+    {
+        if (!_config.Enabled) return;
+
+        foreach (var player in Utilities.GetPlayers())
+        {
+            if (!CanApplyToPlayer(player)) continue;
+            var pawn = player.PlayerPawn.Value;
+            if (pawn == null || !pawn.IsValid) continue;
+            var team = GetCosmeticTeam(player);
+            if (team == null) continue;
+
+            if (diff.Sections.HasFlag(CosmeticChangeSection.Knife))
+            {
+                TryApplyDefaultKnife(pawn, team.Value);
+            }
+
+            if (diff.Sections.HasFlag(CosmeticChangeSection.Gloves))
+            {
+                TryApplyGlove(player.Handle, pawn, team.Value);
+            }
+
+            if (diff.Sections.HasFlag(CosmeticChangeSection.Guns) && diff.ChangedGunDefIndexes.Count > 0)
+            {
+                var weapons = pawn.WeaponServices?.MyWeapons;
+                if (weapons != null)
+                {
+                    foreach (var handle in weapons)
+                    {
+                        var weapon = handle.Value;
+                        if (weapon == null || !weapon.IsValid || IsKnifeName(weapon.DesignerName)) continue;
+                        ushort defIndex = weapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
+                        if (defIndex == 0 || !diff.ChangedGunDefIndexes.Contains(defIndex)) continue;
+
+                        if (!_provenanceTracker.IsEligibleForLiveReload(player.Handle, weapon.Handle, weapon.Index, defIndex))
+                            continue;
+
+                        if (TryGetPreset(defIndex, team.Value, out var preset))
+                        {
+                            ApplyPreset(weapon, defIndex, preset);
+                            _provenanceTracker.RecordApplied(weapon.Handle, weapon.Index);
+                        }
+                    }
+                }
+            }
+
+            if (diff.Sections.HasFlag(CosmeticChangeSection.Agents))
+            {
+                TryApplyAgent(pawn, team.Value);
+            }
+
+            if (diff.Sections.HasFlag(CosmeticChangeSection.Music))
+            {
+                ApplyMusicKit(player);
+            }
+        }
+    }
+
+    private static string ReadFileWithRetry(string path, int maxRetries)
+    {
+        for (int i = 0; i < maxRetries; i++)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }
+            catch (IOException) when (i < maxRetries - 1)
+            {
+                Thread.Sleep(30);
+            }
+        }
+        return string.Empty;
     }
 
     private void SaveConfig()

@@ -338,4 +338,97 @@ Require(!provTracker.IsEligibleForApply(p2, reusedHandle, reusedIdx, m4DefIndex)
     "Player disconnect cleanup must remove all tracked entities for that player.");
 Require(provTracker.TrackedCount == 0, "Tracker should be empty after cleanup.");
 
-Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, and log-throttle tests passed.");
+// --- CosmeticConfigDiffEngine Tests ---
+var baseCfg = new KnifeConfig();
+baseCfg.Normalize();
+
+// 1. Identical configs produce no diff
+var cloneCfg = new KnifeConfig();
+cloneCfg.Normalize();
+var emptyDiff = CosmeticConfigDiffEngine.Diff(baseCfg, cloneCfg);
+Require(!emptyDiff.HasChanges, "Identical configs must produce no diff.");
+Require(emptyDiff.Sections == CosmeticChangeSection.None, "No sections should be flagged.");
+Require(emptyDiff.ChangedGunDefIndexes.Count == 0, "No changed gun defindexes.");
+
+// 2. Knife change diff
+var knifeDiffCfg = new KnifeConfig();
+knifeDiffCfg.Normalize();
+knifeDiffCfg.Loadouts.Ct.DefaultKnifeDefIndex = 508; // M9 Bayonet
+var knifeDiff = CosmeticConfigDiffEngine.Diff(baseCfg, knifeDiffCfg);
+Require(knifeDiff.HasChanges, "Knife defindex change must produce diff.");
+Require(knifeDiff.Sections.HasFlag(CosmeticChangeSection.Knife), "Sections must flag Knife.");
+Require(!knifeDiff.Sections.HasFlag(CosmeticChangeSection.Gloves), "Sections must not flag Gloves.");
+
+// 3. Glove change diff
+var gloveDiffCfg = new KnifeConfig();
+gloveDiffCfg.Normalize();
+gloveDiffCfg.Loadouts.Ct.Glove = new GlovePreset { Enabled = true, DefIndex = 5030, Paint = 10006 };
+var gloveDiff = CosmeticConfigDiffEngine.Diff(baseCfg, gloveDiffCfg);
+Require(gloveDiff.HasChanges, "Glove change must produce diff.");
+Require(gloveDiff.Sections.HasFlag(CosmeticChangeSection.Gloves), "Sections must flag Gloves.");
+Require(!gloveDiff.Sections.HasFlag(CosmeticChangeSection.Knife), "Sections must not flag Knife.");
+
+// 4. Specific gun DefIndex diff
+var gunDiffCfg = new KnifeConfig();
+gunDiffCfg.Normalize();
+gunDiffCfg.Loadouts.Ct.GunPresets[7] = Preset(661); // AK-47
+gunDiffCfg.Loadouts.Ct.GunPresets[16] = Preset(309); // M4A4
+var gunDiff = CosmeticConfigDiffEngine.Diff(baseCfg, gunDiffCfg);
+Require(gunDiff.HasChanges, "Gun presets change must produce diff.");
+Require(gunDiff.Sections.HasFlag(CosmeticChangeSection.Guns), "Sections must flag Guns.");
+Require(gunDiff.ChangedGunDefIndexes.SetEquals(new ushort[] { 7, 16 }),
+    "ChangedGunDefIndexes must contain exactly the modified defindexes (7, 16).");
+
+// 4b. Changing only one gun defindex in subsequent diff
+var gunDiffCfg2 = new KnifeConfig();
+gunDiffCfg2.Normalize();
+gunDiffCfg2.Loadouts.Ct.GunPresets[7] = Preset(661); // AK-47 unchanged
+gunDiffCfg2.Loadouts.Ct.GunPresets[16] = Preset(310); // M4A4 paint changed from 309 to 310
+var singleGunDiff = CosmeticConfigDiffEngine.Diff(gunDiffCfg, gunDiffCfg2);
+Require(singleGunDiff.HasChanges, "Single gun change must produce diff.");
+Require(singleGunDiff.ChangedGunDefIndexes.SetEquals(new ushort[] { 16 }),
+    "ChangedGunDefIndexes must contain ONLY defindex 16 when 7 was unchanged.");
+
+// 5. Agent model change diff
+var agentDiffCfg = new KnifeConfig();
+agentDiffCfg.Normalize();
+agentDiffCfg.AgentsEnabled = true;
+agentDiffCfg.Loadouts.Ct.AgentModel = "characters/models/ctm_diver.vmdl";
+var agentDiff = CosmeticConfigDiffEngine.Diff(baseCfg, agentDiffCfg);
+Require(agentDiff.HasChanges, "Agent change must produce diff.");
+Require(agentDiff.Sections.HasFlag(CosmeticChangeSection.Agents), "Sections must flag Agents.");
+
+// 6. Music kit change diff
+var musicDiffCfg = new KnifeConfig();
+musicDiffCfg.Normalize();
+musicDiffCfg.MusicKitId = 42;
+var musicDiff = CosmeticConfigDiffEngine.Diff(baseCfg, musicDiffCfg);
+Require(musicDiff.HasChanges, "Music kit change must produce diff.");
+Require(musicDiff.Sections.HasFlag(CosmeticChangeSection.Music), "Sections must flag Music.");
+
+// --- DebounceScheduler Tests ---
+using (var scheduler = new DebounceScheduler(50))
+{
+    int executedCount = 0;
+    var resetEvent = new ManualResetEventSlim(false);
+
+    // Rapidly schedule 5 actions within short window
+    for (int i = 0; i < 5; i++)
+    {
+        scheduler.Schedule(() =>
+        {
+            Interlocked.Increment(ref executedCount);
+            resetEvent.Set();
+        });
+        Thread.Sleep(10);
+    }
+
+    bool signaled = resetEvent.Wait(500);
+    Require(signaled, "DebounceScheduler must fire after delay.");
+    // Small sleep to ensure no trailing duplicate executions
+    Thread.Sleep(100);
+    Require(executedCount == 1, $"DebounceScheduler must collapse rapid bursts into 1 invocation (actual: {executedCount}).");
+}
+
+Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, diff-engine, debouncer, and log-throttle tests passed.");
+
