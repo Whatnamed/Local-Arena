@@ -81,26 +81,8 @@ function Get-VerifiedAsset {
     return $path
 }
 
-function Get-RayTraceApi {
-    $inputs = Join-Path $cache "build-inputs\raytrace-$($manifest.rayTrace.release)"
-    $archive = Get-VerifiedAsset $manifest.rayTrace.cssAsset $inputs
-    $extract = Join-Path $inputs "extract"
-    $dll = Get-ChildItem -LiteralPath $extract -Filter "RayTraceApi.dll" -File -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match '[\\/]shared[\\/]RayTraceApi[\\/]' } |
-        Select-Object -First 1
-    if (-not $dll) {
-        if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
-        New-Item -ItemType Directory -Path $extract -Force | Out-Null
-        $tar = (Get-Command tar.exe -ErrorAction Stop).Source
-        & $tar -xzf $archive -C $extract
-        if ($LASTEXITCODE -ne 0) { throw "Failed to extract $archive" }
-        $dll = Get-ChildItem -LiteralPath $extract -Filter "RayTraceApi.dll" -File -Recurse |
-            Where-Object { $_.FullName -match '[\\/]shared[\\/]RayTraceApi[\\/]' } |
-            Select-Object -First 1
-    }
-    if (-not $dll) { throw "Pinned RayTraceApi.dll was not found in $archive" }
-    return $dll.FullName
-}
+
+
 
 $cargo = (Get-Command $Cargo -ErrorAction Stop).Source
 $rustc = (Get-Command $Rustc -ErrorAction Stop).Source
@@ -145,26 +127,20 @@ try {
     $env:RUSTC = $rustc
     $env:RUSTUP_TOOLCHAIN = $RustToolchain
 
+    $useXwin = $false
     if (-not $LlvmBin) { $LlvmBin = Join-Path $cache "toolchains\llvm\bin" }
     if (-not $XwinCache) { $XwinCache = Join-Path $cache "xwin" }
     $clang = Join-Path $LlvmBin "clang-cl.exe"
     $linker = Join-Path $LlvmBin "lld-link.exe"
     $resourceCompiler = Join-Path $LlvmBin "llvm-rc.exe"
-    foreach ($tool in @($clang, $linker, $resourceCompiler)) {
-        if (-not (Test-Path -LiteralPath $tool)) {
-            throw "LLVM tool not found: $tool"
-        }
-    }
     $cargoXwin = Join-Path $env:CARGO_HOME "bin\cargo-xwin.exe"
-    if (-not (Test-Path -LiteralPath $cargoXwin)) {
-        throw "cargo-xwin is not installed in the configured Cargo home: $cargoXwin"
+    if ((Test-Path -LiteralPath $clang) -and (Test-Path -LiteralPath $linker) -and (Test-Path -LiteralPath $resourceCompiler) -and (Test-Path -LiteralPath $cargoXwin)) {
+        $useXwin = $true
+        $env:XWIN_CACHE_DIR = $XwinCache
+        $env:RC = $resourceCompiler
     }
 
-    $env:XWIN_CACHE_DIR = $XwinCache
-    $env:RC = $resourceCompiler
     $rustTarget = "x86_64-pc-windows-msvc"
-    $targetDirectory = Join-Path $panel "src-tauri\target-msvc"
-    $env:CARGO_TARGET_DIR = $targetDirectory
     $nodePath = if ($NodeBin) { (Resolve-Path -LiteralPath $NodeBin).Path } else { $null }
     $toolPaths = @((Split-Path $cargo), (Split-Path $rustc), $LlvmBin, (Split-Path $cargoXwin), $nodePath) |
         Where-Object { $_ } | Select-Object -Unique
@@ -177,65 +153,66 @@ try {
     Invoke-Checked $npm @("run", "test:install-gate") $panel
     Invoke-Checked $npm @("run", "build") $panel
 
-    $rayTraceApi = Get-RayTraceApi
-    $pluginProjects = @(
-        @{ Path = "addons\counterstrikesharp\plugins\BotAI\BotAI.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\BotAimImprover\BotAimImprover.csproj"; Properties = @("-p:RayTraceApiPath=$rayTraceApi") },
-        @{ Path = "addons\counterstrikesharp\plugins\BotBuy\BotBuy.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\BotControllerImpl\BotControllerImpl.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\BotRandomizer\BotRandomizer.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\NadeSystem\NadeSystem.csproj"; Properties = @("-p:RayTraceApiPath=$rayTraceApi") },
-        @{ Path = "addons\counterstrikesharp\plugins\RoundDamageRecap\RoundDamageRecap.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\TeamLineupInjector\TeamLineupInjector.csproj"; Properties = @() },
-        @{ Path = "addons\counterstrikesharp\plugins\PlusMatchCoordinator\PlusMatchCoordinator.csproj"; Properties = @() }
-    )
-    foreach ($project in $pluginProjects) {
-        Invoke-Checked $DotNet (@("build", $project.Path, "-c", "Release", "--nologo") + $project.Properties)
-    }
-    Invoke-Checked $DotNet @("publish", "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\OfflineMatchTelemetry.csproj", "-c", "Release", "--nologo", "--self-contained", "false", "-o", (Join-Path $repo "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\bin\Release\net8.0"))
-    $omtBuild = Join-Path $repo "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\bin\Release\net8.0"
-    $sqliteNative = Join-Path $omtBuild "runtimes\win-x64\native\e_sqlite3.dll"
-    if (Test-Path -LiteralPath $sqliteNative) { Copy-Item -LiteralPath $sqliteNative -Destination $omtBuild -Force }
-    Invoke-Checked $DotNet @(
-        "run", "--project", "addons\counterstrikesharp\shared\MatchCore.Tests\MatchCore.Tests.csproj",
-        "-c", "Release", "--nologo"
-    )
-    Invoke-Checked $DotNet @(
-        "run", "--project", "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer.Tests\PlayerKnifeCustomizer.Tests.csproj",
-        "-c", "Release"
-    )
+    # Cosmetics-only plugin and unit tests
+    Invoke-Checked $DotNet @("build", "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.csproj", "-c", "Release", "--nologo")
+    Invoke-Checked $DotNet @("run", "--project", "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer.Tests\PlayerKnifeCustomizer.Tests.csproj", "-c", "Release")
+
+    $nodeCmd = if ($NodeBin) { Join-Path (Resolve-Path -LiteralPath $NodeBin).Path "node.exe" } else { "node" }
+    Invoke-Checked $nodeCmd @("scripts/test-phase-f.mjs") $repo
 
     $tauriSource = Join-Path $panel "src-tauri"
-    Invoke-Checked $cargo @(
-        "xwin", "test", "--target", $rustTarget, "--locked", "--no-run",
-        "--target-dir", $targetDirectory
-    ) $tauriSource
+    if ($useXwin) {
+        $targetDirectory = Join-Path $panel "src-tauri\target-msvc"
+        $env:CARGO_TARGET_DIR = $targetDirectory
+        Invoke-Checked $cargo @(
+            "xwin", "test", "--target", $rustTarget, "--locked", "--no-run",
+            "--target-dir", $targetDirectory
+        ) $tauriSource
 
-    $testRoot = Join-Path $targetDirectory "$rustTarget\debug\deps"
-    # Cargo retains hash-named test executables from older source revisions.
-    # Run only the newest binary for the application and library test targets.
-    $testExecutables = @(Get-ChildItem -LiteralPath $testRoot -File -Filter "cs2_bot_improver_plus_panel*.exe" |
-        Group-Object { if ($_.BaseName -like "*_lib-*") { "lib" } else { "app" } } |
-        ForEach-Object { $_.Group | Sort-Object LastWriteTime -Descending | Select-Object -First 1 })
-    if ($testExecutables.Count -eq 0) {
-        throw "No Panel test executables were produced under $testRoot"
-    }
-    foreach ($test in $testExecutables) {
-        Invoke-Checked $test.FullName @("--nocapture") $tauriSource
+        $testRoot = Join-Path $targetDirectory "$rustTarget\debug\deps"
+        $testExecutables = @(Get-ChildItem -LiteralPath $testRoot -File -Filter "cs2_bot_improver_plus_panel*.exe" |
+            Group-Object { if ($_.BaseName -like "*_lib-*") { "lib" } else { "app" } } |
+            ForEach-Object { $_.Group | Sort-Object LastWriteTime -Descending | Select-Object -First 1 })
+        if ($testExecutables.Count -eq 0) {
+            throw "No Panel test executables were produced under $testRoot"
+        }
+        foreach ($test in $testExecutables) {
+            Invoke-Checked $test.FullName @("--nocapture") $tauriSource
+        }
+
+        Invoke-Checked $cargo @(
+            "xwin", "build", "--target", $rustTarget, "--release", "--locked",
+            "--features", "tauri/custom-protocol", "--target-dir", $targetDirectory
+        ) $tauriSource
+
+        $builtExe = Join-Path $targetDirectory "$rustTarget\release\cs2-bot-improver-plus-panel.exe"
+        if (-not (Test-Path -LiteralPath $builtExe)) {
+            throw "Expected MSVC Panel executable was not produced: $builtExe"
+        }
+        $releaseBuildRoot = Join-Path $targetDirectory "$rustTarget\release\build"
+        $canonicalRelease = Join-Path $panel "src-tauri\target\release"
+        New-Item -ItemType Directory -Path $canonicalRelease -Force | Out-Null
+        Copy-Item -LiteralPath $builtExe -Destination (Join-Path $canonicalRelease "cs2-bot-improver-plus-panel.exe") -Force
+    } else {
+        $targetDirectory = Join-Path $panel "src-tauri\target"
+        $env:CARGO_TARGET_DIR = $targetDirectory
+        Invoke-Checked $cargo @(
+            "test", "--locked",
+            "--target-dir", $targetDirectory
+        ) $tauriSource
+
+        Invoke-Checked $cargo @(
+            "build", "--release", "--locked",
+            "--features", "tauri/custom-protocol", "--target-dir", $targetDirectory
+        ) $tauriSource
+
+        $builtExe = Join-Path $targetDirectory "release\cs2-bot-improver-plus-panel.exe"
+        if (-not (Test-Path -LiteralPath $builtExe)) {
+            throw "Expected Panel executable was not produced: $builtExe"
+        }
+        $releaseBuildRoot = Join-Path $targetDirectory "release\build"
     }
 
-    Invoke-Checked $cargo @(
-        "xwin", "build", "--target", $rustTarget, "--release", "--locked",
-        "--features", "tauri/custom-protocol", "--target-dir", $targetDirectory
-    ) $tauriSource
-
-    $builtExe = Join-Path $targetDirectory "$rustTarget\release\cs2-bot-improver-plus-panel.exe"
-    if (-not (Test-Path -LiteralPath $builtExe)) {
-        throw "Expected MSVC Panel executable was not produced: $builtExe"
-    }
-    $releaseBuildRoot = Join-Path $targetDirectory "$rustTarget\release\build"
     $tauriBuildOutput = Get-ChildItem -LiteralPath $releaseBuildRoot -Directory |
         Where-Object { $_.Name -match '^tauri-[0-9a-f]+$' } |
         Sort-Object LastWriteTime -Descending |
@@ -256,9 +233,6 @@ try {
         (Get-Content -LiteralPath $appBuildOutput -Raw).Contains("cargo:rustc-cfg=dev")) {
         throw "Release Panel application still uses Tauri's development URL."
     }
-    $canonicalRelease = Join-Path $panel "src-tauri\target\release"
-    New-Item -ItemType Directory -Path $canonicalRelease -Force | Out-Null
-    Copy-Item -LiteralPath $builtExe -Destination (Join-Path $canonicalRelease "cs2-bot-improver-plus-panel.exe") -Force
 }
 finally {
     foreach ($name in $environmentNames) {

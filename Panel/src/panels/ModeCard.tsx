@@ -16,7 +16,6 @@ export default function ModeCard() {
   const OPTIONS: { value: GameMode; label: string }[] = [
     { value: "online", label: t("mode.online") },
     { value: "preview", label: t("mode.preview") },
-    { value: "bots", label: t("mode.bot") },
   ];
 
   // Optimistic: show the clicked option immediately; revert if the op fails.
@@ -52,9 +51,7 @@ export default function ModeCard() {
       <button className="mode__launch" disabled={!csgoPath} onClick={launch}>
         {current === "online"
           ? t("mode.launchOnline")
-          : current === "preview"
-            ? t("mode.launchPreview")
-            : t("mode.launchBots")}
+          : t("mode.launchPreview")}
       </button>
     </Card>
   );

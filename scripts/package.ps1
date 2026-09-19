@@ -94,12 +94,8 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "Build failed." }
 }
 
-$upstreamZip = Get-VerifiedAsset $manifest.upstream.windowsAsset
 $metamodZip = Get-VerifiedAsset $manifest.metamod.windowsAsset
 $counterStrikeSharpZip = Get-VerifiedAsset $manifest.counterStrikeSharp.windowsAsset
-$rayTraceCssArchive = Get-VerifiedAsset $manifest.rayTrace.cssAsset
-$rayTraceWindowsArchive = Get-VerifiedAsset $manifest.rayTrace.windowsAsset
-$botHiderZip = Get-VerifiedAsset $manifest.botHider.windowsAsset
 
 Assert-ChildPath $cache $stage
 Assert-ChildPath $cache $extract
@@ -107,208 +103,58 @@ if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -F
 if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
 New-Item -ItemType Directory -Path $stage,$extract -Force | Out-Null
 
-$upstreamExtract = Join-Path $extract "upstream"
 $metamodExtract = Join-Path $extract "metamod"
 $counterStrikeSharpExtract = Join-Path $extract "counterstrikesharp"
-$rayTraceCssExtract = Join-Path $extract "raytrace-css"
-$rayTraceWindowsExtract = Join-Path $extract "raytrace-windows"
-$botHiderExtract = Join-Path $extract "bothider"
-Expand-Archive -LiteralPath $upstreamZip -DestinationPath $upstreamExtract
 Expand-Archive -LiteralPath $metamodZip -DestinationPath $metamodExtract
 Expand-Archive -LiteralPath $counterStrikeSharpZip -DestinationPath $counterStrikeSharpExtract
-Expand-TarGz $rayTraceCssArchive $rayTraceCssExtract
-Expand-TarGz $rayTraceWindowsArchive $rayTraceWindowsExtract
-Expand-Archive -LiteralPath $botHiderZip -DestinationPath $botHiderExtract
-
-$payloadCandidates = @((Get-Item -LiteralPath $upstreamExtract)) +
-    @(Get-ChildItem -LiteralPath $upstreamExtract -Directory -Recurse)
-$upstreamPayload = $payloadCandidates |
-    Where-Object { (Test-Path (Join-Path $_.FullName "addons")) -and (Test-Path (Join-Path $_.FullName "cfg")) } |
-    Select-Object -First 1
-if (-not $upstreamPayload) { throw "Could not locate the upstream game/csgo payload." }
 
 $releaseRoot = Join-Path $stage "LocalArena-$releaseTag-windows"
 $payload = $releaseRoot
-Copy-Tree $upstreamPayload.FullName $releaseRoot
-Get-ChildItem -LiteralPath $releaseRoot -Filter "Panel*.exe" -File | Remove-Item -Force
+New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
 
-# Never distribute gameinfo.gi from an older upstream release, including the
-# manual Online/WithBots backups. The Plus Panel derives both variants from the
-# installed game's current Steam-verified file when the user switches mode.
-Get-ChildItem -LiteralPath $releaseRoot -Recurse -Filter "gameinfo.gi" -File |
-    ForEach-Object {
-        Assert-ChildPath $releaseRoot $_.FullName
-        Remove-Item -LiteralPath $_.FullName -Force
-    }
-
-# Upstream botprofile VPKs also contain stale localization files. Current CS2
-# loads those files ahead of its own resources, breaking player-name formatting.
-# Keep only BotProfile.db; difficulty behavior remains byte-for-byte unchanged.
-$botProfileVpks = @(Get-ChildItem -LiteralPath (Join-Path $payload "overrides") `
-    -Filter "botprofile.vpk" -File -Recurse)
-if ($botProfileVpks.Count -eq 0) {
-    throw "The upstream payload contains no botprofile VPKs."
-}
-foreach ($botProfileVpk in $botProfileVpks) {
-    ConvertTo-BotProfileOnlyVpk $botProfileVpk.FullName
-}
-
+# 1. Metamod runtime
 $metamodAddons = Join-Path $metamodExtract "addons"
 if (-not (Test-Path -LiteralPath $metamodAddons)) { throw "Metamod archive has no addons payload." }
 Copy-Tree $metamodAddons (Join-Path $payload "addons")
 
+# 2. CounterStrikeSharp runtime
 $counterStrikeSharpAddons = Join-Path $counterStrikeSharpExtract "addons"
 if (-not (Test-Path -LiteralPath $counterStrikeSharpAddons)) { throw "CounterStrikeSharp archive has no addons payload." }
 Copy-Tree $counterStrikeSharpAddons (Join-Path $payload "addons")
 
-$rayTraceCssRoot = Get-ChildItem -LiteralPath $rayTraceCssExtract -Directory -Recurse |
-    Where-Object { Test-Path (Join-Path $_.FullName "counterstrikesharp\plugins\RayTraceImpl") } |
-    Select-Object -First 1
-if (-not $rayTraceCssRoot) { throw "Could not locate the RayTrace CounterStrikeSharp payload." }
-Copy-Tree (Join-Path $rayTraceCssRoot.FullName "counterstrikesharp") (Join-Path $payload "addons\counterstrikesharp")
-
-$rayTraceNativeCandidates = @((Get-Item -LiteralPath $rayTraceWindowsExtract)) +
-    @(Get-ChildItem -LiteralPath $rayTraceWindowsExtract -Directory -Recurse)
-$rayTraceNativeRoot = $rayTraceNativeCandidates |
-    Where-Object { (Test-Path (Join-Path $_.FullName "RayTrace\bin\win64\RayTrace.dll")) -and
-        (Test-Path (Join-Path $_.FullName "metamod\RayTrace.vdf")) } |
-    Select-Object -First 1
-if (-not $rayTraceNativeRoot) { throw "Could not locate the native RayTrace payload." }
-Copy-Tree (Join-Path $rayTraceNativeRoot.FullName "RayTrace") (Join-Path $payload "addons\RayTrace")
-Copy-Item -LiteralPath (Join-Path $rayTraceNativeRoot.FullName "metamod\RayTrace.vdf") `
-    -Destination (Join-Path $payload "addons\metamod\RayTrace.vdf") -Force
-
-$botHiderAddons = Get-ChildItem -LiteralPath $botHiderExtract -Directory -Recurse |
-    Where-Object { $_.Name -eq "addons" -and (Test-Path (Join-Path $_.FullName "BotHider")) } |
-    Select-Object -First 1
-if (-not $botHiderAddons) { throw "Could not locate BotHider addons payload." }
-Copy-Tree $botHiderAddons.FullName (Join-Path $payload "addons")
-$linuxBotHiderVdf = Join-Path $payload "addons\metamod\BotHider.linux.vdf"
-if (Test-Path -LiteralPath $linuxBotHiderVdf) {
-    Remove-Item -LiteralPath $linuxBotHiderVdf -Force
+# Clean sample / extraneous default plugins from CSS archive
+$defaultPluginDir = Join-Path $payload "addons\counterstrikesharp\plugins"
+if (Test-Path -LiteralPath $defaultPluginDir) {
+    Get-ChildItem -LiteralPath $defaultPluginDir -Recurse | Remove-Item -Recurse -Force
 }
 
-# Plus configuration overlays. Source files are deliberately not copied into the release payload.
-Copy-Item -LiteralPath (Join-Path $repo "addons\BotHider\bot_info.json") -Destination (Join-Path $payload "addons\BotHider\bot_info.json") -Force
-Copy-Item -LiteralPath (Join-Path $repo "addons\BotHider\gamedata.json") -Destination (Join-Path $payload "addons\BotHider\gamedata.json") -Force
-Copy-Item -LiteralPath (Join-Path $repo "addons\BotHider\map_whitelist.json") -Destination (Join-Path $payload "addons\BotHider\map_whitelist.json") -Force
-Copy-Item -LiteralPath (Join-Path $repo "addons\metamod\BotHider.vdf") -Destination (Join-Path $payload "addons\metamod\BotHider.vdf") -Force
-Copy-Item -LiteralPath (Join-Path $repo "cfg\my_bot_ffa_config.cfg") -Destination (Join-Path $payload "cfg\my_bot_ffa_config.cfg") -Force
-Copy-Item -LiteralPath (Join-Path $repo "cfg\my_bot_normal_config.cfg") -Destination (Join-Path $payload "cfg\my_bot_normal_config.cfg") -Force
-
+# 3. Cosmetics-only plugin: PlayerKnifeCustomizer
 $pluginBuild = Join-Path $repo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\bin\Release\net10.0"
-$botImplBuild = Join-Path $repo "addons\counterstrikesharp\plugins\BotHiderImpl\bin\Release\net10.0"
-$botApiBuild = Join-Path $repo "addons\counterstrikesharp\shared\BotHiderApi\bin\Release\net10.0"
-$upstreamPluginBuilds = @(
-    @{ Name = "BotAI"; Framework = "net10.0" },
-    @{ Name = "BotAimImprover"; Framework = "net10.0" },
-    @{ Name = "BotBuy"; Framework = "net8.0" },
-    @{ Name = "BotControllerImpl"; Framework = "net10.0" },
-    @{ Name = "BotRandomizer"; Framework = "net10.0" },
-    @{ Name = "NadeSystem"; Framework = "net10.0" },
-    @{ Name = "RoundDamageRecap"; Framework = "net10.0" },
-    @{ Name = "PlusMatchCoordinator"; Framework = "net8.0" },
-    @{ Name = "TeamLineupInjector"; Framework = "net8.0" }
-)
-foreach ($plugin in $upstreamPluginBuilds) {
-    $build = Join-Path $repo "addons\counterstrikesharp\plugins\$($plugin.Name)\bin\Release\$($plugin.Framework)"
-    if (-not (Test-Path -LiteralPath (Join-Path $build "$($plugin.Name).dll"))) {
-        throw "Expected upstream plugin build output was not produced: $build"
-    }
-    Copy-Tree $build (Join-Path $payload "addons\counterstrikesharp\plugins\$($plugin.Name)")
+if (-not (Test-Path -LiteralPath (Join-Path $pluginBuild "PlayerKnifeCustomizer.dll"))) {
+    throw "PlayerKnifeCustomizer build output was not found: $pluginBuild"
 }
-$telemetryStage = Join-Path $repo "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\stage\game\csgo\addons\counterstrikesharp\plugins\OfflineMatchTelemetry"
-$telemetryExpectedFiles = @(
-    "OfflineMatchTelemetry.dll",
-    "OfflineMatchTelemetry.deps.json",
-    "OfflineMatchTelemetry.pdb",
-    "Microsoft.Data.Sqlite.dll",
-    "SQLitePCLRaw.batteries_v2.dll",
-    "SQLitePCLRaw.core.dll",
-    "SQLitePCLRaw.provider.e_sqlite3.dll",
-    "e_sqlite3.dll"
-)
-if (-not (Test-Path -LiteralPath $telemetryStage)) {
-    throw "OfflineMatchTelemetry staged deployment was not produced: $telemetryStage"
-}
-$telemetryStageFiles = @(Get-ChildItem -LiteralPath $telemetryStage -File | ForEach-Object Name | Sort-Object)
-$telemetryDifference = @(Compare-Object ($telemetryExpectedFiles | Sort-Object) $telemetryStageFiles)
-if ($telemetryDifference.Count -gt 0) {
-    throw "OfflineMatchTelemetry staged deployment does not match the release allowlist."
-}
-Copy-Tree $telemetryStage (Join-Path $payload "addons\counterstrikesharp\plugins\OfflineMatchTelemetry")
-$botControllerApiBuild = Join-Path $repo "addons\counterstrikesharp\shared\BotControllerApi\bin\Release\net10.0"
-if (-not (Test-Path -LiteralPath (Join-Path $botControllerApiBuild "BotControllerApi.dll"))) {
-    throw "Expected BotController shared API build output was not produced: $botControllerApiBuild"
-}
-Copy-Tree $botControllerApiBuild (Join-Path $payload "addons\counterstrikesharp\shared\BotControllerApi")
-Copy-Item -LiteralPath (Join-Path $repo "addons\counterstrikesharp\plugins\BotRandomizer\bot_randomizer_options.json") `
-    -Destination (Join-Path $payload "addons\counterstrikesharp\plugins\BotRandomizer\bot_randomizer_options.json") -Force
 Copy-Tree $pluginBuild (Join-Path $payload "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer")
-Copy-Tree $botImplBuild (Join-Path $payload "addons\counterstrikesharp\plugins\BotHiderImpl")
-Copy-Tree $botApiBuild (Join-Path $payload "addons\counterstrikesharp\shared\BotHiderApi")
-$openRatingModelPath = Join-Path $repo "addons\counterstrikesharp\shared\MatchCore\open-rating-3.0-proxy-v1.json"
-$openRatingModel = Get-Content -LiteralPath $openRatingModelPath -Raw | ConvertFrom-Json
-if (-not $openRatingModel.release_gate.passed) {
-    throw "OpenRating calibration release gate has not passed; packaging an uncalibrated model is prohibited."
-}
-$openRatingCalibration = $openRatingModel.calibration
-$openRatingGate = $openRatingModel.release_gate
-if ([string]::IsNullOrWhiteSpace([string]$openRatingModel.dataset_sha256) -or
-    [string]$openRatingModel.dataset_sha256 -notmatch '^[0-9a-f]{64}$') {
-    throw "OpenRating calibration dataset fingerprint is missing or invalid."
-}
-if ([int]$openRatingCalibration.matches -lt [int]$openRatingGate.minimum_matches -or
-    [int]$openRatingCalibration.maps -lt [int]$openRatingGate.minimum_maps -or
-    [int]$openRatingCalibration.player_maps -lt [int]$openRatingGate.minimum_player_maps) {
-    throw "OpenRating calibration sample does not satisfy its declared release gate."
-}
-if ([double]$openRatingCalibration.holdout_mae -gt [double]$openRatingGate.maximum_mae -or
-    [double]$openRatingCalibration.holdout_spearman -lt [double]$openRatingGate.minimum_spearman -or
-    [double]$openRatingGate.actual_holdout_fraction -lt [double]$openRatingGate.target_holdout_fraction) {
-    throw "OpenRating holdout metrics do not satisfy the declared release gate."
-}
-$openRatingWeightNames = @('kills', 'damage', 'survival', 'kast', 'multi_kills', 'round_swing', 'economy')
-foreach ($weightName in $openRatingWeightNames) {
-    $weight = [double]$openRatingModel.weights.$weightName
-    if (-not [double]::IsFinite($weight) -or $weight -lt 0) {
-        throw "OpenRating weight '$weightName' must be finite and non-negative."
-    }
-}
-if (-not [double]::IsFinite([double]$openRatingModel.weights.intercept)) {
-    throw "OpenRating intercept must be finite."
-}
-Copy-Item -LiteralPath $openRatingModelPath -Destination (Join-Path $payload "addons\counterstrikesharp\plugins\PlusMatchCoordinator\open-rating-3.0-proxy-v1.json") -Force
-$legacyRatingModel = Join-Path $payload "addons\counterstrikesharp\plugins\PlusMatchCoordinator\rating-plus-3.0-proxy-v1.json"
-if (Test-Path -LiteralPath $legacyRatingModel) {
-    Remove-Item -LiteralPath $legacyRatingModel -Force
+
+# 4. Quickknife opt-in cfg
+$quickknifeSource = Join-Path $repo "cfg\cs2bi_quickknife.cfg"
+$cfgDir = Join-Path $payload "cfg"
+New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
+if (Test-Path -LiteralPath $quickknifeSource) {
+    Copy-Item -LiteralPath $quickknifeSource -Destination (Join-Path $cfgDir "cs2bi_quickknife.cfg") -Force
+} else {
+    "// cs2bi_quickknife.cfg - Opt-in knife cycle shortcut managed by Local Arena" | Set-Content -LiteralPath (Join-Path $cfgDir "cs2bi_quickknife.cfg") -Encoding utf8
 }
 
-# BotHiderImpl resolves Harmony from CounterStrikeSharp's shared library directory.
-# The build target stages it below the plugin output so packaging can remain
-# independent of the machine-wide NuGet cache.
-$harmonyBuild = Join-Path $botImplBuild "shared\0Harmony\0Harmony.dll"
-if (-not (Test-Path -LiteralPath $harmonyBuild)) {
-    throw "Expected Harmony build output was not produced: $harmonyBuild"
-}
-$sharedHarmony = Join-Path $payload "addons\counterstrikesharp\shared\0Harmony"
-New-Item -ItemType Directory -Path $sharedHarmony -Force | Out-Null
-Copy-Item -LiteralPath $harmonyBuild -Destination (Join-Path $sharedHarmony "0Harmony.dll") -Force
-$nestedShared = Join-Path $payload "addons\counterstrikesharp\plugins\BotHiderImpl\shared"
-if (Test-Path -LiteralPath $nestedShared) {
-    Assert-ChildPath $payload $nestedShared
-    Remove-Item -LiteralPath $nestedShared -Recurse -Force
-}
-
-$nativeDll = Join-Path $payload "addons\BotHider\bin\win64\BotHider.dll"
-$nativeHash = (Get-FileHash -LiteralPath $nativeDll -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($nativeHash -ne $manifest.botHider.windowsDllSha256.ToLowerInvariant()) {
-    throw "Unexpected BotHider.dll SHA-256: $nativeHash"
-}
-
+# 5. Panel executable & documentation
 $panelExe = Join-Path $repo "Panel\src-tauri\target\release\cs2-bot-improver-plus-panel.exe"
+if (-not (Test-Path -LiteralPath $panelExe)) {
+    $panelExe = Join-Path $repo "Panel\src-tauri\target-msvc\x86_64-pc-windows-msvc\release\cs2-bot-improver-plus-panel.exe"
+}
+if (-not (Test-Path -LiteralPath $panelExe)) {
+    throw "Panel executable was not found: $panelExe"
+}
 Copy-Item -LiteralPath $panelExe -Destination (Join-Path $releaseRoot "LocalArena.exe") -Force
-$webViewLoader = Join-Path $repo "Panel\src-tauri\target\release\WebView2Loader.dll"
+$webViewLoader = Join-Path (Split-Path $panelExe) "WebView2Loader.dll"
 if (Test-Path -LiteralPath $webViewLoader) {
     Copy-Item -LiteralPath $webViewLoader -Destination (Join-Path $releaseRoot "WebView2Loader.dll") -Force
 }
@@ -335,35 +181,21 @@ Please report problems together with an exported diagnostics ZIP.
 "@ | Set-Content -LiteralPath (Join-Path $releaseRoot "PREVIEW-NOTICE.txt") -Encoding utf8
 }
 
-# The Panel uses this manifest as the installation ownership boundary. Only the
-# game payload is managed; the executable and documentation stay portable.
-$manifestEntries = foreach ($topLevel in @("addons", "cfg", "overrides")) {
+# 6. plus-payload-manifest.json
+$manifestEntries = foreach ($topLevel in @("addons", "cfg")) {
     $root = Join-Path $payload $topLevel
     if (-not (Test-Path -LiteralPath $root)) { continue }
     foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse) {
         $relative = [IO.Path]::GetRelativePath($payload, $file.FullName).Replace("\", "/")
         $plusOwned = $relative -like "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/*" -or
-            $relative -like "addons/counterstrikesharp/plugins/BotHiderImpl/*" -or
-            $relative -like "addons/counterstrikesharp/plugins/PlusMatchCoordinator/*" -or
-            $relative -like "addons/counterstrikesharp/plugins/TeamLineupInjector/*" -or
-            $relative -like "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/*" -or
-            $relative -like "addons/counterstrikesharp/shared/BotHiderApi/*" -or
-            $relative -in @("cfg/my_bot_ffa_config.cfg", "cfg/my_bot_normal_config.cfg")
+            $relative -eq "cfg/cs2bi_quickknife.cfg"
         $component = if ($relative -like "addons/counterstrikesharp/plugins/*") {
             ($relative -split "/")[3]
         }
-        elseif ($relative -like "addons/BotHider/*") { "BotHider" }
-        elseif ($relative -like "addons/RayTrace/*") { "RayTrace" }
         elseif ($relative -like "cfg/*") { "configuration" }
-        elseif ($relative -like "overrides/*") { "overrides" }
         else { "runtime" }
         $preserveConfig = $relative -like "*/PlayerKnifeCustomizer/player_*_presets.json" -or
-            $relative -in @(
-                "addons/counterstrikesharp/plugins/BotRandomizer/bot_randomizer_options.json",
-                "cfg/my_bot_ffa_config.cfg",
-                "cfg/my_bot_normal_config.cfg",
-                "overrides/botprofile.vpk"
-            )
+            $relative -eq "cfg/cs2bi_quickknife.cfg"
         [ordered]@{
             path = $relative
             size = $file.Length
@@ -380,6 +212,56 @@ $payloadManifest = [ordered]@{
     entries = @($manifestEntries | Sort-Object path)
 }
 $payloadManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $payload "plus-payload-manifest.json") -Encoding utf8
+
+# 7. Denylist and Allowlist assertion gates
+$forbiddenPatterns = @(
+    "gameinfo.gi",
+    "BotAI", "BotAim", "BotBuy", "BotController", "BotHider", "BotRandomizer",
+    "BotState", "NadeSystem", "RayTrace", "RoundDamageRecap",
+    "PlusMatchCoordinator", "TeamLineup", "OfflineMatchTelemetry",
+    "botprofile", "overrides", "open-rating", "rating-plus",
+    "my_bot_ffa_config", "my_bot_normal_config", "bot_buy.cfg"
+)
+function Test-IsForbiddenPath([string]$Path, [string]$Pattern) {
+    if ($Pattern -eq "overrides") {
+        return ($Path -match '(^|/)overrides(/|$)')
+    }
+    return ($Path -like "*$Pattern*")
+}
+$payloadAllFiles = @(Get-ChildItem -LiteralPath $releaseRoot -File -Recurse | ForEach-Object {
+    [IO.Path]::GetRelativePath($releaseRoot, $_.FullName).Replace("\", "/")
+})
+foreach ($forbidden in $forbiddenPatterns) {
+    $matched = @($payloadAllFiles | Where-Object { Test-IsForbiddenPath $_ $forbidden })
+    if ($matched.Count -gt 0) {
+        throw "Packaging denylist gate failed: forbidden component '$forbidden' found in package: $($matched -join ', ')"
+    }
+}
+
+$requiredAllowlist = @(
+    "LocalArena.exe",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "plus-payload-manifest.json",
+    "addons/metamod/bin/win64/server.dll",
+    "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll",
+    "addons/metamod/counterstrikesharp.vdf",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_knife_presets.json",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_gun_presets.json",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/skins_en.json",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/weapon_skins.json",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_ids.json",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_weapon_ids.json",
+    "cfg/cs2bi_quickknife.cfg"
+)
+foreach ($req in $requiredAllowlist) {
+    if (-not (Test-Path -LiteralPath (Join-Path $releaseRoot $req) -PathType Leaf)) {
+        throw "Packaging allowlist gate failed: missing required file '$req'"
+    }
+}
 
 & (Join-Path $PSScriptRoot "verify-workspace.ps1") -PackageRoot $releaseRoot -ExpectedPackageVersion $displayVersion
 if ($LASTEXITCODE -ne 0) { throw "Package verification failed." }
@@ -411,7 +293,7 @@ Compress-Archive -Path (Join-Path $panelStage "*") -DestinationPath $panelZip -C
 
 $pluginStage = Join-Path $stage "plugin-update"
 New-Item -ItemType Directory -Path $pluginStage -Force | Out-Null
-foreach ($name in @("addons", "cfg", "overrides", "plus-payload-manifest.json")) {
+foreach ($name in @("addons", "cfg", "plus-payload-manifest.json")) {
     $source = Join-Path $releaseRoot $name
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $pluginStage -Recurse -Force }
 }
@@ -458,6 +340,20 @@ $sumLines = foreach ($file in $sumFiles) {
 }
 $sums = Join-Path $OutputDirectory "SHA256SUMS.txt"
 Set-Content -LiteralPath $sums -Value $sumLines -Encoding ascii
+
+# Assert release archives do not contain forbidden bot / match components
+$tarCmd = (Get-Command tar.exe -ErrorAction SilentlyContinue)
+if ($tarCmd) {
+    foreach ($archive in @($fullZip, $panelZip, $pluginZip)) {
+        $entries = & $tarCmd.Source -tf $archive
+        foreach ($forbidden in $forbiddenPatterns) {
+            $bad = @($entries | Where-Object { Test-IsForbiddenPath $_ $forbidden })
+            if ($bad.Count -gt 0) {
+                throw "Archive $([IO.Path]::GetFileName($archive)) contains forbidden component '$forbidden': $($bad -join ', ')"
+            }
+        }
+    }
+}
 
 Write-Host "Package complete: $fullZip"
 Write-Host "Panel update: $panelZip"

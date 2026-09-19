@@ -1,63 +1,42 @@
 import { useEffect, useState } from "react";
 import {
   ArrowRight,
-  BarChart3,
   BookOpenText,
-  Command,
   Crosshair,
   Download,
-  History,
-  Play,
   Settings2,
-  SlidersHorizontal,
-  Swords,
+  Sticker,
   type LucideIcon,
 } from "lucide-react";
 import StatusBar from "../components/StatusBar";
 import ModeCard from "./ModeCard";
-import DifficultyCard from "./DifficultyCard";
-import { api, type MatchSession, type OnlineUpdateSnapshot } from "../lib/api";
+import { api, type OnlineUpdateSnapshot } from "../lib/api";
 import { useStore } from "../state/store";
-import { MAP_IMAGES, MAP_LABELS } from "../data/maps";
 import { useT, type I18nKey } from "../i18n";
+import { stickerFeatureEnabled } from "../lib/stickerEditor";
 
-export type DashboardTarget =
-  | "match" | "matchHistory" | "stats" | "settings" | "presets" | "commands" | "weaponPresets" | "guide";
+export type DashboardTarget = "weaponPresets" | "stickers" | "guide" | "settings";
 
 type Tile = { view: DashboardTarget; key: I18nKey; icon: LucideIcon };
 
-const TILES: Tile[] = [
-  { view: "match", key: "match.title", icon: Swords },
-  { view: "matchHistory", key: "match.history", icon: History },
-  { view: "weaponPresets", key: "weapons.title", icon: Crosshair },
-  { view: "presets", key: "pre.title", icon: SlidersHorizontal },
-  { view: "stats", key: "stats.globalHistory", icon: BarChart3 },
-  { view: "commands", key: "cmd.title", icon: Command },
-  { view: "guide", key: "nav.guide", icon: BookOpenText },
-  { view: "settings", key: "set.title", icon: Settings2 },
-];
-
 export default function OverviewDashboard({ onNavigate }: { onNavigate: (view: DashboardTarget) => void }) {
   const t = useT();
-  const { directory } = useStore();
-  const csgo = directory?.valid ? directory.selected : null;
+  const { config } = useStore();
   const [updates, setUpdates] = useState<OnlineUpdateSnapshot | null>(null);
-  const [history, setHistory] = useState<MatchSession[] | null>(null);
+  const stickersVisible = stickerFeatureEnabled(config);
 
   useEffect(() => {
     void api.getUpdateSnapshot().then(setUpdates).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (!csgo) {
-      setHistory(null);
-      return;
-    }
-    void api.listMatchHistory(csgo).then(setHistory).catch(() => {});
-  }, [csgo]);
-
   const updateAvailable = !!updates && (updates.panel.update_available || updates.plugin.update_available);
-  const latest = history?.[0] ?? null;
+
+  const tiles: Tile[] = [
+    { view: "weaponPresets", key: "weapons.title", icon: Crosshair },
+    ...(stickersVisible ? [{ view: "stickers" as DashboardTarget, key: "stickers.title" as I18nKey, icon: Sticker }] : []),
+    { view: "guide", key: "nav.guide", icon: BookOpenText },
+    { view: "settings", key: "set.title", icon: Settings2 },
+  ];
 
   return (
     <div className="dashboard">
@@ -81,41 +60,10 @@ export default function OverviewDashboard({ onNavigate }: { onNavigate: (view: D
 
       <div className="dashboard__controls">
         <ModeCard />
-        <DifficultyCard />
       </div>
 
-      {latest ? (
-        <button className="recent-match glass" onClick={() => onNavigate("matchHistory")}>
-          <span className="recent-match__map" aria-hidden="true">
-            {MAP_IMAGES[latest.map_id] && <img src={MAP_IMAGES[latest.map_id]} alt="" />}
-            <i>{MAP_LABELS[latest.map_id] ?? latest.map_id}</i>
-          </span>
-          <span className="recent-match__body">
-            <small>{t("match.recentMatches")}</small>
-            <strong>
-              {latest.player_score} : {latest.opponent_score}
-              <em>· {latest.opponent_name}</em>
-            </strong>
-            <span>{new Date(latest.created_at_unix * 1000).toLocaleString()}</span>
-          </span>
-          <span className={`recent-match__state is-${latest.state}`}>
-            {t(latest.state === "finished" ? "match.finished" : "match.interrupted")}
-          </span>
-        </button>
-      ) : (
-        <button className="recent-match recent-match--empty" onClick={() => onNavigate("match")}>
-          <span className="recent-match__empty-icon" aria-hidden="true"><Play size={17} /></span>
-          <span className="recent-match__body">
-            <small>{t("match.recentMatches")}</small>
-            <strong>{t("overview.startFirstMatch")}</strong>
-            <span>{t("match.emptyHistory")}</span>
-          </span>
-          <ArrowRight size={16} className="recent-match__chev" />
-        </button>
-      )}
-
       <div className="quick-grid" role="navigation" aria-label={t("overview.quickActions")}>
-        {TILES.map(({ view, key, icon: Icon }) => (
+        {tiles.map(({ view, key, icon: Icon }) => (
           <button key={view} className="quick-tile" onClick={() => onNavigate(view)}>
             <Icon size={18} strokeWidth={1.9} aria-hidden="true" />
             <span>{t(key)}</span>

@@ -211,8 +211,6 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
         ("METAMOD_X64", "MetaMod", "addons/metamod/bin/win64/server.dll"),
         ("CSS_X64", "CounterStrikeSharp", "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll"),
         ("CSS_DOTNET_X64", "CounterStrikeSharp .NET runtime", "addons/counterstrikesharp/dotnet/dotnet.exe"),
-        ("RAYTRACE_X64", "RayTrace", "addons/RayTrace/bin/win64/RayTrace.dll"),
-        ("BOTHIDER_X64", "BotHider", "addons/BotHider/bin/win64/BotHider.dll"),
     ] {
         checks.push(component_check(
             &format!("TARGET_{code}"),
@@ -230,9 +228,7 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
         ));
     }
     for (code, name, relative) in [
-        ("MATCH_COORDINATOR_MANAGED", "PlusMatchCoordinator", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/PlusMatchCoordinator.dll"),
-        ("MATCH_CORE_MANAGED", "MatchCore", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/MatchCore.dll"),
-        ("BOTHIDER_API_MANAGED", "BotHider API", "addons/counterstrikesharp/shared/BotHiderApi/BotHiderApi.dll"),
+        ("PLAYER_COSMETICS_MANAGED", "PlayerCosmetics", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll"),
     ] {
         checks.push(managed_component_check(
             &format!("TARGET_{code}"),
@@ -249,37 +245,13 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
             true,
         ));
     }
-    {
-        let name = "TeamLineupInjector";
-        let relative = "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.dll";
-        checks.push(managed_component_check(
-            "TARGET_TEAM_LINEUP_MANAGED",
-            &format!("Installed {name}"),
-            target.join(relative),
-            if installed { CheckStatus::Fail } else { CheckStatus::Warn },
-            false,
-        ));
-        checks.push(managed_component_check(
-            "PAYLOAD_TEAM_LINEUP_MANAGED",
-            &format!("Package {name}"),
-            payload_root.join(relative),
-            CheckStatus::Fail,
-            false,
-        ));
-    }
     for (code, title, relative) in [
-        ("MATCH_CATALOG", "Match catalog", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/match_catalog.json"),
-        ("OPEN_RATING_MODEL", "OpenRating model", "addons/counterstrikesharp/plugins/PlusMatchCoordinator/open-rating-3.0-proxy-v1.json"),
-        ("BOTHIDER_IDENTITIES", "BotHider identity catalog", "addons/BotHider/bot_info.json"),
+        ("COSMETIC_CATALOG", "Cosmetic catalog", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json"),
+        ("STICKER_IDS", "Sticker IDs catalog", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_ids.json"),
+        ("STICKER_WEAPON_IDS", "Sticker weapon IDs catalog", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_weapon_ids.json"),
     ] {
         checks.push(target_file_check(&format!("TARGET_{code}"), &format!("Installed {title}"), target, relative, installed));
         checks.push(source_file_check(&format!("PAYLOAD_{code}"), &format!("Package {title}"), payload_root, relative));
-    }
-    for difficulty in ["Low", "Medium", "High"] {
-        let relative = format!("addons/counterstrikesharp/plugins/PlusMatchCoordinator/profiles/{difficulty}/botprofile.db");
-        let suffix = difficulty.to_ascii_uppercase();
-        checks.push(target_file_check(&format!("TARGET_MATCH_PROFILE_{suffix}"), &format!("Installed {difficulty} match Bot profiles"), target, &relative, installed));
-        checks.push(source_file_check(&format!("PAYLOAD_MATCH_PROFILE_{suffix}"), &format!("Package {difficulty} match Bot profiles"), payload_root, &relative));
     }
 
     let pass_count = checks.iter().filter(|check| check.status == CheckStatus::Pass).count();

@@ -1,27 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  BarChart3,
   BookOpenText,
-  Command,
   Crosshair,
-  History,
   LayoutDashboard,
   Settings2,
-  SlidersHorizontal,
   Sticker,
-  Swords,
   type LucideIcon,
 } from "lucide-react";
 import TitleBar from "./components/TitleBar";
 import ErrorModal from "./components/ErrorModal";
 import Modal from "./components/Modal";
 import OverviewDashboard, { type DashboardTarget } from "./panels/OverviewDashboard";
-import PresetsPanel from "./panels/PresetsPanel";
-import CommandsPanel from "./panels/CommandsPanel";
 import WeaponPresetsPanel from "./panels/WeaponPresetsPanel";
-import MatchPanel from "./panels/MatchPanel";
-import MatchHistoryPanel from "./panels/MatchHistoryPanel";
-import StatsDashboard from "./panels/StatsDashboard";
 import GuideView from "./panels/GuideView";
 import SettingsView from "./panels/settings/SettingsView";
 import StickersPanel from "./panels/StickersPanel";
@@ -38,7 +28,7 @@ import "./App.css";
 
 type View = "main" | "stickers" | DashboardTarget;
 
-const VIEWS: View[] = ["main", "match", "matchHistory", "stats", "settings", "presets", "commands", "weaponPresets", "stickers", "guide"];
+const VIEWS: View[] = ["main", "settings", "weaponPresets", "stickers", "guide"];
 const VIEW_KEY = "cs2bi.view";
 const WELCOME_STORY_URL = "https://api.hypcvgm.top/la";
 
@@ -95,11 +85,6 @@ export default function App() {
 
   const NAV: { view: View; key: I18nKey; icon: LucideIcon }[] = [
     { view: "main", key: "nav.overview", icon: LayoutDashboard },
-    { view: "match", key: "match.title", icon: Swords },
-    { view: "matchHistory", key: "match.history", icon: History },
-    { view: "stats", key: "stats.globalHistory", icon: BarChart3 },
-    { view: "presets", key: "pre.title", icon: SlidersHorizontal },
-    { view: "commands", key: "cmd.title", icon: Command },
     { view: "weaponPresets", key: "weapons.title", icon: Crosshair },
     ...(stickersVisible ? [{ view: "stickers" as View, key: "stickers.title" as I18nKey, icon: Sticker }] : []),
     { view: "guide", key: "nav.guide", icon: BookOpenText },
@@ -153,20 +138,10 @@ export default function App() {
         <main className="workspace">
           {view === "settings" ? (
             <SettingsView />
-          ) : view === "presets" ? (
-            <PresetsPanel />
-          ) : view === "commands" ? (
-            <CommandsPanel />
           ) : view === "weaponPresets" ? (
             <WeaponPresetsPanel />
           ) : view === "stickers" ? (
             <StickersPanel />
-          ) : view === "match" ? (
-            <MatchPanel onOpenInstallation={() => setView("settings")} onOpenHistory={() => setView("matchHistory")} onOpenLineup={() => setView("presets")} />
-          ) : view === "matchHistory" ? (
-            <MatchHistoryPanel />
-          ) : view === "stats" ? (
-            <StatsDashboard />
           ) : view === "guide" ? (
             <GuideView anchor={guideAnchor} onAnchorHandled={clearGuideAnchor} />
           ) : (
