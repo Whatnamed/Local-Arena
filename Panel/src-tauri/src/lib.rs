@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::sync::OnceLock;
+use std::thread;
 use sysinfo::{ProcessesToUpdate, System};
 use tauri::{AppHandle, Manager};
 
@@ -24,10 +25,10 @@ mod online_update;
 mod runtime_state;
 mod steam;
 mod update_core;
-use installer::{InstallPlan, InstallTransactionResult, InstallationInspection, RestoreResult};
 use install_checks::InstallCheckReport;
+use installer::{InstallPlan, InstallTransactionResult, InstallationInspection, RestoreResult};
 use match_system::{MatchCatalog, MatchResult, MatchSession, MatchRequest, MatchState, PrepareMatchInput, MatchHistoryStats};
-use mode_files::{LaunchMode, apply_launch_mode, contains_metamod_search_path};
+use mode_files::{LaunchMode, contains_metamod_search_path, prepare_local_launch, recover_launch_transaction, restore_clean_launch};
 use runtime_state::{Cs2ProcessInfo, blocks_target_write, inspect_cs2_process};
 
 type Result<T> = std::result::Result<T, AppError>;
@@ -1080,7 +1081,8 @@ fn set_mode(app: AppHandle, csgo: String, mode: String) -> Result<ModeInfo> {
     let launch_mode = LaunchMode::parse(Some(&mode)).map_err(AppError::invalid)?;
     let state = local_state_root(&app)?;
     mode_layout::recover(&state, &root)?;
-    apply_launch_mode(&root, launch_mode).map_err(AppError::invalid)?;
+    recover_launch_transaction(&state, &root).map_err(AppError::invalid)?;
+    restore_clean_launch(&state, &root).map_err(AppError::invalid)?;
     mode_layout::set_preview(&state, &root, launch_mode != LaunchMode::Bots)?;
     let mut config = read_config(&app)?;
     enforce_mode_cosmetics(&root, &mut config, launch_mode)?;
@@ -1134,6 +1136,21 @@ fn launch_request(mode: LaunchMode) -> (Vec<&'static str>, String) {
     }
 }
 
+fn spawn_launch_recovery_helper(state: &Path, root: &Path) -> Result<()> {
+    let executable = std::env::current_exe().map_err(AppError::transaction_io)?;
+    Command::new(executable)
+        .arg("--recover-launch")
+        .arg(state)
+        .arg(root)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| {
+            AppError::launch(format!(
+                "Cannot start launch isolation recovery helper: {error}"
+            ))
+        })
+}
+
 #[tauri::command]
 fn launch_cs2(app: AppHandle) -> Result<LaunchResult> {
     let mut config = read_config(&app)?;
@@ -1145,16 +1162,45 @@ fn launch_cs2(app: AppHandle) -> Result<LaunchResult> {
     ensure_target_not_running(&root)?;
     let state = local_state_root(&app)?;
     mode_layout::recover(&state, &root)?;
-    apply_launch_mode(&root, mode).map_err(AppError::invalid)?;
+    recover_launch_transaction(&state, &root).map_err(AppError::invalid)?;
+    if mode == LaunchMode::Online {
+        restore_clean_launch(&state, &root).map_err(AppError::invalid)?;
+    } else {
+        prepare_local_launch(&state, &root, mode).map_err(AppError::invalid)?;
+    }
     mode_layout::set_preview(&state, &root, mode != LaunchMode::Bots)?;
-    enforce_mode_cosmetics(&root, &mut config, mode)?;
-    write_bot_randomizer_options(&root, &config.bot_items)?;
+    if let Err(error) = enforce_mode_cosmetics(&root, &mut config, mode) {
+        let _ = restore_clean_launch(&state, &root);
+        return Err(error);
+    }
+    if let Err(error) = write_bot_randomizer_options(&root, &config.bot_items) {
+        let _ = restore_clean_launch(&state, &root);
+        return Err(error);
+    }
 
     config.insecure = mode.insecure();
-    write_config(&app, &config)?;
-    let steam = find_steam_executable()?;
+    if let Err(error) = write_config(&app, &config) {
+        let _ = restore_clean_launch(&state, &root);
+        return Err(error);
+    }
+    let steam = match find_steam_executable() {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = restore_clean_launch(&state, &root);
+            return Err(error);
+        }
+    };
     let (arguments, options) = launch_request(mode);
-    Command::new(steam).args(arguments).spawn()?;
+    if let Err(error) = Command::new(steam).args(arguments).spawn() {
+        let _ = restore_clean_launch(&state, &root);
+        return Err(error.into());
+    }
+    if mode != LaunchMode::Online {
+        if let Err(error) = spawn_launch_recovery_helper(&state, &root) {
+            let _ = restore_clean_launch(&state, &root);
+            return Err(error);
+        }
+    }
     Ok(LaunchResult {
         options,
         insecure: mode.insecure(),
@@ -1189,7 +1235,8 @@ fn prepare_and_launch_match(app: AppHandle, csgo: String, input: PrepareMatchInp
     };
     let previous_mode = LaunchMode::parse(read_config(&app)?.mode.as_deref()).map_err(AppError::invalid)?;
     mode_layout::recover(&state, &root)?;
-    apply_launch_mode(&root, LaunchMode::Bots).map_err(AppError::invalid)?;
+    recover_launch_transaction(&state, &root).map_err(AppError::invalid)?;
+    prepare_local_launch(&state, &root, LaunchMode::Bots).map_err(AppError::invalid)?;
     mode_layout::set_preview(&state, &root, false)?;
     let preparation = (|| -> Result<()> {
         let report = collect_install_checks(&payload, &state, &root, Some(&input.map_id))?;
@@ -1295,7 +1342,7 @@ fn monitor_match_process(root: PathBuf, session_id: String) {
 
 fn restore_demo_layout(state: &Path, root: &Path, mode: LaunchMode) -> Result<()> {
     mode_layout::recover(state, root)?;
-    apply_launch_mode(root, mode).map_err(AppError::launch)?;
+    restore_clean_launch(state, root).map_err(AppError::launch)?;
     mode_layout::set_preview(state, root, mode != LaunchMode::Bots)
 }
 
@@ -1474,7 +1521,7 @@ fn play_demo(app: AppHandle, csgo: String, demo_path: String) -> Result<()> {
         ),
     );
     mode_layout::recover(&state, &root)?;
-    if let Err(detail) = apply_launch_mode(&root, LaunchMode::Online) {
+    if let Err(detail) = restore_clean_launch(&state, &root) {
         let launch_error = AppError::launch(detail);
         let restore_error = restore_demo_layout(&state, &root, previous_mode).err();
         logging::append(
@@ -2894,7 +2941,8 @@ fn restore_payload_impl(app: &AppHandle, csgo: &str, pristine: bool) -> Result<R
     mode_layout::recover(&state, &root)?;
     mode_layout::set_preview(&state, &root, false)?;
     let mut config = read_config(app)?;
-    apply_launch_mode(&root, LaunchMode::Online).map_err(AppError::launch)?;
+    recover_launch_transaction(&state, &root).map_err(AppError::launch)?;
+    restore_clean_launch(&state, &root).map_err(AppError::launch)?;
     enforce_mode_cosmetics(&root, &mut config, LaunchMode::Online)?;
     config.mode = Some("online".into());
     config.insecure = false;
@@ -4104,6 +4152,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             if let Ok(root) = app_storage::root() {
+                if let Ok(config) = read_config(app.handle()) {
+                    if let Some(path) = config.csgo_path.as_deref().and_then(|path| csgo_path(path).ok()) {
+                        if let Err(error) = recover_launch_transaction(&root, &path) {
+                            logging::append(&root, "WARN", "launch.isolation_recovery_failed", &error);
+                        }
+                    }
+                }
                 let removed = logging::cleanup(&root).unwrap_or(0);
                 let archives_removed = diagnostics::cleanup_archives(&root).unwrap_or(0);
                 let update_cache_removed = online_update::cleanup_cache(None).unwrap_or(0);
@@ -4147,4 +4202,32 @@ pub fn run() {
 
 pub fn maybe_run_update_helper() -> bool {
     online_update::maybe_apply_panel_update()
+}
+
+pub fn maybe_run_launch_recovery_helper() -> bool {
+    let mut arguments = std::env::args_os();
+    let _ = arguments.next();
+    if arguments.next().as_deref() != Some(std::ffi::OsStr::new("--recover-launch")) {
+        return false;
+    }
+    let Some(state) = arguments.next().map(PathBuf::from) else {
+        return true;
+    };
+    let Some(root) = arguments.next().map(PathBuf::from) else {
+        return true;
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while Instant::now() < deadline {
+        if inspect_cs2_process(Some(&root)).running {
+            // gameinfo.gi has already been consumed by the new process. Give
+            // the loader a short bounded window before returning the file to
+            // Steam's clean state.
+            thread::sleep(Duration::from_secs(2));
+            break;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    let _ = restore_clean_launch(&state, &root);
+    true
 }

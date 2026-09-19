@@ -1,4 +1,6 @@
 use crate::atomic_fs;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
@@ -9,6 +11,17 @@ pub(crate) enum LaunchMode {
     Online,
     Preview,
     Bots,
+}
+
+const LAUNCH_STATE_DIR: &str = "launch-isolation";
+const LAUNCH_JOURNAL: &str = "transaction.json";
+const OWNED_SEARCH_PATHS: [&str; 2] = ["csgo/addons/metamod", "csgo/overrides/botprofile.vpk"];
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LaunchJournal {
+    schema_version: u8,
+    target: String,
+    prepared_sha256: String,
 }
 
 impl LaunchMode {
@@ -60,12 +73,11 @@ fn rewrite_gameinfo(bytes: &[u8], include_bot_runtime: bool) -> ModeResult<Vec<u
     let mut inserted = false;
 
     for line in text.lines() {
-        if game_path_value(line)
-            .is_some_and(|value| {
-                value.eq_ignore_ascii_case("csgo/addons/metamod")
-                    || value.eq_ignore_ascii_case("csgo/overrides/botprofile.vpk")
-            })
-        {
+        if game_path_value(line).is_some_and(|value| {
+            OWNED_SEARCH_PATHS
+                .iter()
+                .any(|owned| value.eq_ignore_ascii_case(owned))
+        }) {
             continue;
         }
         if include_bot_runtime
@@ -91,7 +103,59 @@ fn rewrite_gameinfo(bytes: &[u8], include_bot_runtime: bool) -> ModeResult<Vec<u
     Ok(rewritten.into_bytes())
 }
 
-pub(crate) fn apply_launch_mode(root: &Path, mode: LaunchMode) -> ModeResult<()> {
+fn launch_state_directory(state_root: &Path, target: &Path) -> std::path::PathBuf {
+    let normalized = target
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    let digest = Sha256::digest(normalized.as_bytes());
+    state_root
+        .join(LAUNCH_STATE_DIR)
+        .join(format!("{:x}", digest)[..16].to_string())
+}
+
+fn launch_journal_path(state_root: &Path, target: &Path) -> std::path::PathBuf {
+    launch_state_directory(state_root, target).join(LAUNCH_JOURNAL)
+}
+
+fn target_matches(journal: &LaunchJournal, target: &Path) -> bool {
+    journal.target == target.to_string_lossy()
+}
+
+fn read_journal(state_root: &Path, target: &Path) -> ModeResult<Option<LaunchJournal>> {
+    let path = launch_journal_path(state_root, target);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let journal: LaunchJournal =
+        serde_json::from_slice(&fs::read(&path).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("Invalid launch isolation journal: {error}"))?;
+    if journal.schema_version != 1 || !target_matches(&journal, target) {
+        return Err("Launch isolation journal belongs to another CS2 installation".into());
+    }
+    Ok(Some(journal))
+}
+
+fn remove_journal(state_root: &Path, target: &Path) -> ModeResult<()> {
+    let path = launch_journal_path(state_root, target);
+    let state_directory = path.parent().map(Path::to_path_buf);
+    if path.is_file() {
+        fs::remove_file(&path).map_err(|error| error.to_string())?;
+    }
+    if let Some(parent) = state_directory.as_deref() {
+        let _ = fs::remove_dir(parent);
+        if let Some(root) = parent.parent() {
+            let _ = fs::remove_dir(root);
+        }
+    }
+    Ok(())
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn restore_clean_contents(root: &Path) -> ModeResult<bool> {
     let destination = root.join("gameinfo.gi");
     if !destination.is_file() {
         return Err(format!(
@@ -99,66 +163,83 @@ pub(crate) fn apply_launch_mode(root: &Path, mode: LaunchMode) -> ModeResult<()>
             destination.display()
         ));
     }
-
     let active = fs::read(&destination).map_err(|error| error.to_string())?;
-    let online = rewrite_gameinfo(&active, false)?;
-    let bots = rewrite_gameinfo(&online, true)?;
-    let expected = if mode == LaunchMode::Online {
-        &online
-    } else {
-        &bots
+    let clean = rewrite_gameinfo(&active, false)?;
+    let changed = active != clean;
+    if changed {
+        atomic_fs::write_replace(&destination, &clean).map_err(|error| error.to_string())?;
+        if fs::read(&destination).map_err(|error| error.to_string())? != clean {
+            return Err(format!(
+                "Clean gameinfo.gi verification failed after writing {}",
+                destination.display()
+            ));
+        }
+    }
+    Ok(changed)
+}
+
+pub(crate) fn recover_launch_transaction(state_root: &Path, root: &Path) -> ModeResult<bool> {
+    let Some(journal) = read_journal(state_root, root)? else {
+        return Ok(false);
     };
-    atomic_fs::write_replace(&destination, expected).map_err(|error| error.to_string())?;
-    if fs::read(&destination).map_err(|error| error.to_string())? != *expected {
+    let _ = journal;
+    restore_clean_contents(root)?;
+    remove_journal(state_root, root)?;
+    Ok(true)
+}
+
+pub(crate) fn restore_clean_launch(state_root: &Path, root: &Path) -> ModeResult<()> {
+    restore_clean_contents(root)?;
+    remove_journal(state_root, root)
+}
+
+pub(crate) fn prepare_local_launch(
+    state_root: &Path,
+    root: &Path,
+    mode: LaunchMode,
+) -> ModeResult<()> {
+    if mode == LaunchMode::Online {
+        return restore_clean_launch(state_root, root);
+    }
+    let _ = recover_launch_transaction(state_root, root)?;
+    let destination = root.join("gameinfo.gi");
+    if !destination.is_file() {
         return Err(format!(
-            "Mode verification failed after writing {}",
+            "Current CS2 gameinfo.gi is missing: {}",
             destination.display()
         ));
     }
-
+    let active = fs::read(&destination).map_err(|error| error.to_string())?;
+    let clean = rewrite_gameinfo(&active, false)?;
+    let local = rewrite_gameinfo(&clean, true)?;
+    let journal_path = launch_journal_path(state_root, root);
+    if let Some(parent) = journal_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let journal = LaunchJournal {
+        schema_version: 1,
+        target: root.to_string_lossy().into_owned(),
+        prepared_sha256: sha256_bytes(&local),
+    };
+    let journal_bytes = serde_json::to_vec_pretty(&journal)
+        .map_err(|error| format!("Cannot serialize launch isolation journal: {error}"))?;
+    atomic_fs::write_replace(&journal_path, &journal_bytes).map_err(|error| error.to_string())?;
+    if let Err(error) = atomic_fs::write_replace(&destination, &local) {
+        return Err(error.to_string());
+    }
     let installed = fs::read(&destination).map_err(|error| error.to_string())?;
-    if mode == LaunchMode::Online && contains_metamod_search_path(&installed) {
-        return Err(
-            "Normal matchmaking was blocked because active gameinfo.gi still loads Metamod"
-                .into(),
-        );
+    if installed != local {
+        return Err(format!(
+            "Local gameinfo.gi verification failed after writing {}",
+            destination.display()
+        ));
     }
-    if mode != LaunchMode::Online && !contains_metamod_search_path(&installed) {
-        return Err(
-            "Enhanced bots were not enabled because active gameinfo.gi does not load Metamod"
-                .into(),
-        );
+    if !contains_metamod_search_path(&installed) {
+        return Err("Local CS2 launch was not prepared with MetaMod SearchPath".into());
     }
-    if mode != LaunchMode::Online && !contains_botprofile_search_path(&installed) {
-        return Err(
-            "Enhanced bots were not enabled because active gameinfo.gi does not mount the selected bot profile"
-                .into(),
-        );
+    if mode == LaunchMode::Bots && !contains_botprofile_search_path(&installed) {
+        return Err("Bot launch was not prepared with the selected bot profile SearchPath".into());
     }
-    if mode == LaunchMode::Online && contains_botprofile_search_path(&installed) {
-        return Err(
-            "Normal matchmaking was blocked because active gameinfo.gi still mounts the Plus bot profile"
-                .into(),
-        );
-    }
-    cleanup_legacy_mode_backups(root)?;
-    Ok(())
-}
-
-fn cleanup_legacy_mode_backups(root: &Path) -> ModeResult<()> {
-    let backup_root = root.join("backup");
-    for relative in ["Online/gameinfo.gi", "WithBots/gameinfo.gi"] {
-        let path = backup_root.join(relative);
-        if path.is_file() {
-            fs::remove_file(&path).map_err(|error| {
-                format!("Cannot remove legacy PLUS mode file {}: {error}", path.display())
-            })?;
-        }
-        if let Some(parent) = path.parent() {
-            let _ = fs::remove_dir(parent);
-        }
-    }
-    let _ = fs::remove_dir(backup_root);
     Ok(())
 }
 
@@ -180,71 +261,78 @@ mod tests {
     }
 
     #[test]
-    fn launch_modes_derive_from_current_gameinfo_and_remove_legacy_plus_backups() {
-        let root = test_root();
-        fs::create_dir_all(root.join("backup/Online")).unwrap();
-        fs::create_dir_all(root.join("backup/WithBots")).unwrap();
-        let current = b"SearchPaths\r\n{\r\n\tGame\tcsgo\r\n}\r\nNewDepotSetting\t1\r\n";
-        let stale_online = b"SearchPaths\r\n{\r\n\tGame\tcsgo\r\n}\r\n";
-        let stale_bots = b"SearchPaths\r\n{\r\n\tGame\tcsgo/addons/metamod\r\n\tGame\tcsgo\r\n}\r\n";
-        fs::write(root.join("gameinfo.gi"), current).unwrap();
-        fs::write(root.join("backup/Online/gameinfo.gi"), stale_online).unwrap();
-        fs::write(root.join("backup/WithBots/gameinfo.gi"), stale_bots).unwrap();
-
-        apply_launch_mode(&root, LaunchMode::Bots).unwrap();
-        let bots = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
-        assert!(bots.contains("NewDepotSetting"));
-        assert!(bots.to_ascii_lowercase().contains("csgo/addons/metamod"));
-        assert!(bots.to_ascii_lowercase().contains("csgo/overrides/botprofile.vpk"));
-
-        apply_launch_mode(&root, LaunchMode::Online).unwrap();
-        let online = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
-        assert!(online.contains("NewDepotSetting"));
-        assert!(!online.to_ascii_lowercase().contains("csgo/addons/metamod"));
-        assert!(!online.to_ascii_lowercase().contains("csgo/overrides/botprofile.vpk"));
-        assert!(!root.join("backup/Online/gameinfo.gi").exists());
-        assert!(!root.join("backup/WithBots/gameinfo.gi").exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn legacy_cleanup_preserves_unknown_user_backup_files() {
-        let root = test_root();
-        fs::create_dir_all(root.join("backup/Online")).unwrap();
-        fs::write(root.join("gameinfo.gi"), b"SearchPaths\n{\n Game csgo\n}\n").unwrap();
-        fs::write(root.join("backup/Online/gameinfo.gi"), b"legacy").unwrap();
-        fs::write(root.join("backup/Online/user-note.txt"), b"keep").unwrap();
-
-        apply_launch_mode(&root, LaunchMode::Online).unwrap();
-
-        assert!(!root.join("backup/Online/gameinfo.gi").exists());
-        assert_eq!(fs::read(root.join("backup/Online/user-note.txt")).unwrap(), b"keep");
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn online_mode_removes_only_the_metamod_search_path() {
-        let root = test_root();
+    fn local_launch_journal_roundtrips_without_losing_unknown_search_paths() {
+        let base = test_root();
+        let root = base.join("game/csgo");
+        let state = base.join("panel-state");
         fs::create_dir_all(&root).unwrap();
-        let bots = b"SearchPaths\n{\n\tGame csgo/addons/metamod\n\tGame csgo/overrides/botprofile.vpk\n\tGame csgo\n}\nCurrentSetting 1\n";
-        fs::write(root.join("gameinfo.gi"), bots).unwrap();
+        fs::write(
+            root.join("gameinfo.gi"),
+            b"SearchPaths\n{\n\tGame\tcsgo/addons/foreign\n\tGame\tcsgo\n}\nSteamSetting\tbefore\n",
+        )
+        .unwrap();
 
-        apply_launch_mode(&root, LaunchMode::Online).unwrap();
-        let online = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
-        assert!(!online.contains("csgo/addons/metamod"));
-        assert!(!online.contains("csgo/overrides/botprofile.vpk"));
-        assert!(online.contains("CurrentSetting 1"));
-        fs::remove_dir_all(root).unwrap();
+        prepare_local_launch(&state, &root, LaunchMode::Preview).unwrap();
+        let local = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
+        assert_eq!(local.matches("csgo/addons/metamod").count(), 1);
+        assert_eq!(local.matches("csgo/overrides/botprofile.vpk").count(), 1);
+        assert!(local.contains("csgo/addons/foreign"));
+        assert!(launch_journal_path(&state, &root).is_file());
+
+        restore_clean_launch(&state, &root).unwrap();
+        let clean = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
+        assert!(!clean.contains("csgo/addons/metamod"));
+        assert!(!clean.contains("csgo/overrides/botprofile.vpk"));
+        assert!(clean.contains("csgo/addons/foreign"));
+        assert!(clean.contains("SteamSetting\tbefore"));
+        assert!(!launch_journal_path(&state, &root).exists());
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
-    fn bot_mode_requires_the_primary_csgo_search_path() {
-        let root = test_root();
+    fn repeated_local_prepare_is_idempotent_and_recovery_converges_after_steam_update() {
+        let base = test_root();
+        let root = base.join("game/csgo");
+        let state = base.join("panel-state");
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("gameinfo.gi"), "SearchPaths\n{\nGame core\n}\n").unwrap();
+        fs::write(root.join("gameinfo.gi"), b"SearchPaths\n{\nGame csgo\n}\n").unwrap();
 
-        let error = apply_launch_mode(&root, LaunchMode::Bots).unwrap_err();
-        assert!(error.contains("no primary 'Game csgo'"));
-        fs::remove_dir_all(root).unwrap();
+        prepare_local_launch(&state, &root, LaunchMode::Preview).unwrap();
+        prepare_local_launch(&state, &root, LaunchMode::Preview).unwrap();
+        let repeated = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
+        assert_eq!(repeated.matches("csgo/addons/metamod").count(), 1);
+        assert_eq!(repeated.matches("csgo/overrides/botprofile.vpk").count(), 1);
+
+        fs::write(
+            root.join("gameinfo.gi"),
+            b"SearchPaths\n{\nGame csgo/addons/metamod\nGame csgo\nGame csgo/steam-update\n}\nNewDepotSetting\t2\n",
+        )
+        .unwrap();
+        assert!(recover_launch_transaction(&state, &root).unwrap());
+        let recovered = fs::read_to_string(root.join("gameinfo.gi")).unwrap();
+        assert!(!recovered.contains("csgo/addons/metamod"));
+        assert!(!recovered.contains("csgo/overrides/botprofile.vpk"));
+        assert!(recovered.contains("csgo/steam-update"));
+        assert!(recovered.contains("NewDepotSetting\t2"));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn malformed_or_missing_gameinfo_fails_closed_without_removing_journal() {
+        let base = test_root();
+        let root = base.join("game/csgo");
+        let state = base.join("panel-state");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("gameinfo.gi"), b"SearchPaths\n{\nGame csgo\n}\n").unwrap();
+        prepare_local_launch(&state, &root, LaunchMode::Preview).unwrap();
+        fs::write(root.join("gameinfo.gi"), [0xff, 0xfe]).unwrap();
+
+        assert!(recover_launch_transaction(&state, &root).is_err());
+        assert!(launch_journal_path(&state, &root).is_file());
+
+        fs::remove_file(root.join("gameinfo.gi")).unwrap();
+        assert!(restore_clean_launch(&state, &root).is_err());
+        assert!(launch_journal_path(&state, &root).is_file());
+        fs::remove_dir_all(base).unwrap();
     }
 }
