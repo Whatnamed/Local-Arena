@@ -298,13 +298,12 @@ export type KnifeCustomizerState = {
 export type CosmeticsPresetExportResult = { path: string; size_bytes: number };
 export type CosmeticsPresetImportResult = { state: KnifeCustomizerState; backup_path: string | null };
 
-export type GameMode = "online" | "preview" | "bots";
+export type GameMode = "online" | "preview";
 
 export type ModeInfo = {
   current: GameMode | null;
   online_present: boolean;
   preview_present: boolean;
-  bots_present: boolean;
   layout_healthy: boolean;
   insecure: boolean;
   user_count: number;
@@ -406,49 +405,6 @@ export type AppearanceConfig = {
 };
 
 export type AppearanceExportResult = { path: string; size_bytes: number };
-
-export type UpdateComponentState = {
-  current_version: string;
-  latest_version: string | null;
-  update_available: boolean;
-  compatible: boolean;
-  status: string;
-  downloaded_bytes: number;
-  total_bytes: number;
-  error: string | null;
-};
-
-export type OnlineUpdateSnapshot = {
-  checked_at: number | null;
-  release_version: string | null;
-  release_notes_url: string | null;
-  panel: UpdateComponentState;
-  plugin: UpdateComponentState;
-  busy: boolean;
-  error: string | null;
-};
-
-export type UpdateProgress = {
-  component: "panel" | "plugin";
-  stage: string;
-  downloaded_bytes: number;
-  total_bytes: number;
-};
-
-export type UpdateResult = {
-  component: "panel" | "plugin";
-  version: string;
-  installed: boolean;
-  restart_required: boolean;
-  rollback_succeeded: boolean | null;
-  detail: string;
-};
-
-export type UpdateBatchResult = {
-  panel: UpdateResult | null;
-  plugin: UpdateResult | null;
-  restart_required: boolean;
-};
 
 export type RuntimeSnapshot = {
   directory: DirectoryInfo;
@@ -742,15 +698,6 @@ export const api = {
   restorePristineCs2: (csgo: string) => invoke<RestoreResult>("restore_pristine_cs2", { csgo }),
   exportDiagnostics: (csgo: string | null) =>
     invoke<DiagnosticReport>("export_diagnostics", { csgo }),
-  getUpdateSnapshot: () => invoke<OnlineUpdateSnapshot>("get_update_snapshot"),
-  checkOnlineUpdates: (force: boolean) =>
-    invoke<OnlineUpdateSnapshot>("check_online_updates", { force }),
-  installPanelUpdate: () => invoke<UpdateResult>("install_panel_update"),
-  installPluginUpdate: (csgo: string) =>
-    invoke<UpdateResult>("install_plugin_update", { csgo }),
-  installAllUpdates: (csgo: string | null) =>
-    invoke<UpdateBatchResult>("install_all_updates", { csgo }),
-  cancelUpdate: () => invoke<void>("cancel_update"),
   // CS2SS telemetry
   getCs2ssOverview: (csgo: string) => invoke<Cs2ssOverviewResponse>("get_cs2ss_overview", { csgo }),
   listCs2ssMatches: (csgo: string) => invoke<Cs2ssMatchSummary[]>("list_cs2ss_matches", { csgo }),

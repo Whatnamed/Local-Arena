@@ -25,7 +25,7 @@ export const PALETTES: PaletteDefinition[] = [
 export const DEFAULT_APPEARANCE: AppearanceConfig = {
   schema_version: 1,
   team_theme: null,
-  brand_name: "Local Arena",
+  brand_name: "Local Cosmetics",
   style: "paper",
   palette: "terracotta",
   accent_color: "#d97757",
@@ -292,10 +292,10 @@ export function appearanceBundle(config: AppearanceConfig): AppearanceBundle {
 }
 
 export function parseAppearanceBundle(value: unknown): AppearanceConfig {
-  if (!value || typeof value !== "object") throw new Error("Invalid Local Arena theme");
+  if (!value || typeof value !== "object") throw new Error("Invalid Local Cosmetics theme");
   const bundle = value as Partial<AppearanceBundle>;
   if (bundle.schema_version !== 1 || bundle.kind !== "local-arena-theme" || !bundle.appearance) {
-    throw new Error("Unsupported Local Arena theme");
+    throw new Error("Unsupported Local Cosmetics theme");
   }
   return normalizeAppearance(bundle.appearance);
 }

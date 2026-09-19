@@ -11,7 +11,7 @@ type Props = {
   showSettings?: boolean;
 };
 
-export default function TitleBar({ title = `Local Arena v${APP_DISPLAY_VERSION}`, onSettings, showSettings = true }: Props) {
+export default function TitleBar({ title = `Local Cosmetics v${APP_DISPLAY_VERSION}`, onSettings, showSettings = true }: Props) {
   const appWindow = getCurrentWindow();
   const t = useT();
   const { reportError } = useStore();

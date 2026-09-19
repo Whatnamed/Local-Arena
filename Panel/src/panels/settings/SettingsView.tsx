@@ -1,21 +1,19 @@
-import { useEffect, useState } from "react";
-import { BadgeInfo, Download, FileCheck2, FlaskConical, FolderOpen, Languages, Palette, type LucideIcon } from "lucide-react";
+import { useState } from "react";
+import { BadgeInfo, FileCheck2, FlaskConical, FolderOpen, Languages, Palette, type LucideIcon } from "lucide-react";
 import { BackIcon, ChevronRight } from "../../components/icons";
 import AboutPage, { type AboutTarget } from "./AboutPage";
 import AboutDetailPage from "./AboutDetailPage";
 import LanguagesPage from "./LanguagesPage";
 import DirectoryPage from "./DirectoryPage";
 import InstallationPage from "./InstallationPage";
-import OnlineUpdatePage from "./OnlineUpdatePage";
 import ExperimentalPage from "./ExperimentalPage";
 import PersonalizationPage from "./PersonalizationPage";
-import { api, type OnlineUpdateSnapshot } from "../../lib/api";
 import { useStore } from "../../state/store";
 import { LANGUAGES } from "../../data/languages";
 import { useT, type I18nKey } from "../../i18n";
 import "./settings.css";
 
-type SettingsEntry = "about" | "languages" | "personalization" | "directory" | "installation" | "updates" | "experimental";
+type SettingsEntry = "about" | "languages" | "personalization" | "directory" | "installation" | "experimental";
 type Page = "root" | SettingsEntry | AboutTarget;
 
 const TITLE_KEYS: Record<Page, I18nKey> = {
@@ -28,12 +26,10 @@ const TITLE_KEYS: Record<Page, I18nKey> = {
   personalization: "personal.title",
   directory: "set.directory",
   installation: "set.installation",
-  updates: "set.updates",
   experimental: "experimental.title",
 };
 
 const DESC_KEYS: Record<SettingsEntry, I18nKey> = {
-  updates: "set.updatesDesc",
   installation: "set.installationDesc",
   directory: "set.directoryDesc",
   languages: "set.languagesDesc",
@@ -43,7 +39,6 @@ const DESC_KEYS: Record<SettingsEntry, I18nKey> = {
 };
 
 const ICONS: Record<SettingsEntry, LucideIcon> = {
-  updates: Download,
   installation: FileCheck2,
   directory: FolderOpen,
   languages: Languages,
@@ -57,7 +52,6 @@ type Tone = "green" | "yellow" | "blue" | "neutral";
 export default function SettingsView({ onClose }: { onClose?: () => void }) {
   const [page, setPage] = useState<Page>("root");
   const { config, directory, installation } = useStore();
-  const [updates, setUpdates] = useState<OnlineUpdateSnapshot | null>(null);
   const t = useT();
   const back = () => {
     if (page === "root") onClose?.();
@@ -65,18 +59,9 @@ export default function SettingsView({ onClose }: { onClose?: () => void }) {
     else setPage("root");
   };
 
-  useEffect(() => {
-    if (page !== "root") return;
-    void api.getUpdateSnapshot().then(setUpdates).catch(() => {});
-  }, [page]);
-
-  const updateAvailable = !!updates && (updates.panel.update_available || updates.plugin.update_available);
   const language = LANGUAGES.find((entry) => entry.code === config?.language);
 
   const STATUS: Record<SettingsEntry, { text: string; tone: Tone } | null> = {
-    updates: updates
-      ? { text: t(updateAvailable ? "update.available" : "update.current"), tone: updateAvailable ? "yellow" : "green" }
-      : null,
     installation: installation?.installed
       ? { text: `v${installation.package_version}`, tone: installation.missing.length + installation.corrupt.length > 0 ? "yellow" : "green" }
       : { text: t("install.notInstalled"), tone: "neutral" },
@@ -107,7 +92,7 @@ export default function SettingsView({ onClose }: { onClose?: () => void }) {
           {page === "root" && (
             <>
               <div className="settings-list">
-                {(["updates", "installation", "directory", "languages", "personalization", "experimental"] as SettingsEntry[]).map((p) => {
+                {(["installation", "directory", "languages", "personalization", "experimental"] as SettingsEntry[]).map((p) => {
                   const Icon = ICONS[p];
                   const status = STATUS[p];
                   return (
@@ -132,7 +117,7 @@ export default function SettingsView({ onClose }: { onClose?: () => void }) {
               </button>
             </>
           )}
-          {page === "about" && <AboutPage onOpen={setPage} onOpenUpdates={() => setPage("updates")} />}
+          {page === "about" && <AboutPage onOpen={setPage} />}
           {(page === "aboutThirdParty" || page === "aboutAgreement" || page === "aboutPrivacy") && (
             <AboutDetailPage kind={page} />
           )}
@@ -140,7 +125,6 @@ export default function SettingsView({ onClose }: { onClose?: () => void }) {
           {page === "personalization" && <PersonalizationPage />}
           {page === "directory" && <DirectoryPage />}
           {page === "installation" && <InstallationPage />}
-          {page === "updates" && <OnlineUpdatePage />}
           {page === "experimental" && <ExperimentalPage />}
         </div>
       </div>

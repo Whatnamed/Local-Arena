@@ -8,10 +8,8 @@ const TITLE_KEYS: Partial<Record<string, I18nKey>> = {
   STEAM_APP_730: "install.checkTitle.steamApp",
   STEAM_APP_ACTIVITY: "install.checkTitle.steamActivity",
   GAMEINFO_GI: "install.checkTitle.gameInfo",
-  MATCH_MAP: "install.checkTitle.matchMap",
   CS2_PROCESS_LOCK: "install.checkTitle.processLock",
   TARGET_ATOMIC_WRITE: "install.checkTitle.targetWrite",
-  MATCH_STATE_ATOMIC_WRITE: "install.checkTitle.matchWrite",
   PANEL_STATE_ATOMIC_WRITE: "install.checkTitle.panelWrite",
   TARGET_DISK_SPACE: "install.checkTitle.targetSpace",
   BACKUP_DISK_SPACE: "install.checkTitle.backupSpace",
@@ -23,21 +21,15 @@ const TITLE_KEYS: Partial<Record<string, I18nKey>> = {
 };
 
 const COMPONENT_KEYS: Partial<Record<string, I18nKey>> = {
-  MATCH_CATALOG: "install.checkComponent.catalog",
-  OPEN_RATING_MODEL: "install.checkComponent.rating",
-  MATCH_PROFILE_LOW: "install.checkComponent.profileLow",
-  MATCH_PROFILE_MEDIUM: "install.checkComponent.profileMedium",
-  MATCH_PROFILE_HIGH: "install.checkComponent.profileHigh",
 };
 
 const COMPONENT_NAMES: Partial<Record<string, string>> = {
   METAMOD_X64: "MetaMod",
   CSS_X64: "CounterStrikeSharp",
   CSS_DOTNET_X64: "CounterStrikeSharp .NET runtime",
-  RAYTRACE_X64: "RayTrace",
-  BOTHIDER_X64: "BotHider",
-  MATCH_COORDINATOR_MANAGED: "PlusMatchCoordinator",
-  MATCH_CORE_MANAGED: "MatchCore",
+  PLAYER_COSMETICS_MANAGED: "PlayerCosmetics",
+  COSMETIC_CATALOG: "PlayerCosmetics catalog",
+  WEAPON_CATALOG: "PlayerCosmetics weapon catalog",
 };
 
 function componentName(code: string, t: Translate): string | null {
@@ -52,10 +44,8 @@ function failureKeys(check: InstallCheckItem): [I18nKey, I18nKey] | null {
     case "STEAM_APP_730": return ["install.checkCause.steamApp", "install.checkAction.steamApp"];
     case "STEAM_APP_ACTIVITY": return ["install.checkCause.steamActivity", "install.checkAction.steamActivity"];
     case "GAMEINFO_GI":
-    case "MATCH_MAP": return ["install.checkCause.gameFile", "install.checkAction.gameFile"];
     case "CS2_PROCESS_LOCK": return ["install.checkCause.processLock", "install.checkAction.processLock"];
     case "TARGET_ATOMIC_WRITE":
-    case "MATCH_STATE_ATOMIC_WRITE":
     case "PANEL_STATE_ATOMIC_WRITE": return ["install.checkCause.write", "install.checkAction.write"];
     case "TARGET_DISK_SPACE":
     case "BACKUP_DISK_SPACE": return ["install.checkCause.space", "install.checkAction.space"];

@@ -1,61 +1,58 @@
 import { useState } from "react";
 import Card from "../components/Card";
-import Segmented from "../components/Segmented";
 import { useToast } from "../components/Toast";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
 import { api } from "../lib/api";
-import type { GameMode } from "../lib/api";
 import "./ModeCard.css";
 
+/** The only launch mode exposed by the Cosmetics-only Panel. */
 export default function ModeCard() {
   const { mode, config, csgoPath, applyMode, reportError } = useStore();
   const toast = useToast();
   const t = useT();
-  const [pending, setPending] = useState<GameMode | null>(null);
-  const OPTIONS: { value: GameMode; label: string }[] = [
-    { value: "online", label: t("mode.online") },
-    { value: "preview", label: t("mode.preview") },
-    { value: "bots", label: t("mode.bot") },
-  ];
+  const [working, setWorking] = useState(false);
+  const current = mode?.current ?? config?.mode ?? "online";
+  const localReady = current === "preview";
 
-  // Optimistic: show the clicked option immediately; revert if the op fails.
-  const current: GameMode | null =
-    pending ?? mode?.current ?? ((config?.mode as GameMode | null) ?? null);
-
-  const onChange = async (m: GameMode) => {
-    setPending(m);
-    const info = await applyMode(m);
-    setPending(null);
-    if (!info) return;
-    toast.show(m === "online" ? "-insecure off" : "-insecure on", "green");
+  const prepareLocalMode = async () => {
+    if (!csgoPath || working) return;
+    setWorking(true);
+    try {
+      const info = await applyMode("preview");
+      if (info) toast.show(t("mode.launchPreview"), "green");
+    } finally {
+      setWorking(false);
+    }
   };
 
   const launch = async () => {
-    toast.show(t("mode.launching"));
+    if (!csgoPath || working) return;
+    setWorking(true);
     try {
+      await applyMode("preview");
       await api.launchCs2();
-    } catch (e) {
-      reportError(e);
+      toast.show(t("mode.launchPreview"), "green");
+    } catch (error) {
+      reportError(error);
+    } finally {
+      setWorking(false);
     }
   };
 
   return (
     <Card title={t("mode.title")}>
-      <Segmented
-        ariaLabel="Game mode"
-        value={current}
-        onChange={onChange}
-        disabled={!csgoPath}
-        options={OPTIONS}
-      />
-      <button className="mode__launch" disabled={!csgoPath} onClick={launch}>
-        {current === "online"
-          ? t("mode.launchOnline")
-          : current === "preview"
-            ? t("mode.launchPreview")
-            : t("mode.launchBots")}
-      </button>
+      <p className="selection-detail" aria-live="polite">
+        {localReady ? t("mode.preview") : t("mode.online")}
+      </p>
+      <div className="mode__actions">
+        <button disabled={!csgoPath || working || localReady} onClick={() => void prepareLocalMode()}>
+          {t("mode.preview")}
+        </button>
+        <button className="mode__launch" disabled={!csgoPath || working} onClick={() => void launch()}>
+          {working ? t("mode.launching") : t("mode.launchPreview")}
+        </button>
+      </div>
     </Card>
   );
 }

@@ -35,11 +35,11 @@ Configuration stores defindexes, paint kits, floats, integers, booleans, and nam
 used by the Panel search and display layer. Switching Steam accounts or Panel languages does not invalidate a preset;
 the same local practice installation applies it to eligible human players.
 
-## Matchmaking Isolation
+## Launch Isolation
 
-When Online Mode is selected, the backend records whether player cosmetics were enabled, disables them, verifies that
-the online `gameinfo.gi` does not load Metamod, and launches without `-insecure` or bot arguments. Returning to
-Enhanced Bots restores the previous enablement state and leaves all preset values intact.
+Normal Steam launches are not owned by the Panel. The Panel prepares the local Cosmetics Preview only after an explicit
+user action, adds the MetaMod SearchPath transactionally, launches with `-insecure`, and restores the clean
+`gameinfo.gi` through a bounded recovery helper. Unknown SearchPaths are preserved.
 
-This is a defense-in-depth workflow, not a promise about Valve policy. Do not load unsigned server modifications in a
+This is a defense-in-depth workflow, not a promise about Valve policy. Do not load unsigned modifications in a
 VAC-secured session.
