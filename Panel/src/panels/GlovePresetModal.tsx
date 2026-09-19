@@ -3,7 +3,7 @@ import Modal from "../components/Modal";
 import Toggle from "../components/Toggle";
 import WearGauge from "../components/WearGauge";
 import GLOVE_SKINS, { gloveModelName, type GloveSkin } from "../data/gloveSkins";
-import { finishName, localizedSkinName } from "../data/skinLocalization";
+import { finishName, localizedSkinName, matchSkinSearch } from "../data/skinLocalization";
 import { api, type GlovePreset, type KnifeCustomizerConfig } from "../lib/api";
 import { useT } from "../i18n";
 import { useStore } from "../state/store";
@@ -39,7 +39,14 @@ export default function GlovePresetModal({ open, csgoPath, config, onSaved, onEr
 
   const visible = useMemo(() => {
     const q = query.trim().toLocaleLowerCase();
-    return rows.filter((row) => !q || `${modelName(row.defindex)} ${skinName(row)} ${row.paint}`.toLocaleLowerCase().includes(q));
+    return rows.filter((row) => !q || matchSkinSearch({
+      query: q,
+      language,
+      weaponDefIndex: row.defindex,
+      paint: row.paint,
+      fallbackName: `${modelName(row.defindex)} | ${row.name}`,
+      extraTerms: [modelName(row.defindex), row.name, gloveModelName("english", row.defindex)],
+    }));
   // Labels follow the selected Panel language.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [language, query]);

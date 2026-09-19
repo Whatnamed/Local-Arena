@@ -7,7 +7,7 @@ import { api, type CosmeticsTeam, type KnifeCustomizerConfig, type KnifePreset }
 import type { WeaponIcon } from "../data/weaponIcons";
 import catalogRows from "../data/weaponSkins.json";
 import imageRows from "../data/skinImages.json";
-import { localizedSkinName } from "../data/skinLocalization";
+import { localizedSkinName, matchSkinSearch } from "../data/skinLocalization";
 import { useStore } from "../state/store";
 import { useSelectedPickerScroll } from "../lib/useSelectedPickerScroll";
 import { withPreservedGunPresetDecorations } from "../lib/stickerEditor";
@@ -33,7 +33,13 @@ export default function WeaponPresetModal({ weapon, team, csgoPath, config, onSa
   const allSkins = useMemo<Skin[]>(() => !weapon ? [] : (catalogRows as CatalogSkin[]).filter((row) => row.weapon_defindex === weapon.id && row.paint > 0).map((row) => ({ ...row, image: images.get(`${row.weapon_defindex}:${row.paint}`) })), [weapon]);
   const visible = useMemo(() => {
     const q = query.trim().toLocaleLowerCase();
-    return allSkins.filter((skin) => !q || `${localizedSkinName(appConfig?.language, skin.weapon_defindex, skin.paint, skin.name)} ${skin.paint}`.toLocaleLowerCase().includes(q));
+    return allSkins.filter((skin) => !q || matchSkinSearch({
+      query: q,
+      language: appConfig?.language,
+      weaponDefIndex: skin.weapon_defindex,
+      paint: skin.paint,
+      fallbackName: skin.name,
+    }));
   }, [allSkins, appConfig?.language, query]);
   const selected = allSkins.find((skin) => skin.paint === draft.paint);
 

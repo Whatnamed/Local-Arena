@@ -226,6 +226,8 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
         AddCommand("css_cs2bi_knives_reload", "Reload player knife presets", OnReloadCommand);
         AddCommand("css_cs2bi_knives_status", "Show player knife preset status", OnStatusCommand);
+        AddCommand("css_cs2bi_knife_next", "Cycle to next shortcut knife", OnKnifeNextCommand);
+        AddCommand("css_quick_knife", "Cycle to next shortcut knife (alias)", OnKnifeNextCommand);
 
         try
         {
@@ -1439,6 +1441,60 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         command.ReplyToCommand($"[PlayerKnifeCustomizer] enabled={_config.Enabled}, stickers={DecorationReleaseEnabled && _config.StickersEnabled}, charms={DecorationReleaseEnabled && _config.CharmsEnabled}, agents={DecorationReleaseEnabled && _config.AgentsEnabled}, signature={(_setAttrByName == null ? "missing" : "loaded")}, ct_knives={_config.Loadouts.Ct.KnifePresets.Count}, t_knives={_config.Loadouts.T.KnifePresets.Count}, ct_guns={_config.Loadouts.Ct.GunPresets.Count}, t_guns={_config.Loadouts.T.GunPresets.Count}, music={_config.MusicKitId}, catalog={_skinCatalog.Values.Sum(skins => skins.Count)}, sticker_catalog={_validStickers.Count}, charm_catalog={_validCharms.Count}, agent_catalog={_agentModels.Values.Sum(models => models.Count)}, active_generations={_applyTracker.ActiveCount}, schedules={_applyTracker.Schedules}, phase_completions={_applyTracker.PhaseCompletions}, retry_exhaustions={_applyTracker.RetryExhaustions}, context_invalidations={_applyTracker.ContextInvalidations}");
     }
 
+    private void OnKnifeNextCommand(CCSPlayerController? player, CommandInfo command)
+    {
+        if (!CanApplyToPlayer(player)) return;
+        var team = GetCosmeticTeam(player);
+        if (team == null) return;
+        var pawn = player!.PlayerPawn.Value;
+        if (pawn == null || !pawn.IsValid) return;
+
+        var weapons = pawn.WeaponServices?.MyWeapons;
+        if (weapons == null) return;
+
+        CBasePlayerWeapon? currentKnife = null;
+        ushort currentDefIndex = 0;
+        foreach (var handle in weapons)
+        {
+            var weapon = handle.Value;
+            if (weapon != null && weapon.IsValid && IsKnifeName(weapon.DesignerName))
+            {
+                currentKnife = weapon;
+                currentDefIndex = weapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
+                break;
+            }
+        }
+
+        IReadOnlyList<ushort> list = _config.ShortcutKnives is { Count: > 0 }
+            ? _config.ShortcutKnives
+            : KnifeShortcutCycle.DefaultShortcutKnives;
+        ushort nextDefIndex = KnifeShortcutCycle.GetNextKnifeDefIndex(currentDefIndex, list);
+
+        var loadout = _config.Loadouts.For(team.Value);
+        loadout.DefaultKnifeDefIndex = nextDefIndex;
+
+        if (!loadout.KnifePresets.TryGetValue(nextDefIndex, out var preset))
+        {
+            preset = new KnifePreset { Paint = 0, Seed = 0, Wear = 0.01f };
+            loadout.KnifePresets[nextDefIndex] = preset;
+        }
+
+        if (currentKnife != null)
+        {
+            currentKnife.AcceptInput("ChangeSubclass", value: nextDefIndex.ToString());
+            var item = currentKnife.AttributeManager?.Item;
+            if (item != null)
+            {
+                item.ItemDefinitionIndex = nextDefIndex;
+                ApplyPreset(currentKnife, nextDefIndex, preset);
+            }
+        }
+
+        string knifeName = KnifeShortcutCycle.GetKnifeDisplayName(nextDefIndex);
+        player.PrintToChat($" [LocalCosmetics] Knife switched to: {knifeName} (#{preset.Paint})");
+        SaveConfig();
+    }
+
     private void LogApplyError(string operation, Exception ex)
     {
         ApplyErrorDecision decision = _applyErrorThrottle.Check(operation, DateTimeOffset.UtcNow);
@@ -1682,6 +1738,9 @@ public sealed class KnifeConfig
     [JsonPropertyName("agents_enabled")]
     public bool AgentsEnabled { get; set; }
 
+    [JsonPropertyName("shortcut_knives")]
+    public List<ushort> ShortcutKnives { get; set; } = [];
+
     public static KnifeConfig FromLegacy(LegacyKnifeConfig legacy)
     {
         var baseLoadout = new TeamLoadout
@@ -1733,6 +1792,7 @@ public sealed class KnifeConfig
         Loadouts.Ct ??= new TeamLoadout();
         Loadouts.T ??= new TeamLoadout();
         SharedWeaponLinks ??= new Dictionary<ushort, bool>();
+        ShortcutKnives ??= [];
         MusicKitId = Math.Clamp(MusicKitId, 0, ushort.MaxValue);
         Loadouts.Ct.Normalize();
         Loadouts.T.Normalize();

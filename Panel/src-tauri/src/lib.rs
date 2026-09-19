@@ -459,6 +459,8 @@ struct KnifeCustomizerConfig {
     charms_enabled: bool,
     #[serde(default)]
     agents_enabled: bool,
+    #[serde(default)]
+    shortcut_knives: Vec<u16>,
 
     // Read-only v1 fields. They are migrated in memory and never serialized again.
     #[serde(default, skip_serializing)]
@@ -541,6 +543,7 @@ impl Default for KnifeCustomizerConfig {
             stickers_enabled: false,
             charms_enabled: false,
             agents_enabled: false,
+            shortcut_knives: Vec::new(),
             default_knife_defindex: 0,
             presets: BTreeMap::new(),
             gun_presets: BTreeMap::new(),
@@ -762,8 +765,17 @@ fn replace_cfg_command(path: &Path, command: &str, replacement: &str) -> Result<
     let text = fs::read_to_string(path)?;
     let mut found = false;
     let mut lines = Vec::new();
+    let unbind_prefix = if let Some(key) = command.strip_prefix("bind ") {
+        Some(format!("unbind {}", key.trim()))
+    } else {
+        None
+    };
+
     for line in text.lines() {
-        if line.trim_start().starts_with(command) {
+        let trimmed = line.trim_start();
+        let matches = trimmed.starts_with(command)
+            || unbind_prefix.as_ref().map_or(false, |p| trimmed.starts_with(p));
+        if matches {
             if !found {
                 lines.push(replacement.to_string());
                 found = true;
@@ -2030,17 +2042,29 @@ fn set_drop_knives(
     selected: Vec<u16>,
 ) -> Result<DropKnivesState> {
     let root = csgo_path(&csgo)?;
-    let commands = selected
-        .iter()
-        .map(|id| format!("subclass_create {id}"))
-        .collect::<Vec<_>>()
-        .join(";");
-    let line = format!("bind {bind_key} \"{commands}\"");
-    replace_managed_cfg_command(&root, "bind ", &line)?;
+    let line = if selected.is_empty() {
+        format!("unbind {bind_key}")
+    } else {
+        format!("bind {bind_key} \"css_quick_knife\"")
+    };
+    replace_managed_cfg_command(&root, &format!("bind {bind_key}"), &line)?;
+
+    let quickknife_cfg = root.join("cfg/cs2bi_quickknife.cfg");
+    if let Some(parent) = quickknife_cfg.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&quickknife_cfg, format!("{line}\r\n"));
+
     let mut config = read_config(&app)?;
     config.drop_knife_bind = bind_key;
-    config.drop_knife_subclasses = selected;
+    config.drop_knife_subclasses = selected.clone();
     write_config(&app, &config)?;
+
+    if let Ok(mut knife_cfg) = read_knife_config(&root) {
+        knife_cfg.shortcut_knives = selected;
+        let _ = save_knife_config(&root, &mut knife_cfg);
+    }
+
     get_drop_knives(app, csgo)
 }
 

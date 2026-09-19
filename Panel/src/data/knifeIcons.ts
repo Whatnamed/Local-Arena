@@ -1,9 +1,9 @@
 import skins from "./skinImages.json";
+import { DEFAULT_KNIFE_ORDER } from "./knifeOrdering";
 
 export type KnifeIcon = { id: number; url: string };
 
-const KNIFE_IDS = [500, 503, 505, 506, 507, 508, 509, 512, 514, 515, 516,
-  517, 518, 519, 520, 521, 522, 523, 525, 526];
+const KNIFE_IDS = DEFAULT_KNIFE_ORDER;
 
 type SkinRow = {
   weapon_defindex: number;

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test:stickers": "node ../scripts/test-sticker-editor.mjs",
-    "test:install-gate": "node ../scripts/test-install-gate.mjs"
+    "test:install-gate": "node ../scripts/test-install-gate.mjs",
+    "test:phase-f": "node ../scripts/test-phase-f.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",

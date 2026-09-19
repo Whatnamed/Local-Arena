@@ -6,7 +6,8 @@ import { api, type KnifeCustomizerConfig, type KnifePreset } from "../lib/api";
 import type { KnifeIcon } from "../data/knifeIcons";
 import imageRows from "../data/skinImages.json";
 import catalogRows from "../data/weaponSkins.json";
-import { finishName, itemName, localizedSkinName } from "../data/skinLocalization";
+import { finishName, itemName, localizedSkinName, matchSkinSearch } from "../data/skinLocalization";
+import { sortKnifeSkins } from "../data/knifeOrdering";
 import { useT, type I18nKey } from "../i18n";
 import { useStore } from "../state/store";
 import CosmeticsTeamSwitch, { useCosmeticsTeam } from "../components/CosmeticsTeamSwitch";
@@ -87,10 +88,22 @@ export default function KnifePresetModal({ knife, csgoPath, config, onSaved, onE
   };
   const skins = useMemo(() => {
     const q = query.trim().toLocaleLowerCase();
-    return allSkins.filter((row) => !q || label(row).toLocaleLowerCase().includes(q));
-  // The label follows the selected Panel language.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allSkins, language, query]);
+    const filtered = allSkins.filter((row) => {
+      if (!q) return true;
+      const phase = PHASE_NAMES[row.paint];
+      const phaseLabel = typeof phase === "string" && phase.startsWith("phase.")
+        ? t(phase as I18nKey)
+        : phase;
+      return matchSkinSearch({
+        query: q,
+        language,
+        weaponDefIndex: row.weapon_defindex,
+        paint: row.paint,
+        extraTerms: [phaseLabel, typeof phase === "string" ? phase : undefined],
+      });
+    });
+    return sortKnifeSkins(filtered);
+  }, [allSkins, language, query, t]);
   const selectedSkin = allSkins.find((row) => row.paint === draft.paint);
   const selectedCatalog = knife ? catalog.get(`${knife.id}:${draft.paint}`) : undefined;
 

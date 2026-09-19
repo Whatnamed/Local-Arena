@@ -430,5 +430,29 @@ using (var scheduler = new DebounceScheduler(50))
     Require(executedCount == 1, $"DebounceScheduler must collapse rapid bursts into 1 invocation (actual: {executedCount}).");
 }
 
-Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, diff-engine, debouncer, and log-throttle tests passed.");
+// --- KnifeShortcutCycle Tests ---
+// 1. Default sequence verification (Karambit -> Butterfly -> M9 -> Bayonet -> Skeleton -> Falchion -> Karambit)
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(0) == 507, "Default knife from 0 must be 507 (Karambit).");
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(507) == 515, "Next knife from Karambit (507) must be Butterfly (515).");
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(515) == 508, "Next knife from Butterfly (515) must be M9 Bayonet (508).");
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(508) == 500, "Next knife from M9 Bayonet (508) must be Bayonet (500).");
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(500) == 525, "Next knife from Bayonet (500) must be Skeleton (525).");
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(525) == 512, "Next knife from Skeleton (525) must be Falchion (512).");
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(512) == 507, "Next knife from Falchion (512) must wrap around to Karambit (507).");
+
+// 2. Unknown knife defindex falls back to first knife in list
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(503) == 507, "Unknown knife defindex (503) must cycle to first knife (507).");
+
+// 3. Custom list support
+ushort[] customCycle = [508, 525];
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(508, customCycle) == 525, "Custom cycle 508 -> 525.");
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(525, customCycle) == 508, "Custom cycle 525 -> 508 (wraparound).");
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(507, customCycle) == 508, "Out of list knife -> 508.");
+
+// 4. Knife display names
+Require(KnifeShortcutCycle.GetKnifeDisplayName(507) == "Karambit", "507 display name must be Karambit.");
+Require(KnifeShortcutCycle.GetKnifeDisplayName(515) == "Butterfly Knife", "515 display name must be Butterfly Knife.");
+Require(KnifeShortcutCycle.GetKnifeDisplayName(508) == "M9 Bayonet", "508 display name must be M9 Bayonet.");
+
+Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, diff-engine, debouncer, knife-shortcut, and log-throttle tests passed.");
 
