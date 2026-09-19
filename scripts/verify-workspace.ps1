@@ -4,11 +4,18 @@ param(
     [string]$ExpectedPackageVersion = "1.4.3.3"
 )
 
+# Cosmetics-only workspace and release audit.
+#
+# In workspace mode this checks that the Bot / match / update surface really is
+# gone from the source tree and that the shipped cosmetic catalogs still agree
+# with their generators. With -PackageRoot it additionally audits a staged
+# release against scripts/release-inventory.json, which is the same list
+# scripts/package.ps1 assembled the package from.
+
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
-$manifestPath = Join-Path $PSScriptRoot "dependencies.json"
-$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-. (Join-Path $PSScriptRoot "VpkTools.ps1")
+$manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot "dependencies.json") -Raw | ConvertFrom-Json
+$inventory = Get-Content -LiteralPath (Join-Path $PSScriptRoot "release-inventory.json") -Raw | ConvertFrom-Json
 $failures = [Collections.Generic.List[string]]::new()
 
 function Add-Failure([string]$Message) {
@@ -19,6 +26,23 @@ function Assert-File([string]$Path, [string]$Label) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         Add-Failure "Missing $Label`: $Path"
     }
+}
+
+function Test-ForbiddenReleasePath([string]$Relative) {
+    $segments = $Relative -split "/"
+    $leaf = $segments[-1]
+    $hit = @($segments | Where-Object { $inventory.forbidden_segments -contains $_ })
+    if ($inventory.forbidden_file_names -contains $leaf) { $hit += $leaf }
+    if ($leaf -match '(?i)^(?:bot|my_bot)' -or $leaf -match '(?i)botprofile') { $hit += $leaf }
+    if ($inventory.forbidden_extensions -contains [IO.Path]::GetExtension($leaf)) { $hit += $leaf }
+    return $hit
+}
+
+function Get-RelativePaths([string]$Root) {
+    @(Get-ChildItem -LiteralPath $Root -Recurse -Force | ForEach-Object {
+        if ($_.PSIsContainer) { return }
+        [IO.Path]::GetRelativePath($Root, $_.FullName).Replace("\", "/")
+    } | Sort-Object)
 }
 
 function Get-JsonCount([string]$RelativePath) {
@@ -46,179 +70,96 @@ function Get-JsonCount([string]$RelativePath) {
     }
 }
 
-$base = if ($manifest.upstream.sourceCommit) { $manifest.upstream.sourceCommit } else { $manifest.upstream.baseCommit }
+function Get-SourceText([string]$RelativePath) {
+    $path = Join-Path $repo $RelativePath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Add-Failure "Missing source file $RelativePath"
+        return ""
+    }
+    Get-Content -LiteralPath $path -Raw
+}
 
 $localBuildConfig = Join-Path $repo ".local-build.ps1"
 if ($env:GITHUB_ACTIONS -ne "true" -and -not (Test-Path -LiteralPath $localBuildConfig -PathType Leaf)) {
     Add-Failure "Local build configuration is missing; run the workspace setup before building."
 }
-$buildScript = Get-Content -LiteralPath (Join-Path $repo "scripts/build.ps1") -Raw
-$privateToolLabel = "portable" + "-toolchain"
-if ($buildScript.Contains($privateToolLabel, [StringComparison]::OrdinalIgnoreCase)) {
-    Add-Failure "Build scripts must not expose the local tool directory name."
-}
-
-& git -C $repo cat-file -e "$base^{commit}" 2>$null
-$baseAvailable = $LASTEXITCODE -eq 0
-if (-not $baseAvailable -and $env:GITHUB_ACTIONS -eq "true") {
-    & git -C $repo fetch --no-tags --depth=1 $manifest.upstream.repository $base
-    if ($LASTEXITCODE -eq 0) {
-        & git -C $repo cat-file -e "$base^{commit}" 2>$null
-        $baseAvailable = $LASTEXITCODE -eq 0
-    }
-}
-if (-not $baseAvailable) {
-    Add-Failure "Pinned upstream commit is unavailable: $base"
-}
-else {
-    $upstreamModules = @(
-        "addons/counterstrikesharp/plugins/BotAI",
-        "addons/counterstrikesharp/plugins/BotAimImprover",
-        "addons/counterstrikesharp/plugins/BotBuy",
-        "addons/counterstrikesharp/plugins/BotControllerImpl",
-        "addons/counterstrikesharp/plugins/BotHiderImpl",
-        "addons/counterstrikesharp/plugins/BotRandomizer",
-        "addons/counterstrikesharp/plugins/BotState",
-        "addons/counterstrikesharp/plugins/NadeSystem",
-        "addons/counterstrikesharp/plugins/RoundDamageRecap",
-        "overrides"
-    )
-    $changed = @(
-        foreach ($module in $upstreamModules) {
-            & git -C $repo diff --ignore-space-at-eol --quiet $base -- $module
-            if ($LASTEXITCODE -eq 1) {
-                & git -C $repo diff --ignore-space-at-eol --name-only $base -- $module
-            }
-            elseif ($LASTEXITCODE -ne 0) {
-                Add-Failure "Unable to compare upstream enhanced-bot module: $module"
-            }
-        }
-    )
-    $allowedUpstreamChanges = @(
-        "addons/counterstrikesharp/plugins/BotAimImprover/BotAimImprover.cs",
-        "addons/counterstrikesharp/plugins/BotAimImprover/BotAimImprover.csproj",
-        "addons/counterstrikesharp/plugins/BotBuy/BotBuy.cs",
-        "addons/counterstrikesharp/plugins/BotBuy/BotBuy.csproj",
-        "addons/counterstrikesharp/plugins/BotRandomizer/BotRandomizer.cs",
-        "addons/counterstrikesharp/plugins/BotRandomizer/Cosmetics/CosmeticModels.cs",
-        "addons/counterstrikesharp/plugins/BotRandomizer/bot_randomizer_options.json",
-        "addons/counterstrikesharp/plugins/BotControllerImpl/BotControllerImpl.csproj",
-        "addons/counterstrikesharp/plugins/BotControllerImpl/BotController.NativeApi.cs",
-        "addons/counterstrikesharp/plugins/BotControllerImpl/BotControllerApiImpl.cs",
-        "addons/counterstrikesharp/plugins/BotControllerImpl/BotControllerCapability.cs",
-        "addons/counterstrikesharp/plugins/BotControllerImpl/BotControllerImplPlugin.cs",
-        "addons/counterstrikesharp/plugins/BotControllerImpl/MotionRecording.cs",
-        "addons/counterstrikesharp/plugins/BotControllerImpl/ReplayDriver.cs",
-        "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImpl.csproj",
-        "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImplPlugin.cs",
-        "addons/counterstrikesharp/plugins/NadeSystem/NadeSystem.cs",
-        "addons/counterstrikesharp/plugins/NadeSystem/NadeSystem.csproj",
-        "addons/counterstrikesharp/plugins/RoundDamageRecap/RoundDamageRecap.cs",
-        "addons/counterstrikesharp/plugins/RoundDamageRecap/RoundDamageRecap.csproj",
-        "overrides/Low/botprofile.db",
-        "overrides/Medium/botprofile.db",
-        "overrides/High/botprofile.db"
-    )
-    $unexpectedChanges = @($changed | Where-Object { $_ -notin $allowedUpstreamChanges })
-    if ($unexpectedChanges.Count -gt 0) {
-        Add-Failure "Upstream enhanced-bot modules were modified: $($unexpectedChanges -join ', ')"
+foreach ($script in @("build.ps1", "package.ps1")) {
+    $text = Get-SourceText "scripts/$script"
+    if ($text -match 'portable' + '-toolchain') {
+        Add-Failure "scripts/$script must not expose the local tool directory name."
     }
 }
 
-$botAiProject = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotAI/BotAI.csproj") -Raw
-if ($botAiProject -match 'Tmp\\ArchiveV02\\Common') {
-    Add-Failure "BotAI still references the machine-specific Common.dll path."
-}
-
-$botAimImprover = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotAimImprover/BotAimImprover.cs") -Raw
-$botBehaviorPolicy = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/shared/MatchCore/BotBehaviorPolicy.cs") -Raw
-if ($botAimImprover -match 'MemoryFunction|DynamicHook|\.Hook\(' -or
-    $botAimImprover -match 'WindowsOffsets|LinuxOffsets|ReadIntPtr|ReadInt32|ReadByte' -or
-    $botAimImprover -notmatch 'RegisterListener<Listeners\.OnTick>\(OnTick\)' -or
-    $botAimImprover -notmatch 'pawn\?\.Bot' -or
-    $botAimImprover -notmatch 'bot\.TargetSpot' -or
-    $botAimImprover -notmatch 'BotAimPolicy\.SelectPriority' -or
-    $botAimImprover -notmatch 'AimPointIndex' -or
-    $botAimImprover -notmatch 'TargetSpot write verification failed' -or
-    $botBehaviorPolicy -notmatch 'BotAimMode\.Head when string\.Equals\(weapon, "weapon_awp"' -or
-    $botBehaviorPolicy -notmatch 'BotAimMode\.Head => BotAimPriority\.Head') {
-    Add-Failure "BotAimImprover must use managed CCSBot schema targeting without native function hooks or manual offsets."
-}
-$panelBackend = Get-Content -LiteralPath (Join-Path $repo "Panel/src-tauri/src/lib.rs") -Raw
-if ($panelBackend -match 'aim_supported: true' -or
-    $panelBackend -notmatch 'aim_supported,' -or
-    $panelBackend -notmatch '\.csbip/aim-runtime\.json' -or
-    $panelBackend -notmatch 'aim_override_count') {
-    Add-Failure "Panel backend must expose the managed bot aim modes on Windows."
-}
-
-$botBuy = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotBuy/BotBuy.cs") -Raw
-if (([regex]::Matches($botBuy, 'AddTimer\(').Count -ne 1) -or
-    ([regex]::Matches($botBuy, 'ScheduleRound\(').Count -lt 12) -or
-    $botBuy -notmatch 'BotCallbackGeneration' -or
-    $botBuy -notmatch 'TimerFlags\.STOP_ON_MAPCHANGE' -or
-    $botBuy -notmatch 'ResolvePlayer\(userId\)' -or
-    $botBuy -notmatch 'ManagedMatchRuntimeStore\.IsPurchasingAllowed' -or
-    $botBuy -notmatch 'HasWeapon\(player, oldItem\)') {
-    Add-Failure "BotBuy no longer guards delayed callbacks against invalid CounterStrikeSharp controllers."
-}
-
-$nadeSystem = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/NadeSystem/NadeSystem.cs") -Raw
-if ($nadeSystem -notmatch 'if \(!bot\.IsValid\) return;' -or
-    $nadeSystem -notmatch 'botPawn = bot\.PlayerPawn\?\.Value;' -or
-    $nadeSystem -notmatch 'catch \(Exception\)\s*\{\s*return;\s*\}') {
-    Add-Failure "NadeSystem no longer guards delayed callbacks against disconnected bot pawns."
-}
-if ($nadeSystem -notmatch '_botNadesMode == "less"' -or
-    $nadeSystem -notmatch 'LessModeAllows\(' -or
-    $nadeSystem -notmatch 'IncrementBotCount\(') {
-    Add-Failure "NadeSystem no longer contains the upstream 1.4.3 Less mode limits."
-}
-$nadeDataRoot = Join-Path $repo "addons/counterstrikesharp/plugins/NadeSystem/grenades"
-$nadeDataFiles = @(Get-ChildItem -LiteralPath $nadeDataRoot -Filter "*.json" -File -ErrorAction SilentlyContinue)
-if ($nadeDataFiles.Count -ne 48) {
-    Add-Failure "NadeSystem must ship the frozen 48-file grenade catalog; found $($nadeDataFiles.Count)."
-}
-foreach ($nadeDataFile in $nadeDataFiles) {
-    try {
-        $nadeEntries = @(Get-Content -LiteralPath $nadeDataFile.FullName -Raw | ConvertFrom-Json)
-        if ($nadeEntries.Count -eq 0) {
-            Add-Failure "NadeSystem grenade catalog is empty: $($nadeDataFile.Name)"
-        }
-    }
-    catch {
-        Add-Failure "NadeSystem grenade catalog is invalid: $($nadeDataFile.Name): $($_.Exception.Message)"
+# The product boundary: no enhanced-bot, match or game-mode runtime in the tree.
+foreach ($removed in @("cfg", "overrides", "addons/BotHider", "addons/RayTrace", "addons/metamod")) {
+    if (Test-Path -LiteralPath (Join-Path $repo $removed)) {
+        Add-Failure "The Cosmetics-only product must not carry a $removed directory."
     }
 }
-
-$matchCoordinator = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlusMatchCoordinator/PlusMatchCoordinator.cs") -Raw
-if ($matchCoordinator -notmatch 'private void EnsureInitialHumanSide\(\)' -or
-    $matchCoordinator -notmatch 'if \(human\.Team != target\) human\.SwitchTeam\(target\);' -or
-    ([regex]::Matches($matchCoordinator, 'EnsureInitialHumanSide\(\);').Count -ne 2) -or
-    ([regex]::Matches($matchCoordinator, '\.SwitchTeam\(').Count -ne 1)) {
-    Add-Failure "PlusMatchCoordinator may force the local player back to the initial side after halftime."
+$pluginDirectories = @(Get-ChildItem -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins") -Directory |
+    ForEach-Object Name)
+foreach ($plugin in @($pluginDirectories | Where-Object { $_ -notin @("PlayerKnifeCustomizer", "PlayerKnifeCustomizer.Tests") })) {
+    Add-Failure "Unexpected plugin project remains: $plugin"
+}
+if ($pluginDirectories -notcontains "PlayerKnifeCustomizer") {
+    Add-Failure "The cosmetics plugin project is missing."
+}
+foreach ($removed in @(
+    "Panel/src-tauri/src/mode_files.rs",
+    "Panel/src-tauri/src/mode_layout.rs",
+    "Panel/src-tauri/src/cs2ss_bridge.rs",
+    "Panel/src-tauri/src/match_system.rs",
+    "Panel/src-tauri/src/online_update.rs",
+    "Panel/src-tauri/src/update_core.rs"
+)) {
+    if (Test-Path -LiteralPath (Join-Path $repo $removed)) {
+        Add-Failure "Removed Panel backend module is back: $removed"
+    }
+}
+$panelSources = @(Get-ChildItem -LiteralPath (Join-Path $repo "Panel/src") -Recurse -File -Include *.ts, *.tsx |
+    ForEach-Object { [IO.Path]::GetRelativePath((Join-Path $repo "Panel/src"), $_.FullName).Replace("\", "/") })
+foreach ($stale in @($panelSources | Where-Object {
+    $_ -match '(?i)(match|nade|bot|lineup|telemetry|rating|demo|mode)[^/]*\.(ts|tsx)$' -and
+    $_ -notin @("lib/modeLayout.ts")
+})) {
+    Add-Failure "Unexpected Bot-era Panel source is back: $stale"
 }
 
-$roundDamageRecap = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/RoundDamageRecap/RoundDamageRecap.cs") -Raw
-if ($roundDamageRecap -notmatch 'PlusManagedPaths\.ActiveMatchPath' -or
-    $roundDamageRecap -notmatch 'PlusMatchCoordinator owns match statistics') {
-    Add-Failure "RoundDamageRecap no longer yields PLUS match statistics ownership."
+$playerCosmetics = Get-SourceText "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.cs"
+if ($playerCosmetics -notmatch "RetryDelays = \[0\.10f, 0\.25f, 0\.50f, 0\.90f\]") {
+    Add-Failure "The cosmetics apply pipeline no longer has its bounded retry schedule."
 }
-
-$matchPanel = Get-Content -LiteralPath (Join-Path $repo "Panel/src/panels/MatchPanel.tsx") -Raw
-if ($matchPanel -notmatch 'localStorage\.getItem\("cs2bi\.matchDemoV2"\) === "1"' -or
-    $matchPanel -notmatch 'match\.demoWarning') {
-    Add-Failure "Match Panel no longer keeps GOTV opt-in with a performance warning."
+if ($playerCosmetics -notmatch "FileSystemWatcher" -or $playerCosmetics -notmatch "ConfigReloadGate") {
+    Add-Failure "Live preset reload must stay event-driven through a watcher and a debounce gate."
+}
+if ($playerCosmetics -notmatch "WeaponProvenance") {
+    Add-Failure "Weapon presets must be gated by entity provenance."
+}
+if ($playerCosmetics -match "ItemPickup|OnEntitySpawned|NextWorldUpdate|TryApplyDroppedKnife") {
+    Add-Failure "The plugin must not reskin picked-up or foreign weapon entities."
+}
+if ($playerCosmetics -notmatch "GameinfoIsolation|PanelIsolationMarker") {
+    Add-Failure "The plugin must keep healing the launch-isolation window it was started in."
+}
+$panelBackend = Get-SourceText "Panel/src-tauri/src/lib.rs"
+if ($panelBackend -notmatch "launch_isolation::prepare_local_launch" -or
+    $panelBackend -notmatch "fn spawn_local_launch") {
+    Add-Failure "The Panel must keep launching local cosmetics through the transactional isolation module."
 }
 
 $requiredSources = @(
-    "Panel/src-tauri/src/lib.rs",
+    "Panel/src-tauri/src/launch_isolation.rs",
+    "Panel/src-tauri/src/install_checks.rs",
+    "Panel/src-tauri/src/installer.rs",
+    "Panel/src/lib/launchGate.ts",
+    "Panel/src/panels/LaunchCard.tsx",
+    "Panel/src/panels/WeaponPresetsPanel.tsx",
     "Panel/src/panels/KnifePresetModal.tsx",
     "Panel/src/panels/GlovePresetModal.tsx",
-    "Panel/src/panels/WeaponPresetModal.tsx",
     "Panel/src/panels/MusicKitPresetModal.tsx",
     "Panel/src/panels/StickersPanel.tsx",
-    "Panel/src/panels/StickersPanel.css",
+    "Panel/src/data/cosmeticOrder.ts",
+    "Panel/src/data/gloveFinishNames.json",
     "Panel/src/data/stickerCatalog.json",
     "Panel/src/data/stickerCatalog.source.json",
     "Panel/src/data/stickerWeaponIds.json",
@@ -226,91 +167,26 @@ $requiredSources = @(
     "Panel/src/data/charmCatalog.json",
     "Panel/src/data/agentCatalog.json",
     "Panel/src/lib/stickerEditor.ts",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/WeaponProvenance.cs",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/CosmeticConfigChange.cs",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/LaunchIsolation.cs",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_weapon_ids.json",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
     "scripts/generate-sticker-catalog.mjs",
     "scripts/generate-player-cosmetic-placements.mjs",
     "scripts/test-sticker-editor.mjs",
-    "addons/counterstrikesharp/plugins/BotRandomizer/BotRandomizer.cs",
-    "addons/counterstrikesharp/plugins/BotRandomizer/Cosmetics/CosmeticModels.cs",
-    "addons/counterstrikesharp/plugins/BotRandomizer/charm_placements.json",
-    "addons/counterstrikesharp/plugins/BotRandomizer/cosmetic_catalog.json",
-    "addons/counterstrikesharp/plugins/BotControllerImpl/BotControllerImplPlugin.cs",
-    "addons/counterstrikesharp/plugins/BotRandomizer/bot_randomizer_options.json",
-    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.cs",
-    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_weapon_ids.json",
-    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
-    "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImplPlugin.cs",
-    "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.cs",
-    "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.csproj",
-    "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.cs",
-    "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.csproj"
+    "scripts/test-cosmetic-order.mjs",
+    "scripts/release-inventory.json",
+    "docs/PRODUCT-SCOPE.md",
+    "docs/MANUAL-ACCEPTANCE.md",
+    "docs/UPSTREAM.md",
+    "LICENSE"
 )
 foreach ($relative in $requiredSources) {
     Assert-File (Join-Path $repo $relative) $relative
 }
 
-$playerCosmetics = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.cs") -Raw
-$botRandomizer = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotRandomizer/BotRandomizer.cs") -Raw
-$botRandomizerModels = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotRandomizer/Cosmetics/CosmeticModels.cs") -Raw
-if ($botRandomizer -notmatch 'LoadOptions\(\);' -or
-    $botRandomizer -notmatch '_options\.Skins && _weaponItemViews\?\.NativeAvailable' -or
-    $botRandomizer -notmatch 'includeStickers: true' -or
-    $botRandomizer -notmatch 'includeCharms: true' -or
-    $botRandomizer -notmatch 'IsBot: true, IsHLTV: false' -or
-    $botRandomizerModels -notmatch 'JsonPropertyName\("skins"\)' -or
-    $botRandomizerModels -notmatch 'JsonPropertyName\("profiles"\)' -or
-    $botRandomizerModels -notmatch 'JsonPropertyName\("agents"\)' -or
-    $botRandomizerModels -notmatch 'JsonPropertyName\("music"\)') {
-    Add-Failure "BotRandomizer no longer combines upstream Bot cosmetics with Local Arena feature gates."
-}
-if ($playerCosmetics -notmatch 'IsBot: false, IsHLTV: false' -or
-    $playerCosmetics -notmatch 'DecorationReleaseEnabled = true' -or
-    $playerCosmetics -notmatch 'CharmAttributePlanner' -or
-    -not $playerCosmetics.Contains('CosmeticApplyPhase.Agent') -or
-    -not $playerCosmetics.Contains('pawn.SetModel(model)') -or
-    $playerCosmetics -notmatch 'player_cosmetic_catalog.json') {
-    Add-Failure "Player cosmetics must remain human-only with catalog-validated sticker, charm, and agent planning."
-}
-$giveHookStart = $playerCosmetics.IndexOf("private HookResult OnGiveNamedItemPost", [StringComparison]::Ordinal)
-$nextMethodStart = $playerCosmetics.IndexOf("private static CCSPlayerController? GetPlayerFromItemServices", [StringComparison]::Ordinal)
-if ($giveHookStart -lt 0 -or $nextMethodStart -le $giveHookStart) {
-    Add-Failure "PlayerCosmetics purchased-weapon lifecycle guard is missing."
-}
-else {
-    $giveHook = $playerCosmetics.Substring($giveHookStart, $nextMethodStart - $giveHookStart)
-    if ($giveHook -notmatch "_applyTracker\.Begin\(playerHandle, CosmeticApplyPhase\.Guns\)" -or
-        $giveHook -notmatch "ScheduleApplyCallbacks\(playerHandle, generation\)" -or
-        $giveHook -match "ApplyPreset\(" -or
-        $giveHook -match "_setAttrByName.*Invoke") {
-        Add-Failure "PlayerCosmetics GiveNamedItem hook must defer native writes into the bounded generation pipeline."
-    }
-}
-if ($playerCosmetics -notmatch "Server\.NextFrame\(\(\) => RunApplyPipeline\(playerHandle, generation, false\)\)" -or
-    $playerCosmetics -notmatch "RetryDelays = \[0\.10f, 0\.25f, 0\.50f, 0\.90f\]" -or
-    $playerCosmetics -notmatch "finalAttempt = index == ApplyPipelineContext\.RetryDelays\.Length - 1" -or
-    $playerCosmetics -notmatch "player\.PawnIsAlive" -or
-    $playerCosmetics -notmatch "TryBindContext\(playerHandle, generation, readyPawn\.Handle, \(int\)readyTeam\)") {
-    Add-Failure "PlayerCosmetics generation pipeline no longer has bounded retries and Pawn/team context validation."
-}
-if ($playerCosmetics -notmatch "private static bool HasReadyAttributeLists\(CEconItemView item\)" -or
-    ([regex]::Matches($playerCosmetics, "HasReadyAttributeLists\(item\)").Count -lt 3)) {
-    Add-Failure "PlayerCosmetics native attribute handles are not validated at every write entry point."
-}
-if ($playerCosmetics -notmatch '"sticker slot \{sticker\.Slot\}"' -or
-    $playerCosmetics -notmatch "BitConverter\.Int32BitsToSingle" -or
-    $playerCosmetics -notmatch "TryMarkReequip\(player\.Handle, generation\)" -or
-    ([regex]::Matches($playerCosmetics, 'ExecuteClientCommand\("lastinv"\)').Count -ne 2)) {
-    Add-Failure "PlayerCosmetics sticker attributes or single-generation re-equip fallback are incomplete."
-}
-if ($playerCosmetics -match "RegisterListener<Listeners\.OnEntitySpawned>" -or
-    $playerCosmetics -match "TryApplyDroppedKnife" -or
-    $playerCosmetics -match "Server\.NextWorldUpdate") {
-    Add-Failure "PlayerCosmetics must not retain raw entity pointers across world updates for dropped knives."
-}
-
 $jsonFiles = @(
-    "addons/BotHider/bot_info.json",
-    "addons/BotHider/gamedata.json",
-    "addons/BotHider/map_whitelist.json",
     "Panel/src/data/gloveSkins.json",
     "Panel/src/data/musicKits.json",
     "Panel/src/data/skinImages.json",
@@ -321,15 +197,12 @@ $jsonFiles = @(
     "Panel/src/data/cosmeticPlacements.json",
     "Panel/src/data/charmCatalog.json",
     "Panel/src/data/agentCatalog.json",
+    "Panel/src/data/gloveFinishNames.json",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_ids.json",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_weapon_ids.json",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
-    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_gun_presets.json",
-    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_knife_presets.json",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/skins_en.json",
-    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/weapon_skins.json",
-    "addons/counterstrikesharp/plugins/BotRandomizer/charm_placements.json",
-    "addons/counterstrikesharp/plugins/BotRandomizer/cosmetic_catalog.json"
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/weapon_skins.json"
 )
 $counts = @{}
 foreach ($relative in $jsonFiles) {
@@ -343,27 +216,13 @@ if ((Get-FileHash -LiteralPath $catalogA -Algorithm SHA256).Hash -ne
     Add-Failure "Panel and plugin weapon catalogs are not identical."
 }
 
-$panelApi = Get-Content -LiteralPath (Join-Path $repo "Panel/src/lib/api.ts") -Raw
-$panelPresets = Get-Content -LiteralPath (Join-Path $repo "Panel/src/panels/PresetsPanel.tsx") -Raw
-$panelBackend = Get-Content -LiteralPath (Join-Path $repo "Panel/src-tauri/src/lib.rs") -Raw
-if ($panelApi -notmatch '"less"' -or
-    $panelPresets -notmatch 'value: "less"' -or
-    $panelBackend -notmatch '"normal", "less", "off"') {
-    Add-Failure "The Panel and Rust backend no longer expose the upstream NadeSystem Less mode."
-}
-
-$stickerSourcePath = Join-Path $repo "Panel/src/data/stickerCatalog.source.json"
 try {
-    $stickerSource = Get-Content -LiteralPath $stickerSourcePath -Raw | ConvertFrom-Json
-    $stickerPanel = Join-Path $repo "Panel/src/data/stickerCatalog.json"
-    $stickerPlugin = Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_ids.json"
-    $stickerWeaponPanel = Join-Path $repo "Panel/src/data/stickerWeaponIds.json"
-    $stickerWeaponPlugin = Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_weapon_ids.json"
-    $stickerGenerator = Get-Content -LiteralPath (Join-Path $repo "scripts/generate-sticker-catalog.mjs") -Raw
-    $panelHash = (Get-FileHash -LiteralPath $stickerPanel -Algorithm SHA256).Hash.ToLowerInvariant()
-    $pluginHash = (Get-FileHash -LiteralPath $stickerPlugin -Algorithm SHA256).Hash.ToLowerInvariant()
-    $weaponPanelHash = (Get-FileHash -LiteralPath $stickerWeaponPanel -Algorithm SHA256).Hash.ToLowerInvariant()
-    $weaponPluginHash = (Get-FileHash -LiteralPath $stickerWeaponPlugin -Algorithm SHA256).Hash.ToLowerInvariant()
+    $stickerSource = Get-Content -LiteralPath (Join-Path $repo "Panel/src/data/stickerCatalog.source.json") -Raw | ConvertFrom-Json
+    $stickerGenerator = Get-SourceText "scripts/generate-sticker-catalog.mjs"
+    $panelHash = (Get-FileHash -LiteralPath (Join-Path $repo "Panel/src/data/stickerCatalog.json") -Algorithm SHA256).Hash.ToLowerInvariant()
+    $pluginHash = (Get-FileHash -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_ids.json") -Algorithm SHA256).Hash.ToLowerInvariant()
+    $weaponPanelHash = (Get-FileHash -LiteralPath (Join-Path $repo "Panel/src/data/stickerWeaponIds.json") -Algorithm SHA256).Hash.ToLowerInvariant()
+    $weaponPluginHash = (Get-FileHash -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_weapon_ids.json") -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($stickerSource.schema_version -ne 1 -or
         $stickerSource.outputs.count -ne $counts["Panel/src/data/stickerCatalog.json"] -or
         $counts["Panel/src/data/stickerCatalog.json"] -ne $counts["addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_ids.json"] -or
@@ -387,7 +246,7 @@ try {
     $panelCharms = @(Get-Content -LiteralPath (Join-Path $repo "Panel/src/data/charmCatalog.json") -Raw | ConvertFrom-Json)
     $panelAgents = @(Get-Content -LiteralPath (Join-Path $repo "Panel/src/data/agentCatalog.json") -Raw | ConvertFrom-Json)
     $pluginCosmetics = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json") -Raw | ConvertFrom-Json
-    $placementGenerator = Get-Content -LiteralPath (Join-Path $repo "scripts/generate-player-cosmetic-placements.mjs") -Raw
+    $placementGenerator = Get-SourceText "scripts/generate-player-cosmetic-placements.mjs"
     if ($pluginCosmetics.schema_version -ne 1 -or
         $counts["Panel/src/data/cosmeticPlacements.json"] -ne 35 -or
         $panelCharms.Count -ne 81 -or
@@ -410,56 +269,6 @@ catch {
     Add-Failure "Player cosmetic placement metadata is invalid: $($_.Exception.Message)"
 }
 
-$teamLineupInjector = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.cs") -Raw
-if ($teamLineupInjector -notmatch 'MatchSessionActive\(\)' -or
-    $teamLineupInjector -notmatch 'config is not \{ Enabled: true \}' -or
-    $teamLineupInjector -notmatch '"bot_kick"' -or
-    $teamLineupInjector -notmatch 'RestoreBotQuota\(\)') {
-    Add-Failure "TeamLineupInjector must check Enabled and MatchSessionActive before bot_kick."
-}
-
-$matchCatalog = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlusMatchCoordinator/match_catalog.json") -Raw | ConvertFrom-Json
-$featuredPlayers = @($matchCatalog.teams | ForEach-Object { $_.players } | Sort-Object -Unique)
-
-function Assert-BotProfileContent([string]$Profile, [string]$Label) {
-    foreach ($player in $featuredPlayers) {
-        if ($Profile -notmatch ('"' + [regex]::Escape($player) + '"')) {
-            Add-Failure "$Label is missing featured player $player."
-        }
-    }
-    foreach ($match in [regex]::Matches($Profile, '(?m)^\s*LookAngleMaxAccel(?:Normal|Attacking)\s*=\s*(\S+)')) {
-        $token = $match.Groups[1].Value
-        $value = 0.0
-        $valid = [double]::TryParse(
-            $token,
-            [Globalization.NumberStyles]::Float,
-            [Globalization.CultureInfo]::InvariantCulture,
-            [ref]$value
-        )
-        if (-not $valid -or [double]::IsNaN($value) -or [double]::IsInfinity($value) -or $value -lt 0 -or $value -gt 20000) {
-            Add-Failure "$Label has invalid LookAngleMaxAccel value '$token'."
-        }
-    }
-}
-
-$botHiderImpl = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImplPlugin.cs") -Raw
-if ($botHiderImpl -notmatch "foreach \(int slot in managedSlots\)" -or
-    $botHiderImpl -notmatch "player\.PlayerName = name" -or
-    $botHiderImpl -notmatch 'ModuleVersion => "0\.3\.3"' -or
-    $botHiderImpl -notmatch "EnsureBotInfoNameSource\(\)") {
-    Add-Failure "BotHiderImpl no longer preserves the v0.3.3 managed-name integration."
-}
-$botHiderGameData = Get-Content -LiteralPath (Join-Path $repo "addons/BotHider/gamedata.json") -Raw
-if ($botHiderGameData -notmatch '"CServerSideClient::SetName"' -or
-    $botHiderGameData -notmatch '"CNetworkGameServer::PackEntities"') {
-    Add-Failure "BotHider gamedata no longer contains the v0.3.3 name and identity targets."
-}
-foreach ($difficulty in @("Low", "Medium", "High")) {
-    $profilePath = Join-Path $repo "overrides/$difficulty/botprofile.db"
-    $profile = Get-Content -LiteralPath $profilePath -Raw
-    Assert-BotProfileContent $profile "$difficulty botprofile.db"
-}
-
 $trackedGenerated = @(& git -C $repo ls-files | Where-Object {
     $_ -match '(^|/)(bin|obj|node_modules|dist|target|artifacts|\.cache)/'
 })
@@ -469,96 +278,39 @@ if ($trackedGenerated.Count -gt 0) {
 
 if ($PackageRoot) {
     $package = [IO.Path]::GetFullPath($PackageRoot)
-    $requiredPackageFiles = @(
-        "addons/BotHider/bin/win64/BotHider.dll",
-        "addons/BotController/bin/win64/BotController.dll",
-        "addons/metamod/BotController.vdf",
-        "addons/metamod/bin/win64/server.dll",
-        "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll",
-        "addons/RayTrace/bin/win64/RayTrace.dll",
-        "addons/counterstrikesharp/plugins/RayTraceImpl/RayTraceImpl.dll",
-        "addons/counterstrikesharp/plugins/BotAI/BotAI.dll",
-        "addons/counterstrikesharp/plugins/BotAimImprover/BotAimImprover.dll",
-        "addons/counterstrikesharp/plugins/BotBuy/BotBuy.dll",
-        "addons/counterstrikesharp/plugins/BotControllerImpl/BotControllerImpl.dll",
-        "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImpl.dll",
-        "addons/counterstrikesharp/plugins/BotRandomizer/BotRandomizer.dll",
-        "addons/counterstrikesharp/plugins/BotRandomizer/charm_placements.json",
-        "addons/counterstrikesharp/plugins/BotRandomizer/cosmetic_catalog.json",
-        "addons/counterstrikesharp/plugins/BotState/BotState.dll",
-        "addons/counterstrikesharp/plugins/NadeSystem/NadeSystem.dll",
-        "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll",
-        "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_ids.json",
-        "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_weapon_ids.json",
-        "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
-        "addons/counterstrikesharp/plugins/RoundDamageRecap/RoundDamageRecap.dll",
-        "addons/counterstrikesharp/plugins/PlusMatchCoordinator/PlusMatchCoordinator.dll",
-        "addons/counterstrikesharp/plugins/PlusMatchCoordinator/MatchCore.dll",
-        "addons/counterstrikesharp/plugins/PlusMatchCoordinator/match_catalog.json",
-        "addons/counterstrikesharp/plugins/PlusMatchCoordinator/open-rating-3.0-proxy-v1.json",
-        "addons/counterstrikesharp/plugins/PlusMatchCoordinator/profiles/Low/botprofile.db",
-        "addons/counterstrikesharp/plugins/PlusMatchCoordinator/profiles/Medium/botprofile.db",
-        "addons/counterstrikesharp/plugins/PlusMatchCoordinator/profiles/High/botprofile.db",
-        "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.deps.json",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.pdb",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/Microsoft.Data.Sqlite.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/SQLitePCLRaw.batteries_v2.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/SQLitePCLRaw.core.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/SQLitePCLRaw.provider.e_sqlite3.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/e_sqlite3.dll",
-        "addons/counterstrikesharp/shared/0Harmony/0Harmony.dll",
-        "addons/counterstrikesharp/shared/BotHiderApi/BotHiderApi.dll",
-        "addons/counterstrikesharp/shared/BotControllerApi/BotControllerApi.dll",
-        "plus-payload-manifest.json",
-        "LocalArena.exe",
-        "README.md",
-        "README.zh-CN.md",
-        "LICENSE"
-    )
-    foreach ($relative in $requiredPackageFiles) {
-        Assert-File (Join-Path $package $relative) "package file $relative"
+    if (-not (Test-Path -LiteralPath $package -PathType Container)) {
+        Add-Failure "Package root does not exist: $package"
+        $packageFiles = @()
     }
-    $telemetryPackageRoot = Join-Path $package "addons/counterstrikesharp/plugins/OfflineMatchTelemetry"
-    $expectedTelemetryFiles = @(
-        "OfflineMatchTelemetry.dll",
-        "OfflineMatchTelemetry.deps.json",
-        "OfflineMatchTelemetry.pdb",
-        "Microsoft.Data.Sqlite.dll",
-        "SQLitePCLRaw.batteries_v2.dll",
-        "SQLitePCLRaw.core.dll",
-        "SQLitePCLRaw.provider.e_sqlite3.dll",
-        "e_sqlite3.dll"
-    ) | Sort-Object
-    $packagedTelemetryFiles = @(
-        Get-ChildItem -LiteralPath $telemetryPackageRoot -File -ErrorAction SilentlyContinue |
-            ForEach-Object Name |
-            Sort-Object
-    )
-    if (@(Compare-Object $expectedTelemetryFiles $packagedTelemetryFiles).Count -gt 0) {
-        Add-Failure "Packaged OfflineMatchTelemetry file set does not match the release allowlist."
+    else {
+        $packageFiles = @(Get-RelativePaths $package)
     }
-    $packagedNadeDataRoot = Join-Path $package "addons/counterstrikesharp/plugins/NadeSystem/grenades"
-    $packagedNadeDataFiles = @(
-        Get-ChildItem -LiteralPath $packagedNadeDataRoot -Filter "*.json" -File -ErrorAction SilentlyContinue
-    )
-    $sourceNadeNames = @($nadeDataFiles.Name | Sort-Object)
-    $packagedNadeNames = @($packagedNadeDataFiles.Name | Sort-Object)
-    $nadeNameDifference = @(Compare-Object $sourceNadeNames $packagedNadeNames)
-    if ($nadeNameDifference.Count -gt 0) {
-        Add-Failure "Package grenade catalog does not match the frozen source file set."
-    }
-    foreach ($nadeDataFile in $packagedNadeDataFiles) {
-        try {
-            if (@(Get-Content -LiteralPath $nadeDataFile.FullName -Raw | ConvertFrom-Json).Count -eq 0) {
-                Add-Failure "Packaged grenade catalog is empty: $($nadeDataFile.Name)"
-            }
-        }
-        catch {
-            Add-Failure "Packaged grenade catalog is invalid: $($nadeDataFile.Name): $($_.Exception.Message)"
+    foreach ($relative in $inventory.required_payload_files) {
+        if ($relative -eq "plus-payload-manifest.json") { continue }
+        if ($packageFiles -notcontains $relative) {
+            Add-Failure "Package is missing a required file: $relative"
         }
     }
+
+    $pluginDirectory = Join-Path $package "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer"
+    if (Test-Path -LiteralPath $pluginDirectory -PathType Container) {
+        $packagedPluginFiles = @(Get-RelativePaths $pluginDirectory | ForEach-Object { Split-Path -Leaf $_ })
+        $pluginDifference = @(Compare-Object ($inventory.cosmetics_plugin_files | Sort-Object) ($packagedPluginFiles | Sort-Object))
+        if ($pluginDifference.Count -gt 0) {
+            Add-Failure "Packaged cosmetics plugin does not match its pinned build allowlist: $(($pluginDifference | ForEach-Object InputObject) -join ', ')"
+        }
+    }
+    else {
+        Add-Failure "Package has no cosmetics plugin directory: $pluginDirectory"
+    }
+
+    foreach ($relative in $packageFiles) {
+        $hit = Test-ForbiddenReleasePath $relative
+        if ($hit.Count -gt 0) {
+            Add-Failure "Forbidden component reached the release package: $relative (matched: $($hit -join ', '))"
+        }
+    }
+
     $previewNotice = Join-Path $package "PREVIEW-NOTICE.txt"
     if ($ExpectedPackageVersion -match '-Preview\.\d+$') {
         Assert-File $previewNotice "package preview notice"
@@ -566,24 +318,34 @@ if ($PackageRoot) {
     elseif (Test-Path -LiteralPath $previewNotice) {
         Add-Failure "Official package must not contain PREVIEW-NOTICE.txt."
     }
-    $packagedPanel = Join-Path $package "LocalArena.exe"
+
+    $pinnedRuntimes = @(
+        @{ Relative = "addons/metamod/bin/win64/server.dll"; Hash = $manifest.metamod.windowsLoaderSha256; Label = "Metamod" },
+        @{ Relative = "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll"; Hash = $manifest.counterStrikeSharp.windowsCoreSha256; Label = "CounterStrikeSharp" }
+    )
+    foreach ($runtime in $pinnedRuntimes) {
+        $runtimePath = Join-Path $package $runtime.Relative
+        if (Test-Path -LiteralPath $runtimePath) {
+            $runtimeHash = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($runtimeHash -ne ([string]$runtime.Hash).ToLowerInvariant()) {
+                Add-Failure "$($runtime.Label) does not match the pinned runtime: $runtimeHash"
+            }
+        }
+    }
+
+    $packagedPanel = Join-Path $package "cs2-bot-improver-plus-panel.exe"
     $builtPanel = Join-Path $repo "Panel/src-tauri/target/release/cs2-bot-improver-plus-panel.exe"
     if ((Test-Path -LiteralPath $packagedPanel) -and (Test-Path -LiteralPath $builtPanel) -and
         ((Get-FileHash -LiteralPath $packagedPanel -Algorithm SHA256).Hash -ne
             (Get-FileHash -LiteralPath $builtPanel -Algorithm SHA256).Hash)) {
         Add-Failure "Packaged Panel is not the current production Release build."
     }
-    $nestedShared = Join-Path $package "addons/counterstrikesharp/plugins/BotHiderImpl/shared"
-    if (Test-Path -LiteralPath $nestedShared) {
-        Add-Failure "Package contains an invalid nested BotHiderImpl/shared directory."
-    }
-    $linuxBotHiderVdf = Join-Path $package "addons/metamod/BotHider.linux.vdf"
-    if (Test-Path -LiteralPath $linuxBotHiderVdf) {
-        Add-Failure "Windows package contains the Linux BotHider loader."
-    }
-    $packagedGameInfo = @(Get-ChildItem -LiteralPath $package -Recurse -Filter "gameinfo.gi" -File)
-    if ($packagedGameInfo.Count -gt 0) {
-        Add-Failure "Package must not contain stale gameinfo.gi files: $($packagedGameInfo.FullName -join ', ')"
+    $packagedPluginDll = Join-Path $pluginDirectory "PlayerKnifeCustomizer.dll"
+    $builtPluginDll = Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/bin/Release/net10.0/PlayerKnifeCustomizer.dll"
+    if ((Test-Path -LiteralPath $packagedPluginDll) -and (Test-Path -LiteralPath $builtPluginDll) -and
+        ((Get-FileHash -LiteralPath $packagedPluginDll -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $builtPluginDll -Algorithm SHA256).Hash)) {
+        Add-Failure "Packaged cosmetics plugin is not the current source build."
     }
 
     $payloadManifestPath = Join-Path $package "plus-payload-manifest.json"
@@ -594,18 +356,14 @@ if ($PackageRoot) {
                 Add-Failure "Package payload manifest has an unexpected schema or version."
             }
             $manifestPaths = @{}
-            $manifestPolicies = @{}
-            $manifestOwnership = @{}
             foreach ($entry in $payloadManifest.entries) {
                 $relative = [string]$entry.path
                 if ($manifestPaths.ContainsKey($relative)) {
                     Add-Failure "Package payload manifest contains a duplicate path: $relative"
                     continue
                 }
-                $manifestPaths[$relative] = $true
-                $manifestPolicies[$relative] = [string]$entry.restore_policy
-                $manifestOwnership[$relative] = [string]$entry.ownership
-                if ($relative -notmatch '^(addons|cfg|overrides)/' -or $relative -match '(^|/)\.\.(/|$)') {
+                $manifestPaths[$relative] = $entry
+                if ($relative -notmatch '^addons/' -or $relative -match '(^|/)\.\.(/|$)') {
                     Add-Failure "Package payload manifest contains an unsafe path: $relative"
                     continue
                 }
@@ -619,52 +377,25 @@ if ($PackageRoot) {
                 if ($actualSize -ne [long]$entry.size -or $actualHash -ne ([string]$entry.sha256).ToLowerInvariant()) {
                     Add-Failure "Package payload manifest verification failed: $relative"
                 }
-            }
-            $payloadFiles = foreach ($topLevel in @("addons", "cfg", "overrides")) {
-                $root = Join-Path $package $topLevel
-                if (Test-Path -LiteralPath $root) {
-                    Get-ChildItem -LiteralPath $root -File -Recurse | ForEach-Object {
-                        [IO.Path]::GetRelativePath($package, $_.FullName).Replace("\", "/")
-                    }
+
+                $owned = @($inventory.panel_owned_paths | Where-Object { $relative -like "$_/*" }).Count -gt 0
+                $expectedOwnership = if ($owned) { "plus" } else { "shared" }
+                if ([string]$entry.ownership -ne $expectedOwnership) {
+                    Add-Failure "Unexpected ownership for $relative`: expected $expectedOwnership, found $($entry.ownership)"
+                }
+                $expectedPolicy = if ($inventory.preserve_config_paths -contains $relative) { "preserve-config" } else { "restore" }
+                if ([string]$entry.restore_policy -ne $expectedPolicy) {
+                    Add-Failure "Unexpected restore policy for $relative`: expected $expectedPolicy, found $($entry.restore_policy)"
                 }
             }
-            foreach ($relative in $payloadFiles) {
+            foreach ($relative in ($packageFiles | Where-Object { $_ -like "addons/*" })) {
                 if (-not $manifestPaths.ContainsKey($relative)) {
                     Add-Failure "Package payload file is not tracked by the manifest: $relative"
                 }
             }
-            $expectedPreserveConfigs = @(
-                "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_knife_presets.json",
-                "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_gun_presets.json",
-                "addons/counterstrikesharp/plugins/BotRandomizer/bot_randomizer_options.json",
-                "cfg/my_bot_ffa_config.cfg",
-                "cfg/my_bot_normal_config.cfg",
-                "overrides/botprofile.vpk"
-            )
-            foreach ($relative in $expectedPreserveConfigs) {
-                if ($manifestPolicies[$relative] -ne "preserve-config") {
+            foreach ($relative in $inventory.preserve_config_paths) {
+                if ([string]$manifestPaths[$relative].restore_policy -ne "preserve-config") {
                     Add-Failure "Mutable player configuration is not protected by preserve-config: $relative"
-                }
-            }
-            foreach ($relative in $manifestPaths.Keys | Where-Object {
-                $_ -like "addons/counterstrikesharp/plugins/PlusMatchCoordinator/*"
-            }) {
-                if ($manifestOwnership[$relative] -ne "plus") {
-                    Add-Failure "PlusMatchCoordinator payload is not Plus-owned: $relative"
-                }
-            }
-            foreach ($relative in $manifestPaths.Keys | Where-Object {
-                $_ -like "addons/counterstrikesharp/plugins/TeamLineupInjector/*"
-            }) {
-                if ($manifestOwnership[$relative] -ne "plus") {
-                    Add-Failure "TeamLineupInjector payload is not Plus-owned: $relative"
-                }
-            }
-            foreach ($relative in $manifestPaths.Keys | Where-Object {
-                $_ -like "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/*"
-            }) {
-                if ($manifestOwnership[$relative] -ne "plus") {
-                    Add-Failure "OfflineMatchTelemetry payload is not Plus-owned: $relative"
                 }
             }
         }
@@ -672,76 +403,8 @@ if ($PackageRoot) {
             Add-Failure "Package payload manifest is invalid: $($_.Exception.Message)"
         }
     }
-
-    $botProfileVpks = @(
-        "overrides/botprofile.vpk",
-        "overrides/Low/botprofile.vpk",
-        "overrides/Medium/botprofile.vpk",
-        "overrides/High/botprofile.vpk"
-    )
-    foreach ($relative in $botProfileVpks) {
-        $vpk = Join-Path $package $relative
-        Assert-File $vpk "package file $relative"
-        if (Test-Path -LiteralPath $vpk) {
-            try {
-                $entries = @(Get-VpkEntryPaths $vpk)
-                if ($entries.Count -ne 1 -or $entries[0] -ne "botprofile.db") {
-                    Add-Failure "Package $relative must contain only botprofile.db; found: $($entries -join ', ')"
-                }
-                else {
-                    $embedded = Read-VpkEmbeddedEntry $vpk "botprofile.db"
-                    $profile = [Text.Encoding]::UTF8.GetString($embedded.Bytes)
-                    Assert-BotProfileContent $profile "Package $relative"
-                }
-            }
-            catch {
-                Add-Failure "Invalid package VPK $relative`: $($_.Exception.Message)"
-            }
-        }
-    }
-
-    $native = Join-Path $package "addons/BotHider/bin/win64/BotHider.dll"
-    if (Test-Path -LiteralPath $native) {
-        $nativeHash = (Get-FileHash -LiteralPath $native -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($nativeHash -ne $manifest.botHider.windowsDllSha256.ToLowerInvariant()) {
-            Add-Failure "Package BotHider.dll is not the verified v0.3.3 build: $nativeHash"
-        }
-    }
-
-    $pinnedRuntimeFiles = @(
-        @{ Relative = "addons/metamod/bin/win64/server.dll"; Hash = $manifest.metamod.windowsLoaderSha256; Label = "Metamod" },
-        @{ Relative = "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll"; Hash = $manifest.counterStrikeSharp.windowsCoreSha256; Label = "CounterStrikeSharp" },
-        @{ Relative = "addons/RayTrace/bin/win64/RayTrace.dll"; Hash = $manifest.rayTrace.windowsDllSha256; Label = "RayTrace native" },
-        @{ Relative = "addons/counterstrikesharp/plugins/RayTraceImpl/RayTraceImpl.dll"; Hash = $manifest.rayTrace.cssImplSha256; Label = "RayTrace CSS" }
-    )
-    foreach ($runtime in $pinnedRuntimeFiles) {
-        $runtimePath = Join-Path $package $runtime.Relative
-        if (Test-Path -LiteralPath $runtimePath) {
-            $runtimeHash = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($runtimeHash -ne $runtime.Hash.ToLowerInvariant()) {
-                Add-Failure "$($runtime.Label) does not match the pinned engine-26 runtime: $runtimeHash"
-            }
-        }
-    }
-
-    $builtPlugins = @(
-        @{ Name = "BotAI"; Framework = "net10.0" },
-        @{ Name = "BotAimImprover"; Framework = "net10.0" },
-        @{ Name = "BotBuy"; Framework = "net8.0" },
-        @{ Name = "BotControllerImpl"; Framework = "net10.0" },
-        @{ Name = "BotRandomizer"; Framework = "net10.0" },
-        @{ Name = "NadeSystem"; Framework = "net10.0" },
-        @{ Name = "RoundDamageRecap"; Framework = "net10.0" }
-        @{ Name = "PlusMatchCoordinator"; Framework = "net8.0" }
-    )
-    foreach ($plugin in $builtPlugins) {
-        $packageDll = Join-Path $package "addons/counterstrikesharp/plugins/$($plugin.Name)/$($plugin.Name).dll"
-        $buildDll = Join-Path $repo "addons/counterstrikesharp/plugins/$($plugin.Name)/bin/Release/$($plugin.Framework)/$($plugin.Name).dll"
-        if ((Test-Path -LiteralPath $packageDll) -and (Test-Path -LiteralPath $buildDll) -and
-            ((Get-FileHash -LiteralPath $packageDll -Algorithm SHA256).Hash -ne
-                (Get-FileHash -LiteralPath $buildDll -Algorithm SHA256).Hash)) {
-            Add-Failure "Package $($plugin.Name) is not the current source build."
-        }
+    else {
+        Add-Failure "Package has no plus-payload-manifest.json."
     }
 }
 
@@ -751,8 +414,9 @@ if ($failures.Count -gt 0) {
 }
 
 Write-Host "Workspace verification passed."
-Write-Host "Bot identities: $($counts['addons/BotHider/bot_info.json'])"
 Write-Host "Weapon skins: $($counts['Panel/src/data/weaponSkins.json'])"
-Write-Host "Glove skins: $($counts['Panel/src/data/gloveSkins.json'])"
+Write-Host "Glove finishes: $($counts['Panel/src/data/gloveSkins.json'])"
+Write-Host "Glove finish names localised: $($counts['Panel/src/data/gloveFinishNames.json'])"
 Write-Host "Music kits: $($counts['Panel/src/data/musicKits.json'])"
+Write-Host "Stickers: $($counts['Panel/src/data/stickerCatalog.json'])"
 if ($PackageRoot) { Write-Host "Package layout verified: $([IO.Path]::GetFullPath($PackageRoot))" }

@@ -135,3 +135,19 @@ Phase A 输出：当前事实基线与"保留 / 修改 / 删除 / 暂缓"模块�
 - 本机没有 .NET SDK（只有 6/7/8 runtime），插件要 `net10.0`。已在 `.cache/build-inputs/dotnet`（gitignored）放 portable SDK `10.0.401`，通过仓库自身的 `.local-build.ps1` 钩子注入（`build.ps1:20-23` dot-source 它，`verify-workspace.ps1:51-54` 又要求它存在）。系统级 .NET 安装未被改动。
 - `build.ps1` 走 `cargo xwin` 是为没有 MSVC 的机器交叉编译。本机已有 MSVC 14.43（`D:\Visual Studio\product`）与 Windows SDK 10.0.22621（`D:\Windows Kits\10`），直接 `--target x86_64-pc-windows-msvc` 即可，因此不需要装 LLVM/xwin。Phase G 的脚本收缩会让本地打包路径变得可跑。
 - `addons/**/*.csproj` 的 NuGet 版本三套并存（`1.0.371`/net10、`1.0.367`/net8、`1.0.362`），且 `disabled/BotAI_for_Linux` 的 `HintPath` 指向仓库外绝对路径。Cosmetics-only 只保留 net10 + `1.0.371` 一条线。
+
+## 7. Phase G — Cosmetics-only 打包 gate（2026-09-20 实测）
+
+`scripts/package.ps1` 与 `scripts/verify-workspace.ps1` 已重写为显式 allowlist 组装，不再"先复制完整 Local Arena payload 再删"。共享清单 `scripts/release-inventory.json` 同时被两个脚本读取：package 用它组装，verify 用它复审，避免两份列表漂移。
+
+| 命令 | 结果 |
+| --- | --- |
+| `pwsh ./scripts/package.ps1 -ReleaseVersion 1.4.3.3` | 通过：完整 build.ps1 门（npm 三个断言脚本 + tsc/vite + 插件 Release 构建 + 插件测试 + cargo 测试 + release 构建 2m47s）→ 组装 → 审计 → `artifacts/LocalCosmetics-v1.4.3.3-windows.zip` |
+| 归档 | 75.5 MB，459 文件；顶层只有 Panel 可执行文件、`plus-payload-manifest.json`、`LICENSE`、`README.md`、`README.zh-CN.md`、`UPSTREAM.md` 与 `addons/` |
+| manifest | 453 条：`ownership=plus` 10 条（全部在 `addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/`），`shared` 443 条；`restore_policy=preserve-config` 仅玩家预设两文件 |
+| 插件目录 | `addons/counterstrikesharp/plugins/` 下只有 `PlayerKnifeCustomizer`；`addons/metamod/` 只有 `counterstrikesharp.vdf`、`metaplugins.ini`、`README.txt` |
+| 归档级禁入扫描 | 无 `gameinfo.gi`、无 `.vpk`、无 `cfg/`、无 `overrides/`、无任何 Bot / Nade / RayTrace / Lineup / Match / Telemetry / Rating 组件 |
+
+禁入断言不是空转：向 staged 包植入 `addons/counterstrikesharp/plugins/BotAI/BotAI.dll` 和一个根级 `cfg` 文件后重跑 `verify-workspace.ps1 -PackageRoot`，报出 3 条失败（禁入组件 × 2、manifest 未跟踪文件 × 1）并以退出码 1 失败。
+
+pinned 输入仍只有两个，且下载后按 `scripts/dependencies.json` 的 SHA-256 校验：MetaMod 2.0.0-git1406（7 117 569 B）、CounterStrikeSharp v1.0.371 with-runtime（51 944 999 B）。

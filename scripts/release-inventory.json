@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "_comment": [
+    "The release inventory for the Cosmetics-only package. scripts/package.ps1 assembles",
+    "exactly these files and scripts/verify-workspace.ps1 re-audits the finished tree",
+    "against the same lists, so the two cannot drift apart.",
+    "required_payload_files mirrors the payload checks in Panel/src-tauri/src/install_checks.rs."
+  ],
+  "required_payload_files": [
+    "addons/metamod/bin/win64/server.dll",
+    "addons/metamod/bin/win64/metamod.2.cs2.dll",
+    "addons/metamod/metaplugins.ini",
+    "addons/metamod/counterstrikesharp.vdf",
+    "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll",
+    "addons/counterstrikesharp/dotnet/dotnet.exe",
+    "addons/counterstrikesharp/gamedata/gamedata.json",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
+    "plus-payload-manifest.json"
+  ],
+  "cosmetics_plugin_files": [
+    "PlayerKnifeCustomizer.deps.json",
+    "PlayerKnifeCustomizer.dll",
+    "PlayerKnifeCustomizer.pdb",
+    "player_cosmetic_catalog.json",
+    "player_gun_presets.json",
+    "player_knife_presets.json",
+    "skins_en.json",
+    "sticker_ids.json",
+    "sticker_weapon_ids.json",
+    "weapon_skins.json"
+  ],
+  "panel_owned_paths": [
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer"
+  ],
+  "preserve_config_paths": [
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_knife_presets.json",
+    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_gun_presets.json"
+  ],
+  "forbidden_segments": [
+    "cfg",
+    "overrides",
+    "disabled",
+    "grenades",
+    "profiles",
+    "lineup",
+    "BotAI",
+    "BotAimImprover",
+    "BotBuy",
+    "BotController",
+    "BotControllerImpl",
+    "BotHider",
+    "BotHiderImpl",
+    "BotRandomizer",
+    "BotState",
+    "NadeSystem",
+    "RayTrace",
+    "RayTraceImpl",
+    "RoundDamageRecap",
+    "PlusMatchCoordinator",
+    "MatchCore",
+    "TeamLineupInjector",
+    "OfflineMatchTelemetry"
+  ],
+  "forbidden_file_names": [
+    "gameinfo.gi",
+    "botprofile.db",
+    "botprofile.vpk",
+    "bot_randomizer_options.json",
+    "bot_buy.cfg",
+    "my_bot_normal_config.cfg",
+    "my_bot_ffa_config.cfg",
+    "match_catalog.json",
+    "open-rating-3.0-proxy-v1.json",
+    "rating-plus-3.0-proxy-v1.json",
+    "cosmetic_catalog.json",
+    "charm_placements.json"
+  ],
+  "forbidden_extensions": [
+    ".vpk"
+  ]
+}
