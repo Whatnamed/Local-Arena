@@ -151,3 +151,44 @@ Phase A 输出：当前事实基线与"保留 / 修改 / 删除 / 暂缓"模块�
 禁入断言不是空转：向 staged 包植入 `addons/counterstrikesharp/plugins/BotAI/BotAI.dll` 和一个根级 `cfg` 文件后重跑 `verify-workspace.ps1 -PackageRoot`，报出 3 条失败（禁入组件 × 2、manifest 未跟踪文件 × 1）并以退出码 1 失败。
 
 pinned 输入仍只有两个，且下载后按 `scripts/dependencies.json` 的 SHA-256 校验：MetaMod 2.0.0-git1406（7 117 569 B）、CounterStrikeSharp v1.0.371 with-runtime（51 944 999 B）。
+
+## 8. Phase H–J — ownership 收缩、更新面封堵与最终验证（2026-09-20 实测）
+
+### Phase H — installer / 恢复边界
+
+- `SUITE_OWNED_ROOTS` 与 `SUITE_OWNED_FILES` 收缩到 Cosmetics-only 实际拥有的路径，不再包含 `cfg/` 与任何 bot / override 条目；未知第三方插件目录和个人 cfg / autoexec / bind 不是删除目标。
+- `restore()` 与 `restore_pristine()` 结束时调用 `launch_isolation::forget_launch_window()`，一并清除 `panel_isolation.json` marker 与 launch journal，恢复后不留启动窗口痕迹。
+- 新夹具测试：`a_managed_upgrade_and_a_pristine_restore_leave_unowned_legacy_files_alone`、`restore_removes_every_trace_of_the_launch_window_and_keeps_personal_cfg`、`a_payload_without_a_manifest_names_the_expected_layout`。
+
+### Phase I — 更新面与 attribution
+
+- 删除 `PANEL_UPDATE_MARKER` 及其读取分支与测试；`core-tests` 去掉 `ed25519-dalek`（`Cargo.lock` −162 行）；打包不再生成 `latest.json` 或签名；前端去掉未使用的 `recharts`（`package-lock.json` −468 行）。
+- i18n 死键清理 436 个键、1681 条翻译（bot 难度、瞄准 / 投掷预设、比赛历史、统计、Demo、阵容、三种启动模式、更新器）。
+- attribution 校正为"只署真正随包的东西"：`Panel/src/data/devs.ts` 的 game 组改为 Local Arena / CS2-Bot-Improver（均 AGPL-3.0）+ MetaMod + CounterStrikeSharp，数据组补 `Nereziel/cs2-WeaponPaints`（GPL-3.0，许可证经 GitHub API 核实而非推测）、`ByMykel/CSGO-API`（MIT）、`SteamTracking/GameTracking-CS2`（无许可证，仅事实型参考）；`docs/UPSTREAM.md` 重写并列出"明确不带入"清单。
+
+### Phase J — 最终验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `pwsh ./scripts/build.ps1` | 退出码 0：`npm ci` → 三个 Node 断言脚本 → `tsc && vite build` → 插件 Release 构建 → 插件测试 → cargo 测试 → MSVC release 构建 |
+| `npm run test:stickers` / `test:install-gate` / `test:cosmetics` | 通过（install gate 4 assertions；20 knives / 2106 skins / 91 glove finishes / 14 localised） |
+| `dotnet run --project PlayerKnifeCustomizer.Tests -c Release` | 通过（resolver / lifecycle / provenance / live-reload / launch-isolation / wear-clamp） |
+| Panel 测试二进制 `--nocapture` | 81 passed / 0 failed / 1 ignored |
+| `pwsh ./scripts/package.ps1 -SkipBuild` | 通过，`artifacts/LocalCosmetics-v1.4.3.3-windows.zip`（79 112 122 B，SHA-256 `b031cc33…`，与 `artifacts/SHA256SUMS.txt` 一致） |
+| `pwsh ./scripts/verify-workspace.ps1` / `-PackageRoot <stage>` | 均通过 |
+| 归档复审 | 459 文件 / 453 under `addons/`；禁入扫描 0 命中；manifest 453 条 = plus 10 + shared 443，`preserve-config` 恰为玩家预设两文件；`required_payload_files` 全部命中 |
+| 打包文档一致性 | 归档内 `README.md` / `README.zh-CN.md` / `UPSTREAM.md` 的 SHA-256 与仓库文件逐一相同 |
+
+### Phase J 发现的文档缺陷与处理
+
+发布包顶层随包携带 `README.md` 与 `README.zh-CN.md`，但两者仍是 Local Arena 时期的产品文档：描述三种启动模式、增强人机、人机物品、人机预设、在线更新，并引用 5 张已随功能删除而不存在的截图（`03-bot-presets.png`、`05-online-update.png`、`06-bot-items.png`、`07-commands.png`、`16-update-error.jpg`）。两份 README 已按 `docs/PRODUCT-SCOPE.md` 重写为 Cosmetics-only 产品说明，并去掉全部截图引用；面板内文案同步去掉"启动模式 / 更新"字样（`overview.guideDesc`）并把关于页 tagline 从"本地练习"改为"本地饰品"。
+
+### 仍未收口的项
+
+- **面板内指南截图**：`Panel/src/panels/GuideView.tsx` 仍使用 11 张旧版截图，侧栏含已删除的"匹配 / 比赛历史 / 人机预设"，标题栏显示旧版本号与"浏览器演示"标记。重新截图需要真实运行 Panel，未由 Agent 处理。
+- **法律与隐私文案**：`set.userAgreementP*` / `set.privacyPolicyP*` 仍描述下载签名更新、比赛记录、Demo、Bot 预设以及 "BHCN STUDIO" 等本 fork 已不具备的能力和主体，属于需要产品 / 法务决策的文本，未擅自改写。
+- **产品命名**：`tauri.conf.json` productName `Local Arena` 与 identifier `com.localarena.panel`、可执行文件名 `cs2-bot-improver-plus-panel.exe`、`.csbip` 与 `%LOCALAPPDATA%\CS2BotImproverPlus` 状态根、诊断包文件名前缀、启动失败 panic 文案。改名会影响已安装用户的状态迁移，需要单独决策。
+- `Commands.txt`、`CONTRIBUTING.md` 仍描述 Local Arena 产品；两者不随发布包分发。
+- `WELCOME_STORY_URL = https://api.hypcvgm.top/la` 只在用户点击首启提示时打开外部链接，没有后台取数。
+- `docs/MANUAL-ACCEPTANCE.md` 全部条目需实机，按项目规则未由 Agent 执行。
+
