@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Threading;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
@@ -16,6 +17,19 @@ namespace PlayerKnifeCustomizer;
 
 public readonly record struct StickerAttribute(string Name, float Value);
 public readonly record struct CharmNativePlacement(uint PlacementId, float X, float Y, float Z);
+
+public static class PresetWearClamp
+{
+    /// <summary>Returns true when the preset had to be moved inside its band.</summary>
+    public static bool Clamp(KnifePreset preset, WeaponSkinEntry? skin)
+    {
+        if (skin is null) return false;
+        float clamped = Math.Clamp(preset.Wear, skin.MinWear, skin.MaxWear);
+        if (clamped.Equals(preset.Wear)) return false;
+        preset.Wear = clamped;
+        return true;
+    }
+}
 
 public static class StickerFailurePolicy
 {
@@ -206,19 +220,42 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private int _loadedGunConfigSchema = KnifeConfig.CurrentSchemaVersion;
     private bool _stickersSanitizedDuringLoad;
     private readonly ApplyGenerationTracker _applyTracker = new();
+    private readonly WeaponProvenance _provenance = new();
+    private readonly ConfigReloadGate _reloadGate = new(ConfigDebounceMilliseconds);
+    private readonly object _debounceLock = new();
+    private System.Threading.Timer? _reloadDebounce;
+    private FileSystemWatcher? _configWatcher;
+    private PanelIsolationMarker? _isolationMarker;
+    private bool _panelLaunchSession;
+    private bool _unloading;
 
-    private string ConfigPath => Path.Combine(ModuleDirectory, "player_knife_presets.json");
-    private string GunConfigPath => Path.Combine(ModuleDirectory, "player_gun_presets.json");
+    /// <summary>
+    /// Gun presets to refresh on the next owned-weapon pass. Only the live-reload
+    /// path sets it; a grant or spawn pass leaves it empty and applies everything
+    /// the player was just given.
+    /// </summary>
+    private IReadOnlyCollection<ushort> _ownedGunFilter = Array.Empty<ushort>();
+
+    private const int ConfigDebounceMilliseconds = 150;
+
+
+    private const string ConfigFileName = "player_knife_presets.json";
+    private const string GunConfigFileName = "player_gun_presets.json";
+    private string ConfigPath => Path.Combine(ModuleDirectory, ConfigFileName);
+    private string GunConfigPath => Path.Combine(ModuleDirectory, GunConfigFileName);
     private string CatalogPath => Path.Combine(ModuleDirectory, "weapon_skins.json");
     private string StickerCatalogPath => Path.Combine(ModuleDirectory, "sticker_ids.json");
     private string PlayerCosmeticCatalogPath => Path.Combine(ModuleDirectory, "player_cosmetic_catalog.json");
 
     public override void Load(bool hotReload)
     {
+        _unloading = false;
+        BeginLaunchIsolation();
         LoadCatalog();
         LoadStickerCatalog();
         LoadPlayerCosmeticCatalog();
         LoadConfig();
+        StartConfigWatcher();
 
         AddCommand("css_cs2bi_knives_reload", "Reload player knife presets", OnReloadCommand);
         AddCommand("css_cs2bi_knives_status", "Show player knife preset status", OnStatusCommand);
@@ -238,22 +275,209 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
         RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
         RegisterEventHandler<EventRoundMvp>(OnRoundMvp, HookMode.Pre);
-        RegisterEventHandler<EventItemPickup>(OnItemPickup);
         RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
         RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
         RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
-        RegisterListener<Listeners.OnMapEnd>(() => _applyTracker.CancelAll());
+        RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         VirtualFunctions.GiveNamedItemFunc.Hook(OnGiveNamedItemPost, HookMode.Post);
-        Logger.LogInformation("[PlayerKnifeCustomizer] Loaded generation-safe pipeline; enabled={Enabled}, signature={Signature}, catalog={Catalog}",
-            _config.Enabled, _setAttrByName != null, _skinCatalog.Values.Sum(skins => skins.Count));
+        Logger.LogInformation("[PlayerKnifeCustomizer] Loaded generation-safe pipeline; enabled={Enabled}, signature={Signature}, catalog={Catalog}, panel_launch={PanelLaunch}",
+            _config.Enabled, _setAttrByName != null, _skinCatalog.Values.Sum(skins => skins.Count), _panelLaunchSession);
     }
 
     public override void Unload(bool hotReload)
     {
+        _unloading = true;
         _applyTracker.CancelAll();
+        StopConfigWatcher();
         VirtualFunctions.GiveNamedItemFunc.Unhook(OnGiveNamedItemPost, HookMode.Post);
+        // The Panel keeps the project search path in gameinfo.gi only for as long
+        // as this runtime is up. Restoring on a real shutdown (not on a hot
+        // reload) is what makes the next plain Steam launch clean again.
+        if (_panelLaunchSession && !hotReload) FinishLaunchIsolation("plugin unload");
+        _panelLaunchSession = false;
+    }
+
+    private void OnMapEnd()
+    {
+        _applyTracker.CancelAll();
+        _provenance.Clear();
+    }
+
+    /// <summary>
+    /// Reads and consumes the Panel's one-shot launch ticket. A live ticket means
+    /// this runtime was started by an explicit local cosmetics launch, so restoring
+    /// <c>gameinfo.gi</c> on shutdown is ours to do. A marker whose ticket is
+    /// missing or expired means the opposite: the Mod came up without a Panel
+    /// launch, so the search path is a leftover and is cleaned up right away. No
+    /// marker at all is never our line to remove, so nothing is touched.
+    /// </summary>
+    private void BeginLaunchIsolation()
+    {
+        string markerPath = Path.Combine(ModuleDirectory, PanelIsolationMarker.MarkerFileName);
+        try
+        {
+            if (!File.Exists(markerPath)) return;
+            if (!PanelIsolationMarker.TryRead(File.ReadAllText(markerPath), out PanelIsolationMarker? marker) ||
+                marker is null)
+            {
+                Logger.LogWarning("[PlayerCosmetics] Ignoring unreadable launch marker {Path}", markerPath);
+                return;
+            }
+            _isolationMarker = marker;
+            File.Delete(markerPath);
+            if (!marker.HasLiveTicket(DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
+            {
+                FinishLaunchIsolation("runtime loaded outside a Panel launch");
+                return;
+            }
+            _panelLaunchSession = true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[PlayerCosmetics] Launch isolation handshake failed");
+        }
+    }
+
+    private void FinishLaunchIsolation(string reason)
+    {
+        PanelIsolationMarker? marker = _isolationMarker;
+        _isolationMarker = null;
+        if (marker is null) return;
+        try
+        {
+            if (!File.Exists(marker.GameinfoPath)) return;
+            string current = File.ReadAllText(marker.GameinfoPath);
+            string restored = GameinfoIsolation.StripOwnedPaths(current, marker.SearchPaths);
+            if (restored == current) return;
+            WriteGameinfoVerified(marker.GameinfoPath, restored);
+            Logger.LogInformation("[PlayerCosmetics] Restored clean gameinfo.gi ({Reason})", reason);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[PlayerCosmetics] Could not restore gameinfo.gi; the next launch may load this Mod without the Panel");
+        }
+    }
+
+    private static void WriteGameinfoVerified(string path, string content)
+    {
+        string temp = path + ".cs2bi-tmp";
+        File.WriteAllText(temp, content);
+        File.Move(temp, path, true);
+        if (File.ReadAllText(path) != content)
+            throw new InvalidDataException($"gameinfo.gi did not read back as written: {path}");
+    }
+
+    private void StartConfigWatcher()
+    {
+        try
+        {
+            var watcher = new FileSystemWatcher(ModuleDirectory)
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+            };
+            watcher.Changed += OnConfigFileEvent;
+            watcher.Created += OnConfigFileEvent;
+            watcher.Renamed += OnConfigFileEvent;
+            watcher.EnableRaisingEvents = true;
+            _configWatcher = watcher;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[PlayerCosmetics] Live configuration watching is unavailable; presets apply on the next spawn");
+        }
+    }
+
+    private void StopConfigWatcher()
+    {
+        FileSystemWatcher? watcher = _configWatcher;
+        _configWatcher = null;
+        if (watcher is not null)
+        {
+            watcher.EnableRaisingEvents = false;
+            watcher.Changed -= OnConfigFileEvent;
+            watcher.Created -= OnConfigFileEvent;
+            watcher.Renamed -= OnConfigFileEvent;
+            watcher.Dispose();
+        }
+        lock (_debounceLock)
+        {
+            _reloadDebounce?.Dispose();
+            _reloadDebounce = null;
+        }
+        _reloadGate.Reset();
+    }
+
+    /// <summary>
+    /// Raised on a worker thread. It only records that something changed and
+    /// restarts the single debounce timer; all file parsing and every entity write
+    /// stays on the game thread behind <see cref="Server.NextFrame"/>.
+    /// </summary>
+    private void OnConfigFileEvent(object sender, FileSystemEventArgs args)
+    {
+        if (_unloading) return;
+        string name = Path.GetFileName(args.Name ?? string.Empty);
+        if (!name.Equals(ConfigFileName, StringComparison.OrdinalIgnoreCase) &&
+            !name.Equals(GunConfigFileName, StringComparison.OrdinalIgnoreCase))
+            return;
+        _reloadGate.Signal();
+        lock (_debounceLock)
+        {
+            if (_unloading) return;
+            try
+            {
+                _reloadDebounce ??= new System.Threading.Timer(_ => Server.NextFrame(ReloadIfPending),
+                    null, Timeout.Infinite, Timeout.Infinite);
+                _reloadDebounce.Change(ConfigDebounceMilliseconds, Timeout.Infinite);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Unload won the race; nothing further is scheduled.
+            }
+        }
+    }
+
+    private void ReloadIfPending()
+    {
+        if (_unloading || !_reloadGate.TryBeginWork()) return;
+        ReloadFromDisk();
+        if (_reloadGate.HasPendingWork())
+        {
+            _reloadGate.Signal();
+            lock (_debounceLock) _reloadDebounce?.Change(ConfigDebounceMilliseconds, Timeout.Infinite);
+        }
+    }
+
+    private void ReloadFromDisk()
+    {
+        var snapshot = new ConfigSnapshot(_config, _loadedConfigSchema, _loadedGunConfigSchema);
+        LoadConfig(snapshot);
+        if (ReferenceEquals(_config, snapshot.Config)) return;
+        CosmeticConfigDiff diff = CosmeticConfigDiff.Compute(snapshot.Config, _config);
+        if (diff.ChangesNothing) return;
+        _ownedGunFilter = diff.ChangedGunDefIndexes;
+        ApplyChangedSections(diff.Sections);
+    }
+
+    private void ApplyChangedSections(CosmeticChangeSection sections)
+    {
+        CosmeticApplyPhase phases = CosmeticApplyPhase.None;
+        if (sections.HasFlag(CosmeticChangeSection.Agent)) phases |= CosmeticApplyPhase.Agent;
+        if (sections.HasFlag(CosmeticChangeSection.Knife)) phases |= CosmeticApplyPhase.Knife;
+        if (sections.HasFlag(CosmeticChangeSection.Gloves)) phases |= CosmeticApplyPhase.Gloves;
+        if (sections.HasFlag(CosmeticChangeSection.Guns)) phases |= CosmeticApplyPhase.OwnedGuns;
+        if (sections.HasFlag(CosmeticChangeSection.Music)) phases |= CosmeticApplyPhase.Music;
+        if (phases == CosmeticApplyPhase.None) return;
+        int scheduled = 0;
+        foreach (CCSPlayerController player in Utilities.GetPlayers())
+        {
+            if (!CanApplyToPlayer(player)) continue;
+            ScheduleApplyPipeline(player!.Handle, phases);
+            scheduled++;
+        }
+        Logger.LogInformation("[PlayerCosmetics] Applied live configuration change sections={Sections} guns={Guns} players={Players}",
+            sections, _ownedGunFilter.Count, scheduled);
     }
 
     private void OnMapStart(string _)
@@ -329,16 +553,6 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         Utilities.SetStateChanged(player, "CCSPlayerController", "m_iMusicKitID");
     }
 
-    public HookResult OnItemPickup(EventItemPickup @event, GameEventInfo _)
-    {
-        var player = @event.Userid;
-        if (!_config.ApplyOnPickup || !CanApplyToPlayer(player))
-            return HookResult.Continue;
-
-        ScheduleApplyPipeline(player!.Handle, CosmeticApplyPhase.Guns);
-        return HookResult.Continue;
-    }
-
     public HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo _)
     {
         var attacker = @event.Attacker;
@@ -376,7 +590,10 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         var player = @event.Userid;
         if (player != null && player.Handle != nint.Zero)
+        {
             _applyTracker.Cancel(player.Handle);
+            _provenance.ForgetPlayer(player.Handle);
+        }
         return HookResult.Continue;
     }
 
@@ -439,10 +656,13 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             () => TryApplyDefaultKnife(readyPawn, readyTeam), "knife pipeline");
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Gloves,
             () => TryApplyGlove(playerHandle, readyPawn, readyTeam), "glove pipeline");
-        bool gunsPending = _applyTracker.IsPending(playerHandle, generation, CosmeticApplyPhase.Guns);
+        const CosmeticApplyPhase gunPhases = CosmeticApplyPhase.Guns | CosmeticApplyPhase.OwnedGuns;
+        bool gunsPending = _applyTracker.IsPending(playerHandle, generation, gunPhases);
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Guns,
-            () => TryApplyGunPresets(readyPawn, readyTeam), "gun pipeline");
-        if (gunsPending && !_applyTracker.IsPending(playerHandle, generation, CosmeticApplyPhase.Guns))
+            () => TryApplyGunPresets(playerHandle, readyPawn, readyTeam), "gun pipeline");
+        TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.OwnedGuns,
+            () => TryApplyOwnedGuns(readyPawn, readyTeam, _ownedGunFilter), "owned gun refresh");
+        if (gunsPending && !_applyTracker.IsPending(playerHandle, generation, gunPhases))
             TryControlledReequip(player, readyPawn, readyTeam, generation);
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Music,
             () => { ApplyMusicKit(player); return true; }, "music pipeline");
@@ -508,7 +728,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         return false;
     }
 
-    private bool TryApplyGunPresets(CCSPlayerPawn pawn, CosmeticTeam team)
+    private bool TryApplyGunPresets(nint playerHandle, CCSPlayerPawn pawn, CosmeticTeam team)
     {
         var weapons = pawn.WeaponServices?.MyWeapons;
         if (weapons == null) return false;
@@ -518,7 +738,31 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             var weapon = handle.Value;
             if (weapon == null || !weapon.IsValid || IsKnifeName(weapon.DesignerName)) continue;
             ushort defIndex = weapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
-            if (defIndex == 0 || !TryGetPreset(defIndex, team, out var preset)) continue;
+            if (defIndex == 0) continue;
+            // A weapon that is in the inventory at spawn, or that GiveNamedItem just
+            // handed over, was created for this player. That is what makes a preset
+            // apply to it; an entity picked up off the ground is never claimed here.
+            _provenance.RecordGrant(playerHandle, weapon.Handle, defIndex, weapon.DesignerName);
+            if (!TryGetPreset(defIndex, team, out var preset)) continue;
+            if (!ApplyPreset(weapon, defIndex, preset)) ready = false;
+        }
+        return ready;
+    }
+
+    private bool TryApplyOwnedGuns(CCSPlayerPawn pawn, CosmeticTeam team, IReadOnlyCollection<ushort> onlyDefIndexes)
+    {
+        var weapons = pawn.WeaponServices?.MyWeapons;
+        if (weapons == null) return false;
+        HashSet<ushort>? filter = onlyDefIndexes as HashSet<ushort> ?? (onlyDefIndexes.Count > 0 ? new HashSet<ushort>(onlyDefIndexes) : null);
+        bool ready = true;
+        foreach (var handle in weapons)
+        {
+            var weapon = handle.Value;
+            if (weapon == null || !weapon.IsValid || IsKnifeName(weapon.DesignerName)) continue;
+            ushort defIndex = weapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
+            if (defIndex == 0 || !_provenance.IsOwned(weapon.Handle, defIndex, weapon.DesignerName)) continue;
+            if (filter != null && !filter.Contains(defIndex)) continue;
+            if (!TryGetPreset(defIndex, team, out var preset)) continue;
             if (!ApplyPreset(weapon, defIndex, preset)) ready = false;
         }
         return ready;
@@ -748,24 +992,6 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private static bool IsKnifeDefIndex(ushort defIndex) => defIndex is >= 500 and <= 526;
 
-    private CCSPlayerController? GetEligibleHumanOwner(CBasePlayerWeapon weapon)
-    {
-        try
-        {
-            var owner = weapon.OwnerEntity.Value;
-            if (owner == null || !owner.IsValid) return null;
-            var pawn = new CCSPlayerPawn(owner.Handle);
-            var controller = pawn.Controller.Value;
-            if (controller == null || !controller.IsValid) return null;
-            var player = new CCSPlayerController(controller.Handle);
-            return CanApplyToPlayer(player) ? player : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     private static bool HasReadyAttributeLists(CEconItemView item) =>
         item.AttributeList.Handle != nint.Zero &&
         item.NetworkedDynamicAttributes.Handle != nint.Zero;
@@ -778,7 +1004,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         item.ItemIDHigh = (uint)(id >> 32);
     }
 
-    private void LoadConfig()
+    private void LoadConfig(ConfigSnapshot? restoreOnFailure = null)
     {
         try
         {
@@ -816,16 +1042,29 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             LoadGunConfig();
             _config.Normalize();
             bool agentsSanitized = SanitizeAgentModels();
+            bool wearsClamped = ClampCatalogWears();
             _applyErrorThrottle.Reset();
             if (_loadedConfigSchema < KnifeConfig.CurrentSchemaVersion ||
                 _loadedGunConfigSchema < KnifeConfig.CurrentSchemaVersion || stickersSanitized ||
-                _stickersSanitizedDuringLoad || agentsSanitized)
+                _stickersSanitizedDuringLoad || agentsSanitized || wearsClamped)
                 SaveConfig();
         }
         catch (Exception ex)
         {
-            _config = new KnifeConfig();
-            LoadGunConfig();
+            if (restoreOnFailure is not null)
+            {
+                // A save that has not fully landed must not cost the running
+                // session the appearance it already has.
+                ConfigSnapshot snapshot = restoreOnFailure.Value;
+                _config = snapshot.Config;
+                _loadedConfigSchema = snapshot.ConfigSchema;
+                _loadedGunConfigSchema = snapshot.GunSchema;
+            }
+            else
+            {
+                _config = new KnifeConfig();
+                LoadGunConfig();
+            }
             Logger.LogError("[PlayerKnifeCustomizer] Config load failed: {Message}", ex.Message);
         }
     }
@@ -1135,6 +1374,25 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         }
     }
 
+    /// <summary>
+    /// Pulls every preset back into the wear band its own PaintKit publishes.
+    /// A preset saved by a newer Panel, hand-edited, or carried over from a catalog
+    /// that has since tightened would otherwise be refused silently at apply time.
+    /// PaintKits absent from the catalog are left alone, since there is no range to
+    /// clamp against.
+    /// </summary>
+    private bool ClampCatalogWears()
+    {
+        bool changed = false;
+        foreach (CosmeticTeam team in new[] { CosmeticTeam.Ct, CosmeticTeam.T })
+        {
+            var loadout = _config.Loadouts.For(team);
+            foreach (var (defIndex, preset) in loadout.KnifePresets.Concat(loadout.GunPresets))
+                changed |= PresetWearClamp.Clamp(preset, FindSkin(defIndex, preset.Paint));
+        }
+        return changed;
+    }
+
     private bool SanitizeAgentModels()
     {
         if (_agentModels.Count == 0) return false;
@@ -1191,8 +1449,25 @@ public enum CosmeticApplyPhase
     Guns = 4,
     Music = 8,
     Agent = 16,
+
+    /// <summary>
+    /// Re-apply presets only to the weapons this plugin can prove the player owns,
+    /// which is what a live preset edit is allowed to touch. Unlike <see cref="Guns"/>
+    /// it never claims a weapon the player walked into, so a gun picked up off the
+    /// ground keeps the appearance it arrived with.
+    /// </summary>
+    OwnedGuns = 32,
+
+    /// <summary>Everything a fresh grant owns; deliberately excludes
+    /// <see cref="OwnedGuns"/>, which is only ever scheduled by a live reload.</summary>
     All = Knife | Gloves | Guns | Music | Agent,
 }
+
+/// <summary>
+/// The configuration as it stood before a reload attempt, so a rejected save can
+/// leave the running session exactly as it found it.
+/// </summary>
+public readonly record struct ConfigSnapshot(KnifeConfig Config, int ConfigSchema, int GunSchema);
 
 public sealed class ApplyGenerationTracker
 {
@@ -1394,9 +1669,6 @@ public sealed class KnifeConfig
     [JsonPropertyName("apply_to_human_players")]
     public bool ApplyToHumanPlayers { get; set; } = true;
 
-    [JsonPropertyName("apply_on_pickup")]
-    public bool ApplyOnPickup { get; set; } = true;
-
     [JsonPropertyName("music_kit_id")]
     public int MusicKitId { get; set; }
 
@@ -1427,7 +1699,6 @@ public sealed class KnifeConfig
         {
             Enabled = legacy.Enabled,
             ApplyToHumanPlayers = legacy.ApplyToHumanPlayers,
-            ApplyOnPickup = legacy.ApplyOnPickup,
             MusicKitId = legacy.MusicKitId,
             Loadouts = new TeamLoadoutCollection { Ct = baseLoadout.Clone(), T = baseLoadout.Clone() },
         };
@@ -1459,6 +1730,19 @@ public sealed class KnifeConfig
         }
     }
 
+    public KnifeConfig Clone() => new()
+    {
+        SchemaVersion = SchemaVersion,
+        Enabled = Enabled,
+        ApplyToHumanPlayers = ApplyToHumanPlayers,
+        MusicKitId = MusicKitId,
+        Loadouts = new TeamLoadoutCollection { Ct = Loadouts.Ct.Clone(), T = Loadouts.T.Clone() },
+        SharedWeaponLinks = new Dictionary<ushort, bool>(SharedWeaponLinks),
+        StickersEnabled = StickersEnabled,
+        CharmsEnabled = CharmsEnabled,
+        AgentsEnabled = AgentsEnabled,
+    };
+
     public void Normalize()
     {
         SchemaVersion = CurrentSchemaVersion;
@@ -1487,7 +1771,6 @@ public sealed class LegacyKnifeConfig
 {
     [JsonPropertyName("enabled")] public bool Enabled { get; set; }
     [JsonPropertyName("apply_to_human_players")] public bool ApplyToHumanPlayers { get; set; } = true;
-    [JsonPropertyName("apply_on_pickup")] public bool ApplyOnPickup { get; set; } = true;
     [JsonPropertyName("default_knife_defindex")] public ushort DefaultKnifeDefIndex { get; set; }
     [JsonPropertyName("presets")] public Dictionary<ushort, KnifePreset> Presets { get; set; } = new();
     [JsonPropertyName("gun_presets")] public Dictionary<ushort, KnifePreset> GunPresets { get; set; } = new();

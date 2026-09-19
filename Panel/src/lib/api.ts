@@ -235,7 +235,6 @@ export type KnifeCustomizerConfig = {
   schema_version: 5;
   enabled: boolean;
   apply_to_human_players: boolean;
-  apply_on_pickup: boolean;
   music_kit_id: number;
   loadouts: Record<CosmeticsTeam, TeamCosmeticLoadout>;
   shared_weapon_links: Record<string, boolean>;

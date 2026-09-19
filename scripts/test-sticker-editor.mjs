@@ -17,7 +17,7 @@ const sticker = (slot, id, patch = {}) => ({
 });
 const preset = { paint: 661, seed: 0, wear: 0.01, name_tag: "", stattrak_enabled: false, stattrak_count: 0, souvenir_enabled: false, stickers: [] };
 const loadout = () => ({ agent_model: "", default_knife_defindex: 0, knife_presets: {}, glove: { enabled: false, defindex: 5030, paint: 10048, seed: 0, wear: 0.01 }, gun_presets: { "9": { ...preset } } });
-const config = { schema_version: 5, enabled: true, apply_to_human_players: true, apply_on_pickup: true, music_kit_id: 0, loadouts: { ct: loadout(), t: loadout() }, shared_weapon_links: { "9": true }, stickers_enabled: true, charms_enabled: true, agents_enabled: true };
+const config = { schema_version: 5, enabled: true, apply_to_human_players: true, music_kit_id: 0, loadouts: { ct: loadout(), t: loadout() }, shared_weapon_links: { "9": true }, stickers_enabled: true, charms_enabled: true, agents_enabled: true };
 
 assert.equal(editor.STICKER_RELEASE_ENABLED, true);
 assert.equal(editor.stickerFeatureEnabled({ experimental_features_enabled: true, experimental_stickers_enabled: true }), true);

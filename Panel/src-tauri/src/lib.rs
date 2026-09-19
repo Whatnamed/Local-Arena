@@ -329,8 +329,6 @@ struct KnifeCustomizerConfig {
     enabled: bool,
     #[serde(default = "default_true")]
     apply_to_human_players: bool,
-    #[serde(default = "default_true")]
-    apply_on_pickup: bool,
     #[serde(default)]
     music_kit_id: i32,
     #[serde(default)]
@@ -418,7 +416,6 @@ impl Default for KnifeCustomizerConfig {
             schema_version: COSMETICS_SCHEMA_VERSION,
             enabled: false,
             apply_to_human_players: true,
-            apply_on_pickup: true,
             music_kit_id: 0,
             loadouts: TeamLoadouts::default(),
             shared_weapon_links,
@@ -1998,7 +1995,6 @@ mod tests {
             "enabled": true,
             "apply_to_human_players": true,
             "apply_to_dropped_knives": true,
-            "apply_on_pickup": true,
             "default_knife_defindex": 0,
             "presets": {}
         }"#;
@@ -2210,7 +2206,7 @@ mod tests {
         let gun_path = gun_config_path(&root);
         fs::create_dir_all(knife_path.parent().unwrap()).unwrap();
         fs::write(&knife_path, r#"{
-            "schema_version":2,"enabled":true,"apply_to_human_players":true,"apply_on_pickup":true,
+            "schema_version":2,"enabled":true,"apply_to_human_players":true,
             "music_kit_id":36,"loadouts":{"ct":{"default_knife_defindex":0,"knife_presets":{},"glove":{"enabled":false,"defindex":5030,"paint":10048,"seed":0,"wear":0.01},"gun_presets":{}},"t":{"default_knife_defindex":0,"knife_presets":{},"glove":{"enabled":false,"defindex":5030,"paint":10048,"seed":0,"wear":0.01},"gun_presets":{}}},
             "shared_weapon_links":{}
         }"#).unwrap();
@@ -2238,7 +2234,7 @@ mod tests {
         let gun_path = gun_config_path(&root);
         fs::create_dir_all(knife_path.parent().unwrap()).unwrap();
         fs::write(&knife_path, r#"{
-            "schema_version":3,"enabled":true,"apply_to_human_players":true,"apply_on_pickup":true,
+            "schema_version":3,"enabled":true,"apply_to_human_players":true,
             "music_kit_id":0,"stickers_enabled":true,"loadouts":{"ct":{"default_knife_defindex":0,"knife_presets":{},"glove":{"enabled":false,"defindex":5030,"paint":10048,"seed":0,"wear":0.01},"gun_presets":{}},"t":{"default_knife_defindex":0,"knife_presets":{},"glove":{"enabled":false,"defindex":5030,"paint":10048,"seed":0,"wear":0.01},"gun_presets":{}}},"shared_weapon_links":{}
         }"#).unwrap();
         fs::write(&gun_path, r#"{
@@ -2263,7 +2259,7 @@ mod tests {
         let gun_path = gun_config_path(&root);
         fs::create_dir_all(knife_path.parent().unwrap()).unwrap();
         fs::write(&knife_path, r#"{
-            "schema_version":3,"enabled":true,"apply_to_human_players":true,"apply_on_pickup":true,"music_kit_id":0,"stickers_enabled":true,
+            "schema_version":3,"enabled":true,"apply_to_human_players":true,"music_kit_id":0,"stickers_enabled":true,
             "loadouts":{"ct":{"default_knife_defindex":515,"knife_presets":{"515":{"paint":568,"seed":0,"wear":0.01,"name_tag":"","stattrak_enabled":false,"stattrak_count":0,"stickers":[{"slot":0,"id":1,"wear":0,"scale":1,"rotation":0,"offset_x":0,"offset_y":0,"custom_position":false}]}},"glove":{"enabled":false,"defindex":5030,"paint":10048,"seed":0,"wear":0.01},"gun_presets":{}},"t":{"default_knife_defindex":0,"knife_presets":{},"glove":{"enabled":false,"defindex":5030,"paint":10048,"seed":0,"wear":0.01},"gun_presets":{}}},"shared_weapon_links":{}
         }"#).unwrap();
         fs::write(&gun_path, r#"{
@@ -2428,7 +2424,6 @@ mod tests {
         fs::write(&knife_path, r#"{
             "enabled": true,
             "apply_to_human_players": true,
-            "apply_on_pickup": true,
             "default_knife_defindex": 515,
             "presets": {"515":{"paint":568,"seed":0,"wear":0.01,"name_tag":"","stattrak_enabled":false,"stattrak_count":0}},
             "glove":{"enabled":false,"defindex":5030,"paint":10048,"seed":0,"wear":0.01}

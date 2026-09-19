@@ -62,7 +62,6 @@ const previewConfig: KnifeCustomizerConfig = {
   schema_version: 5,
   enabled: true,
   apply_to_human_players: true,
-  apply_on_pickup: true,
   music_kit_id: 0,
   loadouts: {
     ct: {

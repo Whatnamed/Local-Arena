@@ -275,4 +275,160 @@ var resumed = throttle.Check("gun", now.AddSeconds(31));
 Require(resumed.ShouldLog && resumed.Suppressed == 1,
     "The next error record must report how many duplicate errors were suppressed.");
 
-Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, and log-throttle tests passed.");
+// Weapon provenance decides which weapon entities a preset may be written onto.
+{
+    var provenance = new WeaponProvenance();
+    provenance.RecordGrant((nint)0x1000, (nint)0x5100, 7, "weapon_ak47");
+    provenance.RecordGrant((nint)0x1000, (nint)0x5101, 7, "weapon_ak47");
+    Require(provenance.IsOwned((nint)0x5100, 7, "weapon_ak47"),
+        "A weapon granted to the player must be eligible for their own preset.");
+    Require(!provenance.IsOwned((nint)0x2000, 7, "weapon_ak47"),
+        "A weapon entity this plugin never granted must keep the appearance it was picked up with.");
+    provenance.Forget((nint)0x5101);
+    Require(!provenance.IsOwned((nint)0x5101, 7, "weapon_ak47"),
+        "A destroyed weapon must not leave ownership behind for a reused handle.");
+    provenance.RecordGrant((nint)0x1000, (nint)0x5101, 9, "weapon_awp");
+    Require(!provenance.IsOwned((nint)0x5101, 7, "weapon_ak47"),
+        "A reused handle must not inherit the identity of the weapon that used to live there.");
+    provenance.RecordGrant((nint)0x1000, (nint)0x5102, 9, "weapon_awp");
+    Require(provenance.IsOwned((nint)0x5100, 7, "weapon_ak47"),
+        "Another weapon with the same DefIndex must keep its own separate verdict.");
+    provenance.ForgetPlayer((nint)0x1000);
+    Require(!provenance.IsOwned((nint)0x5102, 9, "weapon_awp"),
+        "Disconnecting a player must drop the weapons tracked for them.");
+    provenance.RecordGrant((nint)0x1100, (nint)0x5300, 9, "weapon_awp");
+    provenance.RecordGrant((nint)0x1200, (nint)0x5301, 9, "weapon_awp");
+    provenance.ForgetPlayer((nint)0x1100);
+    Require(!provenance.IsOwned((nint)0x5300, 9, "weapon_awp") && provenance.IsOwned((nint)0x5301, 9, "weapon_awp"),
+        "Forgetting one player must not prune another player's weapons.");
+    provenance.Clear();
+    Require(provenance.Count == 0, "A map change must clear provenance entirely.");
+}
+
+// A live Panel edit only re-applies the region that actually changed.
+{
+    static KnifeConfig Configured()
+    {
+        var config = new KnifeConfig { Enabled = true };
+        config.Loadouts.Ct.KnifePresets[507] = Preset(417);
+        config.Loadouts.Ct.GunPresets[7] = Preset(2);
+        config.Loadouts.Ct.Glove = new GlovePreset { Enabled = true, DefIndex = 5027, Paint = 10041 };
+        config.Loadouts.T.KnifePresets[507] = Preset(417);
+        config.Loadouts.T.GunPresets[7] = Preset(2);
+        config.Normalize();
+        return config;
+    }
+
+    Require(CosmeticConfigDiff.Compute(Configured(), Configured()).ChangesNothing,
+        "An identical configuration must not schedule any apply.");
+
+    KnifeConfig countOnly = Configured();
+    countOnly.Loadouts.Ct.GunPresets[7].StatTrakCount = 42;
+    Require(CosmeticConfigDiff.Compute(Configured(), countOnly).ChangesNothing,
+        "A StatTrak counter change, which the plugin writes back itself, is not a cosmetic change.");
+
+    KnifeConfig knife = Configured();
+    knife.Loadouts.Ct.KnifePresets[507] = Preset(278);
+    CosmeticApplyPhase knifePhases = (CosmeticApplyPhase)(int)CosmeticConfigDiff.Compute(Configured(), knife).Sections;
+    Require(knifePhases.HasFlag(CosmeticApplyPhase.Knife) && !knifePhases.HasFlag(CosmeticApplyPhase.Guns),
+        "A knife paint change must schedule the knife region only.");
+
+    KnifeConfig glove = Configured();
+    glove.Loadouts.Ct.Glove.Paint = 10042;
+    CosmeticConfigDiff gloveDiff = CosmeticConfigDiff.Compute(Configured(), glove);
+    Require(gloveDiff.Sections.HasFlag(CosmeticChangeSection.Gloves) &&
+            !gloveDiff.Sections.HasFlag(CosmeticChangeSection.Guns),
+        "A glove change must schedule the glove region only.");
+
+    KnifeConfig gun = Configured();
+    gun.Loadouts.Ct.GunPresets[7] = Preset(58);
+    gun.Loadouts.Ct.GunPresets[9] = Preset(344);
+    CosmeticConfigDiff gunDiff = CosmeticConfigDiff.Compute(Configured(), gun);
+    Require(gunDiff.Sections.HasFlag(CosmeticChangeSection.Guns) &&
+            gunDiff.ChangedGunDefIndexes.SequenceEqual(new ushort[] { 7, 9 }),
+        "A gun edit must report exactly the changed DefIndexes so untouched weapons stay untouched.");
+
+    KnifeConfig removed = Configured();
+    removed.Loadouts.Ct.GunPresets.Remove(7);
+    Require(CosmeticConfigDiff.Compute(Configured(), removed).ChangedGunDefIndexes.Contains((ushort)7),
+        "Clearing a preset must count as a change to that weapon.");
+
+    KnifeConfig sticker = Configured();
+    sticker.Loadouts.Ct.GunPresets[7].Stickers.Add(new StickerPreset { Id = 1, Slot = 0 });
+    Require(CosmeticConfigDiff.Compute(Configured(), sticker).Sections.HasFlag(CosmeticChangeSection.Guns),
+        "A decoration change is a cosmetic change.");
+
+    KnifeConfig disabled = Configured();
+    disabled.Enabled = false;
+    Require((CosmeticApplyPhase)(int)CosmeticConfigDiff.Compute(Configured(), disabled).Sections ==
+            CosmeticApplyPhase.All, "Toggling enablement must re-run every region.");
+}
+
+// Debouncing must never let a burst of file events become a queue of reloads.
+{
+    var gate = new ConfigReloadGate(150);
+    Require(gate.Signal(), "The first notification of a save must ask for a timer.");
+    Require(!gate.Signal() && !gate.Signal(),
+        "The duplicate events one atomic replace produces must collapse into the timer that already exists.");
+    Require(gate.TryBeginWork(), "An armed timer must hand its accumulated signals to the game thread.");
+    Require(!gate.TryBeginWork(), "A timer that nobody signalled must do nothing.");
+    Require(gate.Signal() && gate.HasPendingWork(), "A save landing during a reload must stay visible.");
+    Require(gate.TryBeginWork(), "The pending save must be picked up by the follow-up pass.");
+    gate.Reset();
+    Require(!gate.HasPendingWork() && !gate.TryBeginWork(), "Unloading must leave nothing queued.");
+}
+
+// The plugin may only remove the search-path lines named in the Panel's marker.
+{
+    const string dirty = "SearchPaths\r\n{\r\n\tGame\tcsgo/addons/metamod\r\n\tGame\tcsgo\r\n}\r\nNewDepotSetting\t1\r\n";
+    const string clean = "SearchPaths\r\n{\r\n\tGame\tcsgo\r\n}\r\nNewDepotSetting\t1\r\n";
+    string[] owned = ["csgo/addons/metamod"];
+    Require(GameinfoIsolation.StripOwnedPaths(dirty, owned) == clean,
+        "Restoring must drop the project line and keep the depot settings and the CRLF style.");
+    Require(GameinfoIsolation.StripOwnedPaths(clean, owned) == clean,
+        "Restoring an already clean file must report nothing to rewrite.");
+    const string foreign = "SearchPaths\n{\n\tGame+Local\tWORKSHOP\n\tGame\tcsgo/addons/someothermod\n\tGame\tcsgo\n}\n";
+    Require(GameinfoIsolation.StripOwnedPaths(foreign, owned) == foreign,
+        "A search path this project never inserted must survive, even when it loads another Mod.");
+    const string lfOnly = "SearchPaths\n{\n Game csgo/addons/metamod\n Game csgo\n}";
+    string lfResult = GameinfoIsolation.StripOwnedPaths(lfOnly, owned);
+    Require(!lfResult.Contains('\r') && lfResult == "SearchPaths\n{\n Game csgo\n}",
+        "A line-feed-only gameinfo must stay line-feed-only, including its missing trailing newline.");
+    Require(GameinfoIsolation.StripOwnedPaths(dirty, []) == dirty,
+        "A marker that names no owned path authorises no edit at all.");
+
+    Require(PanelIsolationMarker.TryRead(
+        "{\"schema_version\":1,\"gameinfo\":\"E:/CS2/game/csgo/gameinfo.gi\",\"search_paths\":[\"csgo/addons/metamod\"],\"ticket\":{\"nonce\":\"x\",\"expires_at_unix\":2000}}",
+        out PanelIsolationMarker? marker) && marker is not null,
+        "A complete marker must be readable.");
+    Require(marker!.GameinfoPath.EndsWith("gameinfo.gi", StringComparison.Ordinal),
+        "The marker names the file the plugin is allowed to rewrite.");
+    Require(marker.HasLiveTicket(1999) && !marker.HasLiveTicket(2000),
+        "A launch ticket must expire instead of authorising every later start.");
+    Require(!PanelIsolationMarker.TryRead("{\"gameinfo\":\"\",\"search_paths\":[\"csgo/addons/metamod\"]}", out _),
+        "A marker without a target file must be refused.");
+    Require(!PanelIsolationMarker.TryRead("{\"gameinfo\":\"a\",\"search_paths\":[]}", out _),
+        "A marker naming no search path authorises nothing and must be refused.");
+    Require(!PanelIsolationMarker.TryRead("{ not json", out _), "A malformed marker must be refused, not obeyed.");
+    Require(PanelIsolationMarker.TryRead("{\"gameinfo\":\"a\",\"search_paths\":[\"csgo/addons/metamod\"]}",
+        out PanelIsolationMarker? unticketed) && unticketed is not null && !unticketed.HasLiveTicket(1),
+        "A marker carrying no ticket can never authorise a managed session.");
+}
+
+// Wear must land inside the band the PaintKit publishes.
+{
+    var skin = new WeaponSkinEntry { WeaponDefIndex = 7, Paint = 2, MinWear = 0.06f, MaxWear = 0.70f };
+    KnifePreset tooNew = new() { Paint = 2, Wear = 0.01f };
+    Require(PresetWearClamp.Clamp(tooNew, skin) && Math.Abs(tooNew.Wear - 0.06f) < 1e-6f,
+        "Wear below the PaintKit minimum must be clamped up instead of failing the whole apply.");
+    KnifePreset tooWorn = new() { Paint = 2, Wear = 0.99f };
+    Require(PresetWearClamp.Clamp(tooWorn, skin) && Math.Abs(tooWorn.Wear - 0.70f) < 1e-6f,
+        "Wear above the PaintKit maximum must be clamped down.");
+    KnifePreset inBand = new() { Paint = 2, Wear = 0.30f };
+    Require(!PresetWearClamp.Clamp(inBand, skin) && Math.Abs(inBand.Wear - 0.30f) < 1e-6f,
+        "A valid wear must be left exactly as the user set it.");
+    Require(!PresetWearClamp.Clamp(inBand, null),
+        "A paint kit missing from the catalog has no published range, so nothing may be rewritten.");
+}
+
+Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, live-reload, launch-isolation and wear-clamp tests passed.");
