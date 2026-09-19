@@ -6,7 +6,8 @@ import { api, type KnifeCustomizerConfig, type KnifePreset } from "../lib/api";
 import type { KnifeIcon } from "../data/knifeIcons";
 import imageRows from "../data/skinImages.json";
 import catalogRows from "../data/weaponSkins.json";
-import { finishName, itemName, localizedSkinName } from "../data/skinLocalization";
+import { finishName, itemName, localizedSkinName, matchesCosmeticSearch, skinNameAliases } from "../data/skinLocalization";
+import { PREFERRED_KNIFE_FINISHES, orderByPreferredFinish } from "../data/cosmeticOrder";
 import { useT, type I18nKey } from "../i18n";
 import { useStore } from "../state/store";
 import CosmeticsTeamSwitch, { useCosmeticsTeam } from "../components/CosmeticsTeamSwitch";
@@ -85,12 +86,16 @@ export default function KnifePresetModal({ knife, csgoPath, config, onSaved, onE
       : phase;
     return `${finishName(full)}${phaseLabel ? ` · ${phaseLabel}` : ""} [${row.paint}]`;
   };
-  const skins = useMemo(() => {
-    const q = query.trim().toLocaleLowerCase();
-    return allSkins.filter((row) => !q || label(row).toLocaleLowerCase().includes(q));
-  // The label follows the selected Panel language.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allSkins, language, query]);
+  const skins = useMemo(() => orderByPreferredFinish(
+    allSkins.filter((row) => matchesCosmeticSearch(query, [
+      label(row), localizedSkinName("english", row.weapon_defindex, row.paint),
+      ...skinNameAliases(row.weapon_defindex, row.paint), row.paint,
+    ])),
+    // Ranking uses the English finish name so the order cannot change with the
+    // selected display language.
+    (row) => finishName(localizedSkinName("english", row.weapon_defindex, row.paint)),
+    PREFERRED_KNIFE_FINISHES
+  ), [allSkins, language, query]);
   const selectedSkin = allSkins.find((row) => row.paint === draft.paint);
   const selectedCatalog = knife ? catalog.get(`${knife.id}:${draft.paint}`) : undefined;
 

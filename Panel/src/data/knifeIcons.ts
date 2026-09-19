@@ -1,4 +1,7 @@
 import skins from "./skinImages.json";
+import { compareKnifeTypes } from "./cosmeticOrder";
+
+const compareKnifeIds = (a: number, b: number) => compareKnifeTypes({ id: a }, { id: b });
 
 export type KnifeIcon = { id: number; url: string };
 
@@ -13,7 +16,8 @@ type SkinRow = {
 
 const rows = skins as SkinRow[];
 
-export const KNIFE_ICONS: KnifeIcon[] = KNIFE_IDS.map(
+/** Ordered by the product's knife preference; the full catalog stays intact. */
+export const KNIFE_ICONS: KnifeIcon[] = [...KNIFE_IDS].sort(compareKnifeIds).map(
   (id) => {
     const base = rows.find(
       (row) => Number(row.weapon_defindex) === id && Number(row.paint) === 0

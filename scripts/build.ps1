@@ -106,6 +106,7 @@ try {
     }
     Invoke-Checked $npm @("run", "test:stickers") $panel
     Invoke-Checked $npm @("run", "test:install-gate") $panel
+    Invoke-Checked $npm @("run", "test:cosmetics") $panel
     Invoke-Checked $npm @("run", "build") $panel
 
     Invoke-Checked $DotNet @("build", "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.csproj", "-c", "Release", "--nologo")

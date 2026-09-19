@@ -25,4 +25,22 @@ export function gloveModelName(language: string | null | undefined, defindex: nu
   return language === "schinese" ? names.schinese : language === "tchinese" ? names.tchinese : names.english;
 }
 
+/**
+ * Glove finish names come from the same Valve paint kit table as every other
+ * skin, so the Simplified Chinese labels are derived from it rather than
+ * hand-written. Finishes with no entry there keep their English name, which is
+ * still searchable.
+ */
+import gloveFinishNames from "./gloveFinishNames.json";
+
+const GLOVE_FINISH_ZH: Record<string, string> = gloveFinishNames as Record<string, string>;
+
+export function gloveFinishName(
+  language: string | null | undefined,
+  englishFinish: string
+): string {
+  if (language !== "schinese" && language !== "tchinese") return englishFinish;
+  return GLOVE_FINISH_ZH[englishFinish] ?? englishFinish;
+}
+
 export { default } from "./gloveSkins.json";

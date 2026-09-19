@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import Modal from "../components/Modal";
 import Toggle from "../components/Toggle";
 import WearGauge from "../components/WearGauge";
-import GLOVE_SKINS, { gloveModelName, type GloveSkin } from "../data/gloveSkins";
-import { finishName, localizedSkinName } from "../data/skinLocalization";
+import GLOVE_SKINS, { gloveModelName, gloveFinishName, type GloveSkin } from "../data/gloveSkins";
+import { finishName, localizedSkinName, matchesCosmeticSearch, skinNameAliases } from "../data/skinLocalization";
+import { gloveFinishRank } from "../data/cosmeticOrder";
 import { api, type GlovePreset, type KnifeCustomizerConfig } from "../lib/api";
 import { useT } from "../i18n";
 import { useStore } from "../state/store";
@@ -26,7 +27,8 @@ export default function GlovePresetModal({ open, csgoPath, config, onSaved, onEr
   const [team, setTeam] = useCosmeticsTeam();
   const skinListRef = useSelectedPickerScroll(open, `${team}:${draft.defindex}:${draft.paint}`);
   const modelName = (defindex: number) => gloveModelName(language, defindex);
-  const skinName = (skin: GloveSkin) => finishName(localizedSkinName(language, skin.defindex, skin.paint, `${modelName(skin.defindex)} | ${skin.name}`));
+  const skinName = (skin: GloveSkin) => finishName(
+    localizedSkinName(language, skin.defindex, skin.paint, `${modelName(skin.defindex)} | ${gloveFinishName(language, skin.name)}`));
 
   useEffect(() => {
     if (!open || !config) return;
@@ -37,11 +39,20 @@ export default function GlovePresetModal({ open, csgoPath, config, onSaved, onEr
     setQuery("");
   }, [open, team, config]);
 
+  // Grouped by glove model in catalog order, and inside each model the dark and
+  // neutral finishes the product prefers come first. All 91 entries stay visible.
   const visible = useMemo(() => {
-    const q = query.trim().toLocaleLowerCase();
-    return rows.filter((row) => !q || `${modelName(row.defindex)} ${skinName(row)} ${row.paint}`.toLocaleLowerCase().includes(q));
-  // Labels follow the selected Panel language.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    const modelOrder = new Map<number, number>();
+    for (const row of rows) if (!modelOrder.has(row.defindex)) modelOrder.set(row.defindex, modelOrder.size);
+    return rows
+      .filter((row) => matchesCosmeticSearch(query, [
+        modelName(row.defindex), skinName(row), row.name,
+        ...skinNameAliases(row.defindex, row.paint), row.paint, row.defindex,
+      ]))
+      .sort((a, b) => (modelOrder.get(a.defindex)! - modelOrder.get(b.defindex)!) ||
+        (gloveFinishRank(a.name.toLocaleLowerCase()) - gloveFinishRank(b.name.toLocaleLowerCase())) ||
+        (a.paint - b.paint));
+    // Labels follow the selected Panel language.
   }, [language, query]);
   const selected = rows.find((row) => row.defindex === draft.defindex && row.paint === draft.paint);
 
