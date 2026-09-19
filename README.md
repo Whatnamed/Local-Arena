@@ -1,385 +1,178 @@
 <div align="center">
 
-# Local Arena
+# Local Cosmetics
 
 **English** | [简体中文](README.zh-CN.md)
 
 <br/>
 
-<a href="https://github.com/numakkiyu/Local-Arena/releases"><img alt="Release" src="https://img.shields.io/github/v/release/numakkiyu/Local-Arena?display_name=tag&sort=semver"></a>
 <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D4">
-<a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/numakkiyu/Local-Arena"></a>
+<a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-green"></a>
 
 <br/>
 <br/>
 
-[Download a published build](https://github.com/numakkiyu/Local-Arena/releases) · [Report an issue](https://github.com/numakkiyu/Local-Arena/issues) · [Brand and independence](#brand-renaming-and-project-independence) · [Source attribution](#upstream-source-and-attribution)
+[Cosmetics](#what-you-configure) · [Launch isolation](#two-ways-to-start-cs2) · [Install](#four-step-first-installation) · [Recovery](#installation-recovery-and-diagnostics) · [Attribution](#upstream-source-and-attribution)
 
 </div>
 
 > [!IMPORTANT]
-> Local Arena is an independently developed and maintained Windows toolkit for local CS2 matches, player cosmetics, demos, diagnostics, and managed installation
+> Local Cosmetics is a lightweight Windows toolkit for **player cosmetics in local CS2 matches**. It is a fork of the player-cosmetics capability of
+> [Local Arena](https://github.com/numakkiyu/Local-Arena) and is independently developed and maintained
 >
-> Local Arena is not affiliated with, endorsed by, or maintained by [ed0ard/CS2-Bot-Improver](https://github.com/ed0ard/CS2-Bot-Improver) or its maintainers. The upstream project does not provide support for Local Arena
+> It is not a bot-enhancement project, not a public or online skin server, and not an in-game overlay. It never edits your real Steam inventory and never
+> touches a VAC-secured server
 >
-> For any Local Arena build, Panel, installation, matching, cosmetics, diagnostics, crash, or update problem, [open an issue in this repository](https://github.com/numakkiyu/Local-Arena/issues). Do not submit Local Arena reports to the upstream project
->
-> Selected enhanced-bot components remain derived from upstream AGPL-3.0 code. Their origin and authorship remain credited below, while development, releases, issue tracking, and user support are managed independently by Local Arena
->
-> During the repository transition, existing installations intentionally retain the legacy executable name, `.csbip` state directory, icon, and Panel appearance so backups, presets, and match history remain compatible
+> `docs/PRODUCT-SCOPE.md` is the canonical product boundary. `docs/UPSTREAM.md` records what is carried over from upstream and what is deliberately not
 
 <div align="center">
 
-The current `main` branch targets **1.4.3.3**
-
-Update codename: **Richer Cosmetics**
-
-**Guide:** [First installation](#four-step-first-installation) · [Existing installation](#updating-an-existing-installation) · [Launch modes](#choose-the-correct-mode) · [Cosmetics](#player-cosmetic-presets) · [Recovery](#installation-updates-and-recovery) · [Troubleshooting](#troubleshooting)
+The current `main` branch targets **1.4.3.3** · package `LocalCosmetics-v1.4.3.3-windows.zip`
 
 </div>
 
-<p align="center">
-  <img src="./Panel/src/assets/guide/01-overview.png" alt="Local Arena current Panel overview" width="100%">
-</p>
+## What this project is for
 
----
+You build knife, glove, and gun-skin presets for the human player in an external desktop Panel, then start CS2 from that Panel to apply them in an offline
+local match. Official normal bots keep working; nothing in this project changes bot behavior.
 
-## Brand Renaming and Project Independence
+## Two ways to start CS2
 
-Following an explicit request from the upstream project author for clear brand separation, and to further clarify project ownership and maintenance responsibilities, this project will be formally renamed from **CS2BotImproverPlus** to **Local Arena** beginning with the next version
+This is the most important behavior of the whole product:
 
-**Local Arena** is independently developed, released, and maintained. It is not affiliated with, authorized by, jointly maintained with, officially partnered with, or supported by **CS2-Bot-Improver** or its author. The project only uses, modifies, and redistributes selected open-source code under the [AGPL-3.0](https://github.com/numakkiyu/Local-Arena/blob/main/LICENSE) license, while continuing to preserve all required source attribution, authorship notices, and license declarations
+| How you start CS2 | What you get |
+| --- | --- |
+| **Directly from Steam** | Ordinary, unmodified CS2. No Panel must be open, no managed search path is left in `gameinfo.gi`, and you never have to "switch back to Normal" first |
+| **From the Panel** | Local cosmetics mode. The Panel opens a launch transaction, adds the managed `gameinfo.gi` search path for this run only, and launches CS2 with `-insecure` |
 
-Beginning with the next version, Local Arena will adopt a new UI design language and brand logo. To preserve user data, update, installation, and legacy-version compatibility, some older releases, historical interfaces, filenames, and compatibility identifiers may continue to display the former brand name during the transition
+`-insecure` means the session is offline: official matchmaking and VAC-secured servers are unavailable, which is exactly where local cosmetics can be applied.
+When CS2 exits, the in-game plugin and the Panel restore the clean state. If a previous run was killed instead of closed, the next launch, repair, or restore
+finishes the recovery before doing anything else — see `docs/MANUAL-ACCEPTANCE.md` for the in-game checks.
 
-## What Local Arena Adds
+## What you configure
 
-- CT and T player loadouts with independent knives, gloves, and weapon skins
-- Shared weapons can use one linked skin or separate CT and T skins
-- Human-player music kit presets and compatible StatTrak or Souvenir options
-- Three launch modes for online play, cosmetic preview, and enhanced bots
-- A four-step installer that detects clean CS2, legacy compatible builds, and the original upstream plugin
-- Transactional backups, installation verification, repair, rollback, and pristine-CS2 recovery
-- Panel and plugin payload delivered together as a downloadable package
-- One-click diagnostic ZIP export that opens the output folder automatically
-- A built-in guide with real screenshots and troubleshooting steps
+### Knives, gloves, guns
 
-## Before You Start
+- Every knife in the current catalog, each with its own saved skin preset, so switching back restores that knife's last PaintKit, wear, and pattern seed
+- Gloves and gun skins with independent CT and T presets; shared weapons link both sides by default and can be split
+- Compatible catalog entries expose StatTrak or Souvenir options where the item supports them
+- Wear is clamped to the valid range of the selected PaintKit; Doppler and Gamma Doppler phases stay separate catalog entries rather than seed guesses
+- Human-player music kit presets
+- Gun presets apply only to weapons the player owns — bought, spawned, or created by this project; a gun picked up off the ground keeps its original appearance
+
+### Live changes while CS2 is running
+
+Saving a preset while a local match is loaded is applied through a config-change watcher with debouncing and bounded retries. There is no permanent tick or
+frame polling of your configuration or inventory, and only the regions that actually changed are re-applied.
+
+### Optional quick-knife rotation
+
+The Weapon Presets page can build an ordered quick-knife rotation and shows the matching console bind line, ready to copy. The Panel never writes a bind, a
+cfg, or an autoexec: until you paste the line yourself, your key bindings are untouched, and disabling the feature leaves nothing behind.
+
+### Experimental surfaces
+
+**Settings → Experimental Features** adds stickers, validated charm placements, and CT/T agent models for the human player. Charm positions snap to the local
+catalog, presets store numeric identifiers rather than localized text, and knives do not accept stickers or charms.
+
+### Simplified Chinese
+
+Simplified Chinese is a first-class language: Panel copy, knife names, glove finishes, and skin names come from local catalog data, and search matches the
+displayed name as well as English names and identifiers.
+
+## Before you start
 
 > [!WARNING]
-> Close CS2 before installing, repairing, restoring, updating plugins, changing difficulty, or switching modes
+> Close CS2 before installing, repairing, restoring, or changing experimental settings
 
-- Local Arena is currently packaged for Windows
-- Extract the complete ZIP to a normal folder before opening the Panel
-- Keep the legacy executable, `addons`, `cfg`, and `plus-payload-manifest.json` together
-- Do not run the Panel from inside the ZIP
-- The correct game directory ends with `Counter-Strike Global Offensive\game\csgo`
-- Cosmetic preview and enhanced-bot mode use `-insecure` and cannot enter official matchmaking
-- For Linux builds and upstream-only installation, use the [upstream project](https://github.com/ed0ard/CS2-Bot-Improver)
+- Windows only
+- Extract the complete ZIP to a normal folder; do not open the Panel from inside the archive
+- Keep the Panel executable, `addons`, `LICENSE`, `README.md`, `UPSTREAM.md`, and `plus-payload-manifest.json` in the same folder
+- The correct game directory is the one that ends with `Counter-Strike Global Offensive\game\csgo` and directly contains `gameinfo.gi`
+- Panel state, logs, backups, and presets live in the portable `.csbip` folder beside the Panel executable
 
-## Four-Step First Installation
+## Four-step first installation
 
-### 1. Choose the Panel language
+1. **Choose the Panel language.** This only changes the Panel and writes nothing to CS2
+2. **Confirm the `game/csgo` directory.** The Panel searches Steam registry data, every `libraryfolders.vdf`, and the CS2 app manifest; one valid installation
+   is selected automatically, several require you to pick the installation Steam actually launches
+3. **Review the installation plan.** The preview classifies the environment before any file changes: clean CS2, an already managed installation, a legacy
+   installation, an original upstream plugin, or a mixed and unknown environment. Mixed or unknown blocks automatic installation
+4. **Install.** The transaction journal verifies every copied file and rolls back completed steps if an operation fails. Do not launch CS2, close the Panel,
+   or click install again while the transaction is running
 
-The language selection only changes the Panel and does not write anything to CS2
+## Updating
 
-Panel memory, settings, logs, update cache, and preserved presets are stored in the portable `.csbip` folder beside the Panel
+Local Cosmetics has no automatic update channel and publishes no update manifest: the Panel never downloads another project's package, and no path in the
+shipped Panel can overwrite this fork with an upstream build. Updating means closing CS2 and the Panel, extracting a newer package into the same folder, and
+keeping the hidden `.csbip` folder. If you move to a different folder, copy the old `.csbip` folder beside the new Panel first so the original backups,
+installation records, presets, and logs stay connected.
 
-<p align="center">
-  <img src="./Panel/src/assets/guide/08-first-language.jpg" alt="Choose the Panel language" width="100%">
-</p>
+Upstream synchronization happens through Git review, not through a release channel — see `docs/UPSTREAM.md`.
 
-### 2. Confirm the `game/csgo` directory
+## Installation, recovery, and diagnostics
 
-The Panel searches Steam registry data, every `libraryfolders.vdf`, and the CS2 app manifest
-
-- One valid installation is selected automatically
-- Multiple installations require you to choose the one actually launched by Steam
-- Use Browse only when automatic detection cannot find the correct installation
-- Do not select the CS2 root, `game`, `bin`, or the Panel folder
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/09-first-directory.jpg" alt="Select the CS2 game directory" width="100%">
-</p>
-
-### 3. Review the installation plan
-
-The preview identifies the existing environment before changing files
-
-| Detected environment | Panel action | Preserved data |
-| --- | --- | --- |
-| Clean CS2 | Install Local Arena | Existing files are backed up before replacement |
-| Managed Local Arena | Update or repair Local Arena | Original backup and player presets are retained |
-| Legacy installation | Adopt and update | Existing cosmetics and migration files are preserved |
-| Original upstream plugin | Replace with Local Arena | The upstream installation is backed up first |
-| Mixed or unknown plugins | Block automatic installation | Export diagnostics or return to pristine CS2 first |
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/10-first-preview.jpg" alt="Review the installation plan" width="100%">
-</p>
-
-### 4. Install and enter the Panel
-
-Installation uses a transaction journal, verifies every copied file, and rolls back completed steps if an operation fails
-
-Do not launch CS2, close the Panel, or repeatedly click the install button while the transaction is running
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/11-first-complete.jpg" alt="Installation completed" width="100%">
-</p>
-
-## Updating an Existing Installation
-
-Local Arena does not fetch updates from another project's release channel, and this fork publishes no automatic update manifest; updating means installing a newer package from this repository's releases
-
-For a manual package update, close CS2 and the old Panel, extract the new package into the existing portable Panel folder, and keep the hidden `.csbip` folder
-
-If the new package must use a different folder, copy the complete old `.csbip` folder beside the new Panel before opening it so the original backups, installation records, presets, and logs remain connected
-
-The installer can distinguish a managed Local Arena installation, a legacy installation, the original upstream plugin, and a partial mixed environment
-
-It does not treat your cosmetic JSON, selected difficulty, or managed bot options as corrupted payload files
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/12-first-mixed.jpg" alt="Existing or mixed plugin environment detection" width="100%">
-</p>
-
-If the environment is classified as mixed or unknown, do not manually overwrite it again
-
-Export diagnostics, use **Restore pristine CS2** for recognized enhanced-plugin files, run Steam file verification, and then perform a clean first installation
-
-## Choose the Correct Mode
-
-| Mode | What is enabled | Matchmaking |
-| --- | --- | :---: |
-| Normal matchmaking | Enhanced-plugin loading is disabled | Available |
-| Cosmetics preview | PlayerCosmetics only, with official normal bots | Blocked |
-| Enhanced bots | Full upstream bot systems and player cosmetics | Blocked |
-
-Always choose a mode in Overview before launching CS2 from the Panel
-
-### Normal matchmaking
-
-Use this mode for ordinary online play
-
-The Panel removes the managed MetaMod search path and does not add `-insecure`
-
-### Cosmetics preview
-
-Use this mode when you only want to inspect your knife, gloves, guns, and music kit
-
-Enhanced-bot AI, difficulty, buying, profiles, agents, and behavior systems are disabled, while official normal bots continue to work
-
-### Enhanced bots
-
-Use this mode for the complete Local Arena experience
-
-It enables all synchronized upstream bot features, the selected difficulty, bot items, commands, and player cosmetics
-
-## Player Cosmetic Presets
-
-### CT and T weapons
-
-The Weapon Presets page separates CT-only, T-only, and shared weapons
-
-- CT-only and T-only weapons keep independent team presets
-- Shared weapons link both teams by default
-- Disable **Use the same skin for CT/T** to configure each side independently
-- Enabling the link again copies the currently edited side to the other team
-- Compatible catalog entries expose StatTrak or Souvenir controls
-- StatTrak values are written back to the matching team preset
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/02-weapon-presets.png" alt="CT and T weapon presets" width="100%">
-</p>
-
-### Stickers, charms, and agents
-
-Enable the Cosmetic Forge under **Settings → Experimental Features** to configure up to five stickers and one charm for a saved gun-skin preset, plus separate CT/T agent models for the human player. Sticker instance slots are selected separately from weapon-native positions. Charms snap only to validated weapon placements from the local catalog, so presets never store arbitrary XYZ coordinates. Agent models are selected from a local team-owned allowlist and applied only through the human-player spawn pipeline. Knives do not accept stickers or charms.
-
-The forge uses a local 2.5D preview and does not launch CS2 or depend on in-game screenshots. BotRandomizer remains a separate bot-only pipeline, so player cosmetic presets do not overwrite bot state.
-
-### CT and T knives and gloves
-
-Knife and glove dialogs share the current CT or T selection
-
-Each team stores its own model, paint kit, wear, pattern seed, name tag, default knife, and supported StatTrak values
-
-Only the default knife held by the player is guaranteed to receive the configured appearance, while dropped ground knives are not given live cosmetic rendering
-
-### Bot presets
-
-The Presets page controls bot aiming, grenade behavior, the dropped-knife key, and entry points for player knife and glove settings
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/03-bot-presets.png" alt="Bot behavior and player knife presets" width="100%">
-</p>
-
-## Other Panel Pages
-
-### Bot Items
-
-Bot skins, profiles, agents, and music kits can be enabled independently without overwriting the human player's CT and T presets
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/06-bot-items.png" alt="Bot item controls" width="100%">
-</p>
-
-### Commands
-
-Commands are grouped by common actions, bot behavior, teams, coordinated purchases, and connection tasks
-
-Select a category or search by purpose, then click a command to copy the exact console text
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/07-commands.png" alt="Search and copy CS2 commands" width="100%">
-</p>
-
-The original upstream command collection remains available in [Commands.txt](https://github.com/ed0ard/CS2-Bot-Improver/blob/main/Commands.txt)
-
-## Installation, Updates, and Recovery
-
-### Installation health
-
-**Settings → Installation and Recovery** shows the detected environment, installed version, managed-file health, backup location, and available actions
-
-Changing cosmetics, CT/T presets, difficulty, or managed bot options must not be reported as payload corruption
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/04-installation-recovery.jpg" alt="Installation and recovery page" width="49%">
-  <img src="./Panel/src/assets/guide/13-health-repair.jpg" alt="Installation health and repair" width="49%">
-</p>
-
-### Updating the Panel and the plugin payload
-
-The Panel and the plugin payload are shipped in the same downloaded package and are replaced by installing it
-
-- This fork does not publish a signed update manifest and does not download updates from another repository
-- Installing a payload update requires the selected CS2 process to be closed
-- Player presets use the preserve-config policy and are not overwritten by repair or update
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/05-online-update.png" alt="Panel and plugin online updates" width="100%">
-</p>
-
-### Recovery actions
+**Settings → Installation and Recovery** shows the detected environment, installed version, managed-file health, backup location, and available actions. The
+ownership boundary is `plus-payload-manifest.json`: only files this project can prove it owns are replaced or removed.
 
 | Action | Use it when | Result |
 | --- | --- | --- |
-| Verify installation | You want a fresh health result | Performs a read-only managed-file check |
-| Repair installation | Managed files are missing or damaged | Reinstalls only affected payload files |
-| Restore original state | A managed Local Arena installation must be rolled back | Restores installation-time backups and removes files created by Local Arena |
-| Restore pristine CS2 | Local Arena or upstream enhanced plugins must be removed | Deletes recognized enhanced-plugin files, preserves unknown third-party files, then asks for Steam verification |
-| Export diagnostics | A problem is reproducible or unclear | Creates a ZIP and opens its folder automatically |
+| Verify installation | You want a fresh health result | Read-only managed-file check |
+| Repair installation | Managed files are missing or damaged | Reinstalls only the affected payload files |
+| Restore original files | A managed installation must be rolled back | Restores the recorded pre-install backups and removes files this project created |
+| Restore pristine CS2 | Every recognized enhanced-plugin file must go | Removes recognized plugin files, keeps unknown third-party files, then asks for Steam file verification |
+| Export diagnostics | A problem is reproducible or unclear | Creates a ZIP and opens its folder |
 
-Player cosmetic presets are copied to the portable `.csbip/presets` area before a managed restore
+Your saved knife, glove, and gun presets use a preserve-config policy: repair and restore never overwrite them, and a managed restore copies them into
+`.csbip/presets` first. Your own `cfg`, `autoexec`, binds, and any third-party file the Panel cannot attribute stay in place.
 
 ## Troubleshooting
 
-### All directory and file states are red
+**Every directory and file state is red** — the Panel has not found a valid `game/csgo` directory. Select the folder that directly contains `gameinfo.gi` and
+refresh.
 
-The Panel has not found a valid `game/csgo` directory, so install and launch actions remain unavailable
+**The environment is mixed or unknown** — export diagnostics before deleting or overwriting anything, then use **Restore pristine CS2**, run Steam file
+verification, and start a clean installation.
 
-Open **Settings → Directory**, select the folder that directly contains `gameinfo.gi` and `cfg`, then refresh the inspection
+**Buttons are disabled or installation looks stuck** — the selected CS2 is probably still running or another transaction holds the lock. Close CS2 completely,
+wait for `cs2.exe` to disappear, keep the Panel open, and retry after the status refreshes.
 
-<p align="center">
-  <img src="./Panel/src/assets/guide/15-directory-missing.jpg" alt="CS2 directory is missing" width="100%">
-</p>
+**A managed file is reported as modified** — run **Verify installation** first, and only use **Repair installation** when a managed payload file really is
+missing or damaged. Cosmetic presets are not corruption.
 
-### The environment is mixed or unknown
+**Cosmetics do not appear** — the match must have been started from the Panel; a CS2 launched directly from Steam is intentionally unmodified. Confirm the
+current CT or T presets are enabled, then verify and repair before using any recovery action.
 
-The Panel found only part of Local Arena or the upstream plugin together with files whose ownership cannot be proven safely
+**CS2 freezes or crashes** — reopen the Panel and use **Export diagnostics** right away, and include the map, game type, team, and exact reproduction steps.
+A hard kill of `cs2.exe` leaves the launch transaction open on purpose; the next Panel action recovers it and the game self-heals the search path on load.
 
-Export diagnostics before deleting or overwriting anything, use **Restore pristine CS2** to remove recognized enhanced-plugin files, run Steam file verification, and then start a clean first installation
+## What is deliberately not included
 
-### Buttons are disabled or installation appears stuck
+Enhanced bot AI and difficulty presets, bot aiming or buying systems, grenade systems, bot profiles and team injection, bot randomizers and disguises, ray
+tracing, match coordination, ratings, telemetry, statistics, demos, team lineups, the in-game overlay surfaces, and the upstream online update channel. The
+packaging gate asserts that none of these components reach a release archive.
 
-The selected CS2 installation is probably still running or another installation transaction owns the file lock
+## Legacy naming
 
-Close CS2 completely, wait for `cs2.exe` to disappear, keep the Panel open, and retry after the status refreshes
+The product is Local Cosmetics, while the Panel executable is still named `cs2-bot-improver-plus-panel.exe`, the window brand still reads **Local Arena**, and
+state lives in `.csbip`. Those identifiers are kept on purpose for now so existing installations, backups, and presets remain compatible.
 
-<p align="center">
-  <img src="./Panel/src/assets/guide/14-process-lock.jpg" alt="CS2 process lock" width="100%">
-</p>
+## Upstream source and attribution
 
-### One or more managed files are reported as modified
+- [numakkiyu/Local-Arena](https://github.com/numakkiyu/Local-Arena) — main technical base for the Panel and the player-cosmetics plugin, AGPL-3.0
+- [ed0ard/CS2-Bot-Improver](https://github.com/ed0ard/CS2-Bot-Improver) — reference upstream for CS2 and CounterStrikeSharp compatibility work and an
+  attribution target; its enhanced-bot runtime is not shipped here
+- [Metamod:Source](https://github.com/alliedmodders/metamod-source) and [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp) — pinned runtime
+  dependencies, verified by SHA-256 during packaging
+- Cosmetic data: [Nereziel/cs2-WeaponPaints](https://github.com/Nereziel/cs2-WeaponPaints) (GPL-3.0),
+  [ByMykel/CSGO-API](https://github.com/ByMykel/CSGO-API) (MIT),
+  [SteamTracking/GameTracking-CS2](https://github.com/SteamTracking/GameTracking-CS2) (no published license, factual schema reference only)
 
-Click **Verify installation** first
+Pinned versions, hashes, and the full not-carried-over list live in `docs/UPSTREAM.md`; the same information is rendered inside the Panel under
+**Settings → About**.
 
-Only use **Repair installation** when a managed payload file is actually missing or damaged, and keep CS2 closed during repair
-
-Cosmetic presets, difficulty selections, and supported bot option files are preserved and should not be counted as corruption
-
-### A package update fails or is interrupted
-
-Keep the current version, close CS2 and the Panel, and install the downloaded package again from scratch
-
-Export diagnostics if the same error repeats, and do not replace managed payload files by hand
-
-<p align="center">
-  <img src="./Panel/src/assets/guide/16-update-error.jpg" alt="Online update error details" width="100%">
-</p>
-
-### Cosmetics do not appear
-
-- Use Cosmetics preview or Enhanced bots mode
-- Confirm the current CT or T knife, glove, and weapon presets are enabled
-- Verify and repair the managed installation before using recovery actions
-- Normal matchmaking intentionally disables PlayerCosmetics
-
-### Restore original state does not produce clean CS2
-
-**Restore original state** returns a managed installation to its recorded pre-install state, which may itself contain a legacy compatible build or upstream plugin
-
-Use **Restore pristine CS2** when all recognized enhanced-plugin files must be removed, then complete Steam file verification before launching the game
-
-### CS2 freezes or crashes
-
-Reopen the Panel immediately and use **Export diagnostics**
-
-Send the ZIP together with the selected mode, map, game type, team, and exact reproduction steps
-
-For team-selection crashes, include how long the game remained on the team selection screen before CT or T was chosen
-
-## Upstream Source and Attribution
-
-Local Arena distributes selected AGPL-3.0 enhanced-bot components derived from [ed0ard/CS2-Bot-Improver](https://github.com/ed0ard/CS2-Bot-Improver), including
-
-1. More capable and human-like bot aim
-2. Situation-aware grenade usage
-3. Improved bot movement and stuck handling
-4. Expanded weapon buying and economy management
-5. Spraying, flicking, smoke spam, and anti-flash behavior
-6. Bot knives, gloves, weapon skins, agents, music kits, avatars, and profiles
-7. More organized and alert bot decision making
-8. Professional and randomized player names based on HLTV data
-9. Bot-friendly game-rule adjustments
-10. Additional console commands and team lineups
-
-The upstream project is a source dependency and attribution target, not a Local Arena support channel. For its original implementation, Linux instructions, and documentation, visit [ed0ard/CS2-Bot-Improver](https://github.com/ed0ard/CS2-Bot-Improver)
-
-## Credits
-
-- [ed0ard/CS2-Bot-Improver](https://github.com/ed0ard/CS2-Bot-Improver)
-- [Metamod:Source](https://github.com/alliedmodders/metamod-source)
-- [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp)
-- [Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace)
-- [CS2-Bot-Randomizer](https://github.com/ed0ard/CS2-Bot-Randomizer)
-- [CS2-Bot-Hider](https://github.com/XBribo/CS2-Bot-Hider)
-- [CS2-Bot-Controller](https://github.com/XBribo/CS2-Bot-Controller)
-- [CS2-BotAI](https://github.com/ed0ard/CS2-BotAI)
-- [CS2-Bot-Buy](https://github.com/ed0ard/CS2-Bot-Buy)
-- [CS2-Bot-NadeSystem](https://github.com/ed0ard/CS2-Bot-NadeSystem)
-- [RoundDamageRecap](https://github.com/YuGeYu/LBTV-CS2-Bot-Enhancer/tree/main/addons/counterstrikesharp/plugins/RoundDamageRecap)
+Local Cosmetics is not affiliated with, endorsed by, or supported by the upstream projects. Report issues in this repository only.
 
 ## License
 
-[AGPL-3.0](LICENSE)
-
----
-
-<div align="center">
-
-[Back to top](#local-arena)
-
-</div>
+[AGPL-3.0](LICENSE) — the applicable upstream copyright, provenance, and attribution notices are preserved.
