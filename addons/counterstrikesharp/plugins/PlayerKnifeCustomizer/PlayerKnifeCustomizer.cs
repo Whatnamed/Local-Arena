@@ -206,6 +206,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private int _loadedGunConfigSchema = KnifeConfig.CurrentSchemaVersion;
     private bool _stickersSanitizedDuringLoad;
     private readonly ApplyGenerationTracker _applyTracker = new();
+    private readonly WeaponProvenanceTracker _provenanceTracker = new();
 
     private string ConfigPath => Path.Combine(ModuleDirectory, "player_knife_presets.json");
     private string GunConfigPath => Path.Combine(ModuleDirectory, "player_gun_presets.json");
@@ -280,6 +281,18 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             var player = GetPlayerFromItemServices(itemServices);
             if (!CanApplyToPlayer(player)) return HookResult.Continue;
             nint playerHandle = player!.Handle;
+
+            var returnedWeapon = hook.GetReturn<CBasePlayerWeapon>();
+            if (returnedWeapon is { IsValid: true })
+            {
+                ushort defIndex = returnedWeapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
+                var team = GetCosmeticTeam(player);
+                if (team.HasValue && defIndex > 0)
+                {
+                    _provenanceTracker.RegisterGrantedWeapon(playerHandle, (int)team.Value, returnedWeapon.Handle, returnedWeapon.Index, defIndex);
+                }
+            }
+
             long generation = _applyTracker.Begin(playerHandle, CosmeticApplyPhase.Guns);
             // The returned econ item is not safe for native attribute writes while this hook is active.
             ScheduleApplyCallbacks(playerHandle, generation);
@@ -304,6 +317,29 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         var player = @event.Userid;
         if (!CanApplyToPlayer(player)) return HookResult.Continue;
+
+        var pawn = player!.PlayerPawn.Value;
+        var team = GetCosmeticTeam(player);
+        if (pawn is { IsValid: true } && team.HasValue)
+        {
+            var weapons = pawn.WeaponServices?.MyWeapons;
+            if (weapons != null)
+            {
+                foreach (var handle in weapons)
+                {
+                    var weapon = handle.Value;
+                    if (weapon is { IsValid: true } && !IsKnifeName(weapon.DesignerName))
+                    {
+                        ushort defIndex = weapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
+                        if (defIndex > 0)
+                        {
+                            _provenanceTracker.RegisterGrantedWeapon(player.Handle, (int)team.Value, weapon.Handle, weapon.Index, defIndex);
+                        }
+                    }
+                }
+            }
+        }
+
         ScheduleApplyPipeline(player!.Handle, CosmeticApplyPhase.All);
         return HookResult.Continue;
     }
@@ -334,6 +370,30 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         var player = @event.Userid;
         if (!_config.ApplyOnPickup || !CanApplyToPlayer(player))
             return HookResult.Continue;
+
+        // Pickup of existing ground weapons never overrides cosmetic skins.
+        // Dropped player weapons retain their cosmetics; foreign ground weapons keep original skin.
+        var pawn = player!.PlayerPawn.Value;
+        var activeWeapon = pawn?.WeaponServices?.ActiveWeapon.Value;
+        if (activeWeapon is { IsValid: true } && !IsKnifeName(activeWeapon.DesignerName))
+        {
+            ushort defIndex = activeWeapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
+            var team = GetCosmeticTeam(player);
+            if (team.HasValue && defIndex > 0)
+            {
+                var decision = _provenanceTracker.EvaluatePickup(
+                    player.Handle,
+                    (int)team.Value,
+                    activeWeapon.Handle,
+                    activeWeapon.Index,
+                    defIndex
+                );
+                if (decision.Action == ProvenanceAction.PreserveExisting)
+                {
+                    return HookResult.Continue;
+                }
+            }
+        }
 
         ScheduleApplyPipeline(player!.Handle, CosmeticApplyPhase.Guns);
         return HookResult.Continue;
@@ -376,13 +436,17 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         var player = @event.Userid;
         if (player != null && player.Handle != nint.Zero)
+        {
             _applyTracker.Cancel(player.Handle);
+            _provenanceTracker.ClearPlayer(player.Handle);
+        }
         return HookResult.Continue;
     }
 
     private HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo _)
     {
         _applyTracker.CancelAll();
+        _provenanceTracker.ClearAll();
         return HookResult.Continue;
     }
 
@@ -512,6 +576,9 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         var weapons = pawn.WeaponServices?.MyWeapons;
         if (weapons == null) return false;
+        var controller = pawn.Controller.Value;
+        nint playerHandle = controller is { IsValid: true } ? controller.Handle : nint.Zero;
+
         bool ready = true;
         foreach (var handle in weapons)
         {
@@ -519,7 +586,20 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             if (weapon == null || !weapon.IsValid || IsKnifeName(weapon.DesignerName)) continue;
             ushort defIndex = weapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
             if (defIndex == 0 || !TryGetPreset(defIndex, team, out var preset)) continue;
-            if (!ApplyPreset(weapon, defIndex, preset)) ready = false;
+
+            if (playerHandle != nint.Zero && !_provenanceTracker.IsEligibleForApply(playerHandle, weapon.Handle, weapon.Index, defIndex))
+            {
+                continue;
+            }
+
+            if (!ApplyPreset(weapon, defIndex, preset))
+            {
+                ready = false;
+            }
+            else
+            {
+                _provenanceTracker.RecordApplied(weapon.Handle, weapon.Index);
+            }
         }
         return ready;
     }

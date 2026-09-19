@@ -275,4 +275,67 @@ var resumed = throttle.Check("gun", now.AddSeconds(31));
 Require(resumed.ShouldLog && resumed.Suppressed == 1,
     "The next error record must report how many duplicate errors were suppressed.");
 
-Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, and log-throttle tests passed.");
+// Weapon Provenance Tracker Tests
+var provTracker = new WeaponProvenanceTracker();
+nint p1 = (nint)0x5000;
+nint p2 = (nint)0x6000;
+nint wOwnedAk = (nint)0x7001;
+uint wOwnedAkIdx = 101;
+ushort akDefIndex = 7;
+
+nint wForeignAk = (nint)0x7002;
+uint wForeignAkIdx = 102;
+
+// 1. New owned entity granted to player -> eligible to apply
+long g1 = provTracker.RegisterGrantedWeapon(p1, (int)CosmeticTeam.Ct, wOwnedAk, wOwnedAkIdx, akDefIndex);
+Require(g1 > 0, "Registration must return a valid generation.");
+Require(provTracker.IsEligibleForApply(p1, wOwnedAk, wOwnedAkIdx, akDefIndex),
+    "A newly granted weapon must be eligible for cosmetic preset application.");
+Require(provTracker.IsEligibleForLiveReload(p1, wOwnedAk, wOwnedAkIdx, akDefIndex),
+    "A newly granted weapon must be eligible for live cosmetic reload.");
+
+// 2. Unknown picked entity (foreign bot gun) -> preserve existing, not eligible to apply
+var foreignDecision = provTracker.EvaluatePickup(p1, (int)CosmeticTeam.Ct, wForeignAk, wForeignAkIdx, akDefIndex);
+Require(foreignDecision.Action == ProvenanceAction.PreserveExisting && !foreignDecision.IsOwnedByPlayer,
+    "Unknown picked weapon must be preserved as foreign entity.");
+Require(!provTracker.IsEligibleForApply(p1, wForeignAk, wForeignAkIdx, akDefIndex),
+    "Foreign picked weapon must NOT be eligible for cosmetic preset application.");
+Require(!provTracker.IsEligibleForLiveReload(p1, wForeignAk, wForeignAkIdx, akDefIndex),
+    "Foreign picked weapon must NOT be eligible for live cosmetic reload.");
+
+// 3. Owned dropped and re-picked entity -> preserve existing appearance, still recognized as owned
+provTracker.RecordApplied(wOwnedAk, wOwnedAkIdx);
+var repickDecision = provTracker.EvaluatePickup(p1, (int)CosmeticTeam.Ct, wOwnedAk, wOwnedAkIdx, akDefIndex);
+Require(repickDecision.Action == ProvenanceAction.PreserveExisting && repickDecision.IsOwnedByPlayer,
+    "Repicked owned weapon must preserve existing appearance and be recognized as owned.");
+Require(provTracker.IsEligibleForLiveReload(p1, wOwnedAk, wOwnedAkIdx, akDefIndex),
+    "Repicked owned weapon remains eligible for live cosmetic reload.");
+
+// 4. Same DefIndex but different entity -> no state leak between entities
+Require(provTracker.IsEligibleForLiveReload(p1, wOwnedAk, wOwnedAkIdx, akDefIndex),
+    "Player's own AK entity must be recognized.");
+Require(!provTracker.IsEligibleForLiveReload(p1, wForeignAk, wForeignAkIdx, akDefIndex),
+    "Foreign AK entity with identical DefIndex must not leak ownership.");
+
+// 5. Destroyed entity -> provenance removed
+Require(provTracker.UnregisterEntity(wOwnedAk, wOwnedAkIdx), "Entity unregistration must succeed.");
+Require(!provTracker.IsEligibleForApply(p1, wOwnedAk, wOwnedAkIdx, akDefIndex),
+    "Destroyed entity must no longer be eligible for preset application.");
+
+// 6. Generation / handle reuse -> no old ownership leak
+nint reusedHandle = wOwnedAk;
+uint reusedIdx = wOwnedAkIdx;
+ushort m4DefIndex = 16;
+provTracker.RegisterGrantedWeapon(p2, (int)CosmeticTeam.T, reusedHandle, reusedIdx, m4DefIndex);
+Require(!provTracker.IsEligibleForApply(p1, reusedHandle, reusedIdx, akDefIndex),
+    "Reused handle must not retain old player 1 or old defIndex eligibility.");
+Require(provTracker.IsEligibleForApply(p2, reusedHandle, reusedIdx, m4DefIndex),
+    "Reused handle must correctly bind to player 2 and new defIndex.");
+
+// 7. Clear player on disconnect
+provTracker.ClearPlayer(p2);
+Require(!provTracker.IsEligibleForApply(p2, reusedHandle, reusedIdx, m4DefIndex),
+    "Player disconnect cleanup must remove all tracked entities for that player.");
+Require(provTracker.TrackedCount == 0, "Tracker should be empty after cleanup.");
+
+Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, and log-throttle tests passed.");
