@@ -1914,6 +1914,48 @@ mod tests {
     }
 
     #[test]
+    fn upstream_migration_and_pristine_restore_cleans_bot_suite_and_preserves_foreign_files() {
+        let base = root("upstream-migration-test");
+        let payload = base.join("payload");
+        let target = base.join("target");
+        let state = base.join("state");
+        cosmetics_fixture(&payload, &target);
+
+        for marker_rel in UPSTREAM_MARKERS.iter().take(4) {
+            marker(&target, marker_rel);
+        }
+        let legacy_vpk = target.join("overrides/botprofile.vpk");
+        fs::create_dir_all(legacy_vpk.parent().unwrap()).unwrap();
+        fs::write(&legacy_vpk, b"legacy-vpk").unwrap();
+
+        let third_party = target.join("addons/counterstrikesharp/plugins/CommunityMod/mod.dll");
+        fs::create_dir_all(third_party.parent().unwrap()).unwrap();
+        fs::write(&third_party, b"community-plugin-bytes").unwrap();
+        let user_cfg = target.join("cfg/autoexec.cfg");
+        fs::create_dir_all(user_cfg.parent().unwrap()).unwrap();
+        fs::write(&user_cfg, b"bind mouse1 +attack").unwrap();
+
+        let inspection = inspect(&payload, &state, &target).unwrap();
+        assert_eq!(inspection.source, InstallationSource::Upstream);
+        assert_eq!(inspection.migration_kind, MigrationKind::ReplaceUpstream);
+        assert!(inspection.can_install);
+
+        install(&payload, &state, &target, false).unwrap();
+        assert_eq!(fs::read(&third_party).unwrap(), b"community-plugin-bytes");
+        assert_eq!(fs::read(&user_cfg).unwrap(), b"bind mouse1 +attack");
+
+        let restore_result = restore_pristine(&payload, &state, &target).unwrap();
+        assert!(restore_result.removed_files >= 1);
+        assert_eq!(fs::read(&third_party).unwrap(), b"community-plugin-bytes");
+        assert_eq!(fs::read(&user_cfg).unwrap(), b"bind mouse1 +attack");
+        assert!(!legacy_vpk.exists());
+        assert!(!target.join("addons/counterstrikesharp/plugins/BotAI").exists());
+        assert!(!target.join("addons/counterstrikesharp/plugins/PlayerKnifeCustomizer").exists());
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn install_repair_and_restore_preserve_originals_and_foreign_files() {
         let base = root("roundtrip");
         let payload = base.join("payload");
