@@ -1145,7 +1145,11 @@ fn launch_cs2(app: AppHandle) -> Result<LaunchResult> {
     ensure_target_not_running(&root)?;
     let state = local_state_root(&app)?;
     mode_layout::recover(&state, &root)?;
-    apply_launch_mode(&root, mode).map_err(AppError::invalid)?;
+    if mode.insecure() {
+        mode_files::prepare_local_launch(&root, Some(&state)).map_err(AppError::invalid)?;
+    } else {
+        mode_files::restore_clean_launch(&root, Some(&state)).map_err(AppError::invalid)?;
+    }
     mode_layout::set_preview(&state, &root, mode != LaunchMode::Bots)?;
     enforce_mode_cosmetics(&root, &mut config, mode)?;
     write_bot_randomizer_options(&root, &config.bot_items)?;
@@ -1155,6 +1159,22 @@ fn launch_cs2(app: AppHandle) -> Result<LaunchResult> {
     let steam = find_steam_executable()?;
     let (arguments, options) = launch_request(mode);
     Command::new(steam).args(arguments).spawn()?;
+    if mode.insecure() {
+        let watch_root = root.clone();
+        let watch_state = state.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let proc = inspect_cs2_process(Some(&watch_root));
+                if proc.running {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    break;
+                }
+            }
+            let _ = mode_files::restore_clean_launch(&watch_root, Some(&watch_state));
+        });
+    }
     Ok(LaunchResult {
         options,
         insecure: mode.insecure(),
@@ -4108,6 +4128,13 @@ pub fn run() {
                 let archives_removed = diagnostics::cleanup_archives(&root).unwrap_or(0);
                 let update_cache_removed = online_update::cleanup_cache(None).unwrap_or(0);
                 logging::append(&root, "INFO", "panel.started", &format!("version={}, logs_collected={removed}, archives_collected={archives_removed}, update_cache_collected={update_cache_removed}", app_version::display()));
+            }
+            if let Ok(config) = read_config(&app.handle()) {
+                if let Some(csgo) = config.csgo_path.as_deref() {
+                    if let (Ok(root), Ok(state)) = (csgo_path(csgo), local_state_root(&app.handle())) {
+                        let _ = mode_files::recover_launch_state(&root, Some(&state));
+                    }
+                }
             }
             let update_app = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
