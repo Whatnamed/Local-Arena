@@ -4,9 +4,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const botCatalogPath = resolve(root, "addons/counterstrikesharp/plugins/BotRandomizer/cosmetic_catalog.json");
-const botPlacementsPath = resolve(root, "addons/counterstrikesharp/plugins/BotRandomizer/charm_placements.json");
-const botAssetsPath = resolve(root, "addons/counterstrikesharp/plugins/BotRandomizer/Cosmetics/RandomizerAssets.cs");
+const sourceRoot = resolve(root, "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/cosmetic_sources");
+const botCatalogPath = resolve(sourceRoot, "cosmetic_catalog.json");
+const botPlacementsPath = resolve(sourceRoot, "charm_placements.json");
+const botAssetsPath = resolve(sourceRoot, "RandomizerAssets.cs.txt");
 const panelPlacementsPath = resolve(root, "Panel/src/data/cosmeticPlacements.json");
 const panelCharmsPath = resolve(root, "Panel/src/data/charmCatalog.json");
 const panelAgentsPath = resolve(root, "Panel/src/data/agentCatalog.json");
@@ -163,7 +164,7 @@ function sha256(value) {
 
 function extractModels(source, arrayName) {
   const match = source.match(new RegExp(`\\b${arrayName}\\s*=\\s*\\[(?<body>[\\s\\S]*?)\\n\\s*\\];`));
-  if (!match?.groups?.body) throw new Error(`Could not locate ${arrayName} in RandomizerAssets.cs`);
+  if (!match?.groups?.body) throw new Error(`Could not locate ${arrayName} in RandomizerAssets.cs.txt`);
   const models = [...match.groups.body.matchAll(/"(agents\\\\models\\\\[^"\r\n]+\.vmdl)"/g)]
     .map((entry) => entry[1].replaceAll("\\\\", "\\"));
   if (!models.length || new Set(models).size !== models.length)

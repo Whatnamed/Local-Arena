@@ -1,10 +1,9 @@
-name: Build signed release
+name: Build release
 
 on:
   push:
     tags:
-      - "v1.4.3.3"
-      - "v1.4.3.3-Preview.*"
+      - "v*"
 
 permissions:
   contents: write
@@ -13,7 +12,6 @@ jobs:
   release:
     runs-on: windows-latest
     env:
-      CSBIP_UPDATE_SIGNING_KEY: ${{ secrets.CSBIP_UPDATE_SIGNING_KEY }}
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
@@ -34,31 +32,15 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Prepare build and signing tools
-        shell: pwsh
-        run: |
-          if (-not $env:CSBIP_UPDATE_SIGNING_KEY) { throw "CSBIP_UPDATE_SIGNING_KEY is not configured" }
-          python -m pip install --disable-pip-version-check pynacl
-          $env:CARGO_HOME = Join-Path $PWD ".cache/cargo-home"
-          New-Item -ItemType Directory -Path $env:CARGO_HOME -Force | Out-Null
-          cargo install cargo-xwin --locked --root $env:CARGO_HOME
-
       - name: Build, test, and package
         shell: pwsh
         run: |
-          $llvm = Join-Path $env:ProgramFiles "LLVM/bin"
-          if (-not (Test-Path (Join-Path $llvm "lld-link.exe"))) { throw "LLVM linker is unavailable: $llvm" }
           $version = "${{ github.ref_name }}".TrimStart("v")
-          ./scripts/package.ps1 -ReleaseVersion $version -LlvmBin $llvm -XwinCache (Join-Path $PWD ".cache/xwin") -OutputDirectory (Join-Path $PWD "artifacts")
+          ./scripts/package.ps1 -ReleaseVersion $version -OutputDirectory (Join-Path $PWD "artifacts")
 
-      - name: Verify signed update assets
+      - name: Check that the build left the tree clean
         shell: pwsh
         run: |
-          python ./scripts/verify-update-assets.py ./artifacts --public-key ./scripts/update-public-key.txt
           if ((git status --short --untracked-files=no).Length -ne 0) { git status --short; throw "Build modified tracked files" }
 
       - name: Publish release assets
@@ -73,6 +55,4 @@ jobs:
             artifacts/LocalArena-${{ github.ref_name }}-windows.zip
             artifacts/LocalArena-panel-${{ github.ref_name }}-windows.zip
             artifacts/LocalArena-plugin-${{ github.ref_name }}-windows.zip
-            artifacts/latest.json
-            artifacts/latest.json.sig
             artifacts/SHA256SUMS.txt

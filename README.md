@@ -26,7 +26,7 @@
 >
 > Selected enhanced-bot components remain derived from upstream AGPL-3.0 code. Their origin and authorship remain credited below, while development, releases, issue tracking, and user support are managed independently by Local Arena
 >
-> During the repository transition, existing installations intentionally retain the legacy executable name, `.csbip` state directory, icon, and Panel appearance so online updates, backups, presets, and match history remain compatible
+> During the repository transition, existing installations intentionally retain the legacy executable name, `.csbip` state directory, icon, and Panel appearance so backups, presets, and match history remain compatible
 
 <div align="center">
 
@@ -60,7 +60,7 @@ Beginning with the next version, Local Arena will adopt a new UI design language
 - Three launch modes for online play, cosmetic preview, and enhanced bots
 - A four-step installer that detects clean CS2, legacy compatible builds, and the original upstream plugin
 - Transactional backups, installation verification, repair, rollback, and pristine-CS2 recovery
-- Separate online updates for the Panel and plugin payload
+- Panel and plugin payload delivered together as a downloadable package
 - One-click diagnostic ZIP export that opens the output folder automatically
 - A built-in guide with real screenshots and troubleshooting steps
 
@@ -71,7 +71,7 @@ Beginning with the next version, Local Arena will adopt a new UI design language
 
 - Local Arena is currently packaged for Windows
 - Extract the complete ZIP to a normal folder before opening the Panel
-- Keep the legacy executable, `addons`, `cfg`, `overrides`, and `plus-payload-manifest.json` together
+- Keep the legacy executable, `addons`, `cfg`, and `plus-payload-manifest.json` together
 - Do not run the Panel from inside the ZIP
 - The correct game directory ends with `Counter-Strike Global Offensive\game\csgo`
 - Cosmetic preview and enhanced-bot mode use `-insecure` and cannot enter official matchmaking
@@ -130,7 +130,7 @@ Do not launch CS2, close the Panel, or repeatedly click the install button while
 
 ## Updating an Existing Installation
 
-Prefer **Settings → Online Update** when it is available
+Local Arena does not fetch updates from another project's release channel, and this fork publishes no automatic update manifest; updating means installing a newer package from this repository's releases
 
 For a manual package update, close CS2 and the old Panel, extract the new package into the existing portable Panel folder, and keep the hidden `.csbip` folder
 
@@ -250,14 +250,12 @@ Changing cosmetics, CT/T presets, difficulty, or managed bot options must not be
   <img src="./Panel/src/assets/guide/13-health-repair.jpg" alt="Installation health and repair" width="49%">
 </p>
 
-### Online updates
+### Updating the Panel and the plugin payload
 
-The Panel and plugin payload are checked and installed separately
+The Panel and the plugin payload are shipped in the same downloaded package and are replaced by installing it
 
-- Startup checks are non-blocking and cached for six hours
-- Manual checks bypass the cache
-- Plugin updates require the selected CS2 process to be closed
-- Downloads are verified by signature, size, and SHA-256 before installation
+- This fork does not publish a signed update manifest and does not download updates from another repository
+- Installing a payload update requires the selected CS2 process to be closed
 - Player presets use the preserve-config policy and are not overwritten by repair or update
 
 <p align="center">
@@ -312,11 +310,11 @@ Only use **Repair installation** when a managed payload file is actually missing
 
 Cosmetic presets, difficulty selections, and supported bot option files are preserved and should not be counted as corruption
 
-### Online update cannot connect or verification fails
+### A package update fails or is interrupted
 
-The updater stops before installation when network, signature, size, hash, compatibility, or rollback validation fails
+Keep the current version, close CS2 and the Panel, and install the downloaded package again from scratch
 
-Keep the current version, confirm GitHub connectivity, retry a manual check, and export diagnostics if the same error repeats
+Export diagnostics if the same error repeats, and do not replace managed payload files by hand
 
 <p align="center">
   <img src="./Panel/src/assets/guide/16-update-error.jpg" alt="Online update error details" width="100%">
