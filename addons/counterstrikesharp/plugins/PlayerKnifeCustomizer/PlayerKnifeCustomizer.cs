@@ -111,6 +111,60 @@ public static class KnifeShortcutPolicy
     }
 }
 
+/// <summary>
+/// Knife schema names used when the runtime creates a replacement knife entity.
+/// The table is the knife set the fork already carries with its cosmetics data
+/// (cosmetic_sources/RandomizerAssets.cs.txt). A defindex outside it falls back to
+/// the generic knife entity, whose subclass is then set explicitly.
+/// </summary>
+public static class KnifeSchemaNames
+{
+    public const string CounterTerroristKnife = "weapon_knife";
+    public const string TerroristKnife = "weapon_knife_t";
+
+    private static readonly Dictionary<ushort, string> ByDefIndex = new()
+    {
+        [500] = "weapon_bayonet",
+        [503] = "weapon_knife_css",
+        [505] = "weapon_knife_flip",
+        [506] = "weapon_knife_gut",
+        [507] = "weapon_knife_karambit",
+        [508] = "weapon_knife_m9_bayonet",
+        [509] = "weapon_knife_tactical",
+        [512] = "weapon_knife_falchion",
+        [514] = "weapon_knife_survival_bowie",
+        [515] = "weapon_knife_butterfly",
+        [516] = "weapon_knife_push",
+        [517] = "weapon_knife_cord",
+        [518] = "weapon_knife_canis",
+        [519] = "weapon_knife_ursus",
+        [520] = "weapon_knife_gypsy_jackknife",
+        [521] = "weapon_knife_outdoor",
+        [522] = "weapon_knife_stiletto",
+        [523] = "weapon_knife_widowmaker",
+        [525] = "weapon_knife_skeleton",
+        [526] = "weapon_knife_kukri",
+    };
+
+    public static string GiveName(ushort defIndex, CosmeticTeam team) =>
+        ByDefIndex.TryGetValue(defIndex, out var name)
+            ? name
+            : team == CosmeticTeam.T ? TerroristKnife : CounterTerroristKnife;
+}
+
+/// <summary>
+/// The shortcut list is a collection of knife types; the skin is a separate layer
+/// that each team owns. A missing preset for the current team must never block the
+/// switch, and the other team's preset must never be copied across to fill the gap.
+/// </summary>
+public static class KnifeShortcutPreset
+{
+    /// <summary>The preset to apply, or null for the vanilla knife with no custom
+    /// paint kit, wear, seed, name tag or StatTrak state.</summary>
+    public static KnifePreset? Resolve(TeamLoadout loadout, ushort defIndex) =>
+        loadout.KnifePresets.TryGetValue(defIndex, out var preset) ? preset : null;
+}
+
 public static class StickerFailurePolicy
 {
     public static bool ShouldRestoreBaseSkin(bool stickerApplySucceeded) => !stickerApplySucceeded;
@@ -825,6 +879,85 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         return false;
     }
 
+    /// <summary>The knife the player is standing on, optionally excluding one handle so
+    /// a freshly created replacement can be found.</summary>
+    private static CBasePlayerWeapon? FindKnife(CCSPlayerPawn pawn, nint exceptHandle = 0)
+    {
+        var weapons = pawn.WeaponServices?.MyWeapons;
+        if (weapons == null) return null;
+        foreach (var handle in weapons)
+        {
+            var weapon = handle.Value;
+            if (weapon == null || !weapon.IsValid || weapon.Handle == exceptHandle) continue;
+            if (!IsKnifeName(weapon.DesignerName)) continue;
+            return weapon;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Replace the equipped knife with a freshly created entity instead of mutating the
+    /// one in hand. Changing the subclass of the active knife updates grip, inspection
+    /// and sound over a model the client already loaded, which is what made the shortcut
+    /// clip; a new entity is loaded from scratch when it becomes active. The replacement
+    /// is configured while it is still in the bag, so the held knife is only removed once
+    /// the new one is provably ready, and any failure discards the replacement instead of
+    /// leaving the player unarmed.
+    /// </summary>
+    private bool TrySwapKnifeEntity(CCSPlayerController player, CCSPlayerPawn pawn, CosmeticTeam team,
+        ushort target, KnifePreset? preset, out string failure)
+    {
+        failure = string.Empty;
+        var held = FindKnife(pawn);
+        if (held == null)
+        {
+            failure = "the inventory holds no knife to replace";
+            return false;
+        }
+        nint heldHandle = held.Handle;
+        string giveName = KnifeSchemaNames.GiveName(target, team);
+        player.GiveNamedItem(giveName);
+        var replacement = FindKnife(pawn, heldHandle);
+        if (replacement == null)
+        {
+            failure = $"giving {giveName} produced no second knife entity";
+            return false;
+        }
+        var item = replacement.AttributeManager?.Item;
+        if (item == null)
+        {
+            failure = "the replacement knife has no econ item yet";
+            DiscardReplacement(pawn, replacement);
+            return false;
+        }
+        if (item.ItemDefinitionIndex != target)
+        {
+            replacement.AcceptInput("ChangeSubclass", value: target.ToString());
+            item.ItemDefinitionIndex = target;
+        }
+        if (preset != null && (!HasReadyAttributeLists(item) || !ApplyPreset(replacement, target, preset)))
+        {
+            failure = $"the replacement knife could not take the defindex {target} preset";
+            DiscardReplacement(pawn, replacement);
+            return false;
+        }
+        if (held.IsValid) pawn.RemovePlayerItem(held);
+        _provenance.RecordGrant(player.Handle, replacement.Handle, target, replacement.DesignerName);
+        return true;
+    }
+
+    private void DiscardReplacement(CCSPlayerPawn pawn, CBasePlayerWeapon replacement)
+    {
+        try
+        {
+            if (replacement.IsValid) pawn.RemovePlayerItem(replacement);
+        }
+        catch (Exception ex)
+        {
+            LogApplyError("knife replacement cleanup", ex);
+        }
+    }
+
     private bool TryApplyGunPresets(nint playerHandle, CCSPlayerPawn pawn, CosmeticTeam team)
     {
         var weapons = pawn.WeaponServices?.MyWeapons;
@@ -1526,23 +1659,40 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         if (!CanApplyToPlayer(player)) return;
         CosmeticTeam? team = GetCosmeticTeam(player);
-        if (team is null)
+        var pawn = player!.PlayerPawn.Value;
+        if (team is null || pawn is not { IsValid: true } || !player.PawnIsAlive)
         {
-            command.ReplyToCommand("[PlayerCosmetics] Pick a side before using the knife shortcut.");
+            command.ReplyToCommand("[PlayerCosmetics] Pick a side and respawn before using the knife shortcut.");
             return;
         }
         var loadout = _config.Loadouts.For(team.Value);
+        // The live entity is the only trustworthy record of which knife the player is
+        // standing on. The config is the target state, so rotating from it would skip a
+        // slot every time a previous switch failed.
+        ushort current = FindKnife(pawn)?.AttributeManager?.Item?.ItemDefinitionIndex
+                         ?? loadout.DefaultKnifeDefIndex;
         if (!KnifeShortcutPolicy.TryAdvance(_config.KnifeShortcutEnabled, _config.ShortcutKnifeDefIndexes,
-                loadout.DefaultKnifeDefIndex, out ushort next))
+                current, out ushort next))
         {
             command.ReplyToCommand(_config.KnifeShortcutEnabled
                 ? "[PlayerCosmetics] Configure at least one shortcut knife in the Panel."
                 : "[PlayerCosmetics] The knife shortcut is disabled in the Panel.");
             return;
         }
+        if (next == current)
+        {
+            command.ReplyToCommand($"[PlayerCosmetics] The knife shortcut holds one knife only (defindex {next}).");
+            return;
+        }
+        if (!TrySwapKnifeEntity(player, pawn, team.Value, next,
+                KnifeShortcutPreset.Resolve(loadout, next), out string failure))
+        {
+            Logger.LogWarning("[PlayerKnifeCustomizer] Knife shortcut refused: {Failure}", failure);
+            command.ReplyToCommand($"[PlayerCosmetics] Knife shortcut failed: {failure}");
+            return;
+        }
         loadout.DefaultKnifeDefIndex = next;
         SaveConfig();
-        ScheduleApplyPipeline(player!.Handle, CosmeticApplyPhase.Knife);
         command.ReplyToCommand($"[PlayerCosmetics] Knife shortcut -> defindex {next}.");
     }
 

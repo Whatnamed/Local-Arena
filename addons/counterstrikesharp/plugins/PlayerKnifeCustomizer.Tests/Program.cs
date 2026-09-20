@@ -493,4 +493,32 @@ Require(resumed.ShouldLog && resumed.Suppressed == 1,
     Directory.Delete(directory, true);
 }
 
-Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, live-reload, launch-isolation, wear-clamp and runtime-requirement tests passed.");
+// The quick-knife shortcut replaces the knife entity, so it needs the schema name of
+// the type it is creating and the current team's own preset layer.
+{
+    Require(KnifeSchemaNames.GiveName(507, CosmeticTeam.Ct) == "weapon_knife_karambit"
+            && KnifeSchemaNames.GiveName(500, CosmeticTeam.T) == "weapon_bayonet",
+        "A known knife defindex has to be given by its own schema name so the new entity is created as that type.");
+    Require(KnifeSchemaNames.GiveName(511, CosmeticTeam.Ct) == KnifeSchemaNames.CounterTerroristKnife
+            && KnifeSchemaNames.GiveName(511, CosmeticTeam.T) == KnifeSchemaNames.TerroristKnife,
+        "A defindex outside the table falls back to the team's generic knife, which the swap then subclasses.");
+
+    var ct = new TeamLoadout();
+    ct.KnifePresets[507] = new KnifePreset { Paint = 42 };
+    var t = new TeamLoadout();
+    Require(KnifeShortcutPreset.Resolve(ct, 507)?.Paint == 42,
+        "A knife that has a preset for the current team must keep that skin.");
+    Require(KnifeShortcutPreset.Resolve(t, 507) == null,
+        "A knife without a preset for the current team switches to the vanilla knife rather than borrowing the other side's skin.");
+    Require(KnifeShortcutPreset.Resolve(t, 508) == null,
+        "A missing preset must never be invented just because the knife is in the shortcut list.");
+
+    ushort[] rotation = [507, 515, 508];
+    Require(KnifeShortcutPolicy.TryAdvance(true, rotation, 507, out ushort firstTry) && firstTry == 515
+            && KnifeShortcutPolicy.TryAdvance(true, rotation, 507, out ushort retry) && retry == 515,
+        "Rotating from the live entity must retry the same target after a failed switch instead of skipping a slot.");
+    Require(KnifeShortcutPolicy.TryAdvance(true, new ushort[] { 507 }, 507, out ushort only) && only == 507,
+        "A one-knife rotation reports the same defindex, which the command reads as nothing to do.");
+}
+
+Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, live-reload, launch-isolation, wear-clamp, runtime-requirement and knife-swap tests passed.");
