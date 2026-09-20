@@ -108,6 +108,18 @@ New-Item -ItemType Directory -Path $payload -Force | Out-Null
 Copy-Tree (Join-Path $metamodRoot "addons\metamod") (Join-Path $payload "addons\metamod")
 Copy-Tree (Join-Path $counterStrikeSharpRoot "addons\counterstrikesharp") (Join-Path $payload "addons\counterstrikesharp")
 
+# CounterStrikeSharp ships a template by default. Local Cosmetics needs a
+# concrete, package-owned document so the Panel can transactionally coordinate
+# the economic-attribute guard without guessing whether CSS has initialized it.
+$coreExample = Join-Path $payload "addons\counterstrikesharp\configs\core.example.json"
+$coreConfig = Join-Path $payload "addons\counterstrikesharp\configs\core.json"
+if (-not (Test-Path -LiteralPath $coreConfig -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $coreExample -PathType Leaf)) {
+        throw "CounterStrikeSharp core.example.json is missing from the package source."
+    }
+    Copy-Item -LiteralPath $coreExample -Destination $coreConfig -Force
+}
+
 # CounterStrikeSharp's MetaMod loader files are the only extra files copied
 # into the MetaMod directory. No upstream plugin or bot payload is imported.
 $cssMetaMod = Join-Path $counterStrikeSharpRoot "addons\metamod"

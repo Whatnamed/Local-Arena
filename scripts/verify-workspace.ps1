@@ -49,11 +49,27 @@ if ((Get-FileHash -LiteralPath $playerCatalog -Algorithm SHA256).Hash -ne
 }
 
 $playerCosmetics = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.cs") -Raw
+$coreConfigSource = Get-Content -LiteralPath (Join-Path $repo "Panel/src-tauri/src/core_config.rs") -Raw
 if ($playerCosmetics -notmatch "WeaponProvenanceTracker" -or
     $playerCosmetics -notmatch "FileSystemWatcher" -or
     $playerCosmetics -notmatch "hook\.GetReturn<nint>\(\)" -or
-    $playerCosmetics -match "OnItemPickup[\s\S]{0,800}ScheduleApplyPipeline") {
+    $playerCosmetics -match "OnItemPickup[\s\S]{0,800}ScheduleApplyPipeline" -or
+    $playerCosmetics -notmatch "GiveNamedItem<CBasePlayerWeapon>" -or
+    $playerCosmetics -notmatch "KnifeShortcutResolver" -or
+    $playerCosmetics -notmatch "ApplyVanillaKnife" -or
+    $playerCosmetics -match 'weapon\.AcceptInput\("ChangeSubclass"') {
     Add-Failure "PlayerCosmetics provenance, watcher, or pickup boundary is missing."
+}
+$panelBackend = Get-Content -LiteralPath (Join-Path $repo "Panel/src-tauri/src/lib.rs") -Raw
+if ($coreConfigSource -notmatch "FollowCS2ServerGuidelines" -or
+    $coreConfigSource -notmatch "ensure_local_mode" -or
+    $coreConfigSource -notmatch "restore_owned" -or
+    $panelBackend -notmatch "core_config::ensure_local_mode" -or
+    $panelBackend -notmatch "core_config::restore_owned" -or
+    $panelBackend -notmatch "window\.show\(\)" -or
+    $panelBackend -notmatch "window\.unminimize\(\)" -or
+    $panelBackend -notmatch "window\.set_focus\(\)") {
+    Add-Failure "Local CSS core-config ownership or Panel window restoration path is missing."
 }
 
 $packageScript = Get-Content -LiteralPath (Join-Path $repo "scripts/package.ps1") -Raw
@@ -70,7 +86,6 @@ if ($appSource -match '(?<![A-Za-z])(MatchPanel|MatchHistoryPanel|StatsDashboard
 }
 
 $onlineUpdate = Get-Content -LiteralPath (Join-Path $repo "Panel/src-tauri/src/online_update.rs") -Raw
-$panelBackend = Get-Content -LiteralPath (Join-Path $repo "Panel/src-tauri/src/lib.rs") -Raw
 if ($onlineUpdate -match 'numakkiyu/Local-Arena' -or
     $panelBackend -match 'invoke_handler!\[\s*[\s\S]{0,300}install_(panel|plugin|all)_update' -or
     $panelBackend -match 'fn maybe_run_update_helper\(\)[\s\S]{0,120}online_update::maybe_apply_panel_update') {
@@ -94,6 +109,7 @@ if ($PackageRoot) {
         "addons/metamod/bin/win64/server.dll",
         "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll",
         "addons/counterstrikesharp/dotnet/dotnet.exe",
+        "addons/counterstrikesharp/configs/core.json",
         "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll",
         "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
         "plus-payload-manifest.json"
@@ -101,6 +117,16 @@ if ($PackageRoot) {
         if (-not (Test-Path -LiteralPath (Join-Path $root $required) -PathType Leaf)) {
             Add-Failure "Required package file is missing: $required"
         }
+    }
+    $coreConfigPath = Join-Path $root "addons/counterstrikesharp/configs/core.json"
+    if (Test-Path -LiteralPath $coreConfigPath -PathType Leaf) {
+        try {
+            $coreConfig = Get-Content -LiteralPath $coreConfigPath -Raw | ConvertFrom-Json
+            if ($null -eq $coreConfig.PSObject.Properties["FollowCS2ServerGuidelines"]) {
+                Add-Failure "Package core.json does not expose FollowCS2ServerGuidelines."
+            }
+        }
+        catch { Add-Failure "Package core.json is invalid JSON: $($_.Exception.Message)" }
     }
     $manifestPath = Join-Path $root "plus-payload-manifest.json"
     if (Test-Path -LiteralPath $manifestPath) {

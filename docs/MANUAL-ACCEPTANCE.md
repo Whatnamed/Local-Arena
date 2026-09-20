@@ -23,6 +23,9 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] Panel 不要求永久修改 Steam Launch Options。
 - [ ] 该次启动使用 `-insecure`。
 - [ ] MetaMod、CounterStrikeSharp 和 PlayerCosmetics 正常加载。
+- [ ] 本地模式运行期间，`addons/counterstrikesharp/configs/core.json` 的
+      `FollowCS2ServerGuidelines` 为 `false`，但其他未知字段仍保持不变。
+- [ ] 退出 / 恢复 / 卸载后，上述字段按安装前 ownership 状态恢复；不能依赖退出游戏时把它强行改回 `true`。
 - [ ] 使用的是 CS2 官方普通 Bot，而不是 Enhanced Bot AI。
 - [ ] Bot 瞄准、投掷物、购买和行为没有出现旧 Bot Improver 的增强逻辑。
 
@@ -37,6 +40,7 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] Blue Steel / Black Laminate / Vanilla 等深色或中性条目容易找到。
 - [ ] Doppler 各 Phase / Ruby / Sapphire / Black Pearl 没有被错误合并。
 - [ ] Wear 不会被写到 catalog 范围之外。
+- [ ] 当前阵营没有某把刀的 preset 时，仍能切到该刀型并走 Vanilla / default 外观路径；不会因为另一阵营缺 preset 而缩短快捷列表。
 - [ ] 游戏运行中在 Panel 改刀型 / 刀皮时能在安全时机应用；如果不能当前生命立即刷新，也会在下一安全事件正确生效，不崩溃。
 
 ## D. 快捷刀
@@ -46,6 +50,7 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] 默认或自定义快捷列表按预期轮换。
 - [ ] 不再像旧 cfg 一样一次在地面生成大量刀具实体。
 - [ ] 每把刀切换后恢复该刀自己的皮肤预设。
+- [ ] 快捷列表只决定下一把刀型；CT / T 当前阵营 preset 决定皮肤，没有 preset 时仍能切刀。
 - [ ] 快捷功能关闭时不修改 `\` 或其他按键。
 - [ ] 除用户明确选择的快捷键外，WASD、1/2/3、Q、E、F、鼠标、购买键等均未改变。
 
@@ -54,6 +59,7 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] 手套型号和 PaintKit 可以正常选择。
 - [ ] 中文名称正常显示；没有整体退化为英文 ID 列表。
 - [ ] Wear / Seed 正常。
+- [ ] 默认手套配置为关闭；只有明确开启对应 CT / T preset 后才应用手套。
 - [ ] 运行中改手套时模型 / bodygroup 表现正常，没有裸手、重叠模型或持续闪烁。
 - [ ] 切刀不会无故改变已经选择的手套。
 
@@ -84,6 +90,7 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] CS2 运行期间修改配置不会要求重启整个游戏才能永久保存。
 - [ ] 如果实现允许 Panel 关闭后继续使用饰品，关闭 Panel 后本局饰品不消失。
 - [ ] Panel 重开后能重新连接 / 同步到合理状态，不产生重复应用风暴。
+- [ ] Panel 已运行且窗口被最小化 / 隐藏时，CS2 退出后再次启动 Panel（或触发 single-instance）能恢复显示、解除最小化并获得焦点；窗口状态日志可用于复核。
 
 ## I. 异常恢复
 
@@ -117,10 +124,18 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] 原旧 Bot Improver 不再作为运行依赖。
 - [ ] “修复安装”不会清空自己的饰品预设。
 - [ ] “恢复 / 卸载”不会删除未知第三方插件或个人 cfg。
+- [ ] “恢复 / 卸载”会删除本项目明确创建的快捷键配置，但不会覆盖同名且没有 Local Cosmetics ownership 标记的个人 cfg。
 - [ ] 恢复后 Steam Verify Integrity 能顺利回到官方文件状态。
 - [ ] 恢复后再直接 Steam 启动，没有本项目 runtime 残留。
 
-## L. 回归记录建议
+## L. 音乐盒、预设 bundle 与购买界面
+
+- [ ] 配置音乐盒后完成一局并产生 MVP，MVP 音乐实际播放正确；仅保存配置或看到 Panel 选中状态不能代替该验证。
+- [ ] 导出得到一份完整 Cosmetics bundle，包含 CT + T 的刀、手套、枪皮以及音乐盒 / 贴纸 / 挂件 / 探员等已有相关设置。
+- [ ] 导入 bundle 后是整体替换当前饰品配置，不是把缺失字段 merge 到旧配置；导入前备份可用。
+- [ ] 购买菜单显示 Steam 真实库存外观属于预期；购买后生成的 weapon entity 应用本地 preset 即可，不要求修改原生 HUD 或增加 Overlay。
+
+## M. 回归记录建议
 
 每次做完整回归时记录：
 
