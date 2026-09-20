@@ -128,6 +128,8 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 
 每种情况后都至少确认一次：**不打开 Panel，直接从 Steam 启动仍是普通 CS2。**
 
+- [ ] **正常退出 CS2 之后 `gameinfo.gi` 里已经没有 `Game csgo/addons/metamod`**（Panel 的启动隔离视图或 `.csbip/launch-isolation/*/journal.json` 也应没有残留 journal）。这条是实测漏点：2026-09-20 用户正常关游戏后，游戏目录里那一行和 `phase=inserted` 的 journal 都还在，也就是不打开 Panel 直接 Steam 启动会加载本 Mod。三层恢复里只有插件 `Unload` 和 Panel 下次启动的自愈会清掉它，Panel 并不监听 CS2 退出（CS2 由 Steam 以 `-applaunch` 派生，不是 Panel 的子进程），所以游戏异常结束或 Panel 卡住时存在一个真实的泄漏窗口。请分别确认：CS2 正常退出、CS2 崩溃、Panel 被强杀三种情况下各自是谁恢复的、`.csbip/logs` 有没有对应记录。
+
 ## J. 性能与体验
 
 在相同地图、相同 Bot 数量、相同图形设置下比较纯净 CS2 和 Local Cosmetics 模式：
