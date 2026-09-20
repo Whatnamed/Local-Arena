@@ -192,3 +192,54 @@ pinned 输入仍只有两个，且下载后按 `scripts/dependencies.json` 的 S
 - `WELCOME_STORY_URL = https://api.hypcvgm.top/la` 只在用户点击首启提示时打开外部链接，没有后台取数。
 - `docs/MANUAL-ACCEPTANCE.md` 全部条目需实机，按项目规则未由 Agent 执行。
 
+## 9. 首次实机验收发现的运行阻塞与修复（2026-09-20 实测）
+
+### 现象
+
+用户从 Panel 启动本地饰品模式后：刀型正确，但刀皮、枪皮、手套全部保持原皮。
+
+### 证据
+
+`<csgo>/addons/counterstrikesharp/logs/log-PlayerKnifeCustomizer20260920.txt`：
+
+```
+[INFO] Loaded generation-safe pipeline; enabled=true, signature=true, catalog=2106, panel_launch=true
+[EROR] Apply failed during defindex 515 ... Cannot set or get 'CEconItemView::m_iEntityQuality'
+       with "FollowCS2ServerGuidelines" option enabled.
+```
+
+失败 defindex 覆盖刀（515 / 507 / 508）与枪（9 / 1 / 60），错误类型只有这一种。插件加载、gamedata 签名、2106 条 catalog、Panel 启动会话识别全部正常。
+
+### 根因
+
+`<csgo>/addons/counterstrikesharp/configs/core.json` 的 `FollowCS2ServerGuidelines` 为 `true`。CounterStrikeSharp 在该开关打开时，会拒掉饰品写入所需的**整组**经济字段：entity quality、`m_flFallbackWear` / fallback paint kit 与 seed、item id、initialized 等。因此不只是 `m_iEntityQuality`：**手套虽然不写 entity quality，但仍访问 item id 与 initialized，同样依赖该设置为 `false`**，不能按字段逐个绕过。
+
+刀型仍能改变是因为 `TryApplyDefaultKnife` 在调用 `ApplyPreset` 之前先执行了 `AcceptInput("ChangeSubclass")` 与 `ItemDefinitionIndex` 赋值，而 `ApplyPreset` 在写入 paint / wear / seed 之前就被该异常中断。
+
+### 为什么自动化验证没抓到
+
+写入 entity quality 的代码自 `5dc04e9` 起就存在，属于继承逻辑；本 fork 的 payload 又确实不含 `core.json`。该文件是 CounterStrikeSharp 首次启动时按 `core.example.json` 生成的，默认 `true`。负责校正它的 `reconcile_core_json` 在继承到的基线里已经是空实现 `Ok(())`，并在 `d145d92` 随面板裁剪一并删除。结论只在运行时抛异常，构建、打包与禁入 gate 都无从观察。
+
+### 修复
+
+新增 `Panel/src-tauri/src/css_settings.rs`，把这一项设置按 ownership 处理：
+
+- 安装事务内记录"文件此前是否存在、该 property 原值"到 `.csbip/installations/<id>/css-core-settings.json`，随后把 `FollowCS2ServerGuidelines` 写成 `false`；升级安装不覆盖首次记录的原始值。
+- `core.json` 不存在时按 `core.example.json` 生成并纳入 ownership；恢复时删除生成物，或把 property 写回原值（原文件没有该 key 时选择删除该 key，而不是伪造 `false`）。
+- 只改这一个 property：JSON 解析后原样回写，未知与未来新增字段保留；写入走 `atomic_fs::write_replace` 并回读校验。解析失败或值非布尔时报错且不写文件。
+- 本地饰品启动预检先协调再注入搜索路径，协调失败即拒绝启动并给出明确错误。
+- 普通 Steam 启动的安全边界仍然依靠 MetaMod / CounterStrikeSharp 完全不被加载，因此不把该值切回 `true`。
+- 安装检查新增 `CSS_GUIDELINE_MODE`，措辞是"当前 CounterStrikeSharp 配置不满足 Local Cosmetics 饰品运行要求"，不把它描述成配置损坏。
+- 插件侧显式声明该前提：加载时读取 `core.json`，未满足时一次性记录原因并停止逐武器抛异常，`css_cs2bi_knives_status` 输出 `econ_writes=allowed|blocked-by-guidelines`。
+- `core.example.json` 加入 `scripts/release-inventory.json` 的 `required_payload_files` 与 `install_checks.rs`，保证生成路径在发布包里一定存在。
+
+### 验证
+
+| 检查 | 结果 |
+| --- | --- |
+| `cargo test --target x86_64-pc-windows-msvc --locked` | 93 passed / 0 failed / 1 ignored（新增 9 个 `css_settings` 与 3 个 installer ownership 测试） |
+| `dotnet run --project PlayerKnifeCustomizer.Tests -c Release` | 通过（新增 guideline 读取、缺失文件、非布尔、错误文案断言） |
+
+覆盖场景：原值为 `true`、原值为 `false`（不重写）、`core.json` 缺失、JSON 无法解析、非布尔值、未知字段保留、恢复原 property、删除生成物、原子写不留临时文件、升级后仍恢复首次原值。游戏内表现仍需按 `docs/MANUAL-ACCEPTANCE.md` §B / §C / §E / §F / §K 实机确认。
+
+

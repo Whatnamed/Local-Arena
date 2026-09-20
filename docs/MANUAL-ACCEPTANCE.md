@@ -35,13 +35,16 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] **换地图 / 重开一局后饰品仍然生效**，且此时 `gameinfo.gi` 仍是 clean —— 这验证引擎只在进程启动时读取 gameinfo。
 - [ ] 使用的是 CS2 官方普通 Bot，而不是 Enhanced Bot AI。
 - [ ] Bot 瞄准、投掷物、购买和行为没有出现旧 Bot Improver 的增强逻辑。
-- [ ] 游戏内控制台 `css_cs2bi_knives_status` 报告的 `enabled`、catalog 数量和面板所见一致。
+- [ ] 启动本地饰品模式前，Panel 已把 `<csgo>\addons\counterstrikesharp\configs\core.json` 的 `FollowCS2ServerGuidelines` 协调为 `false`（该文件原先不存在时，Panel 会按 `core.example.json` 生成一份）。这是饰品写入的硬性前提：CounterStrikeSharp 在该开关打开时拒绝饰品需要的全部经济字段（entity quality、fallback paint kit / seed / wear、item id、initialized），手套和枪械与刀皮同样受影响。
+- [ ] 若协调失败（例如 core.json 是无法解析的 JSON），启动必须被拒绝并给出明确错误，而不是静默进入一个饰品不会生效的对局。
+- [ ] 游戏内控制台 `css_cs2bi_knives_status` 报告的 `enabled`、catalog 数量和面板所见一致，且 `econ_writes=allowed`（若显示 `blocked-by-guidelines`，说明前提未满足，此时刀型可能仍然会换但任何皮肤都不会出现）。
 
 ## C. 刀具
 
 准备至少：Karambit、Butterfly、M9 Bayonet、Bayonet、Skeleton、Falchion。
 
 - [ ] 刀型选择后模型、动画和 HUD 表现正常。
+- [ ] **刀皮真的显示在游戏中**（PaintKit / Wear / Seed 与预设一致），不是只有刀型正确而外观仍是原皮。
 - [ ] 常用刀在 UI 中排序靠前。
 - [ ] 每把刀能够保存自己的独立 PaintKit。
 - [ ] 示例：Karambit = Vanilla、Butterfly = Black Laminate、M9 = Blue Steel；来回切换后各自恢复正确皮肤。
@@ -65,6 +68,7 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 ## E. 手套
 
 - [ ] 手套型号和 PaintKit 可以正常选择。
+- [ ] **手套皮肤真的显示在游戏中**：手套与刀皮、枪皮一样依赖 CounterStrikeSharp 的经济字段写入，guideline 开关未协调时这里也会表现为原手套。
 - [ ] 中文名称正常显示；没有整体退化为英文 ID 列表。
 - [ ] Wear / Seed 正常。
 - [ ] 运行中改手套时模型 / bodygroup 表现正常，没有裸手、重叠模型或持续闪烁。
@@ -76,7 +80,7 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 
 准备一把自己购买的枪和一把 Bot / 地面来源的同型号枪。
 
-- [ ] 自己购买 / 游戏发放的 AK、M4、AWP 等应用自己的预设。
+- [ ] 自己购买 / 游戏发放的 AK、M4、AWP 等应用自己的预设，**枪皮确实显示出来**而不是原皮或仅库存皮肤。
 - [ ] 自己买的枪扔到地上再捡回来，仍保持该实体已有外观。
 - [ ] 捡 Bot 或其他已有实体的同型号枪，不会因为 `item_pickup` 突然套成自己的预设。
 - [ ] 持有捡来的枪时，在 Panel 修改自己的该型号枪皮，不应错误覆盖这把外来实体。
@@ -131,6 +135,7 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] “修复安装”不会清空自己的饰品预设。
 - [ ] “恢复 / 卸载”不会删除未知第三方插件或个人 cfg。
 - [ ] 恢复后 `<csgo>\gameinfo.gi` 仍是 clean，且 `addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\panel_isolation.json` 与 Panel 侧 launch journal 都没有残留。
+- [ ] 恢复把 `FollowCS2ServerGuidelines` 交还原值：安装前该文件已存在且为 `true` 时回到 `true`，文件里其它设置（例如你自己写的 `ServerName`）不变；安装前该文件不存在时，恢复会把 Panel 生成的 `core.json` 删掉，只留 `core.example.json`。
 - [ ] 恢复后 Steam Verify Integrity 能顺利回到官方文件状态。
 - [ ] 恢复后再直接 Steam 启动，没有本项目 runtime 残留。
 
