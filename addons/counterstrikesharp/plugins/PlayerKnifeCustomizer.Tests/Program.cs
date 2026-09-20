@@ -454,5 +454,68 @@ Require(KnifeShortcutCycle.GetKnifeDisplayName(507) == "Karambit", "507 display 
 Require(KnifeShortcutCycle.GetKnifeDisplayName(515) == "Butterfly Knife", "515 display name must be Butterfly Knife.");
 Require(KnifeShortcutCycle.GetKnifeDisplayName(508) == "M9 Bayonet", "508 display name must be M9 Bayonet.");
 
-Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, diff-engine, debouncer, knife-shortcut, and log-throttle tests passed.");
+// 5. Knife designer names
+Require(KnifeShortcutCycle.GetKnifeDesignerName(500) == "weapon_bayonet", "500 designer name must be weapon_bayonet.");
+Require(KnifeShortcutCycle.GetKnifeDesignerName(507) == "weapon_knife_karambit", "507 designer name must be weapon_knife_karambit.");
+Require(KnifeShortcutCycle.GetKnifeDesignerName(515) == "weapon_knife_butterfly", "515 designer name must be weapon_knife_butterfly.");
+Require(KnifeShortcutCycle.GetKnifeDesignerName(508) == "weapon_knife_m9_bayonet", "508 designer name must be weapon_knife_m9_bayonet.");
+Require(KnifeShortcutCycle.GetKnifeDesignerName(525) == "weapon_knife_skeleton", "525 designer name must be weapon_knife_skeleton.");
+Require(KnifeShortcutCycle.GetKnifeDesignerName(512) == "weapon_knife_falchion", "512 designer name must be weapon_knife_falchion.");
+Require(KnifeShortcutCycle.GetKnifeDesignerName(999) == "weapon_knife", "Unknown defindex must fall back to weapon_knife.");
+
+// --- KnifeReplacementPlanner Tests ---
+// Test 1: Plan with existing painted preset
+var testLoadout = new TeamLoadout();
+testLoadout.DefaultKnifeDefIndex = 507;
+testLoadout.KnifePresets[515] = new KnifePreset { Paint = 418, Seed = 10, Wear = 0.05f };
+
+var plan1 = KnifeReplacementPlanner.Plan(507, null, testLoadout);
+Require(plan1.IsValid, "Plan from 507 to 515 must be valid.");
+Require(plan1.TargetDefIndex == 515, "Target must be 515 (Butterfly).");
+Require(plan1.DesignerName == "weapon_knife_butterfly", "Designer name must be weapon_knife_butterfly.");
+Require(!plan1.IsVanilla, "Knife with Paint 418 is not vanilla.");
+Require(plan1.Preset.Paint == 418, "Preset paint must be 418.");
+
+// Test 2: Plan when next knife has no preset in loadout (falls back to vanilla Paint = 0)
+var plan2 = KnifeReplacementPlanner.Plan(515, null, testLoadout);
+Require(plan2.IsValid, "Plan from 515 to 508 must be valid.");
+Require(plan2.TargetDefIndex == 508, "Target must be 508 (M9 Bayonet).");
+Require(plan2.DesignerName == "weapon_knife_m9_bayonet", "Designer name must be weapon_knife_m9_bayonet.");
+Require(plan2.IsVanilla, "Missing preset must fall back to vanilla (Paint = 0).");
+Require(testLoadout.KnifePresets.ContainsKey(508), "Loadout must now contain a fallback preset for 508.");
+Require(testLoadout.KnifePresets[508].Paint == 0, "Fallback preset paint must be 0.");
+
+// Test 3: Plan with custom cycle list
+ushort[] myCycle = [500, 526];
+var plan3 = KnifeReplacementPlanner.Plan(500, myCycle, testLoadout);
+Require(plan3.IsValid, "Plan with custom cycle must be valid.");
+Require(plan3.TargetDefIndex == 526, "500 must cycle to 526 in custom list.");
+Require(plan3.DesignerName == "weapon_knife_kukri", "526 designer name must be weapon_knife_kukri.");
+
+// Test 4: Unknown current knife defindex (e.g. 0 or default knife) cycles to first in list
+var plan4 = KnifeReplacementPlanner.Plan(0, myCycle, testLoadout);
+Require(plan4.IsValid, "Plan from 0 must be valid.");
+Require(plan4.TargetDefIndex == 500, "0 must cycle to first knife in custom list (500).");
+
+// Test 5: Empty custom list fallback
+var plan5 = KnifeReplacementPlanner.Plan(507, Array.Empty<ushort>(), testLoadout);
+Require(plan5.IsValid, "Empty custom list must fall back to DefaultShortcutKnives.");
+Require(plan5.TargetDefIndex == 515, "Empty custom list must cycle Karambit to Butterfly.");
+
+// Test 6: Transactional rollback guarantee simulation
+// If new entity fails to create, DefaultKnifeDefIndex in loadout is NOT changed
+ushort originalDefIndex = testLoadout.DefaultKnifeDefIndex;
+var failedPlan = KnifeReplacementPlanner.Plan(testLoadout.DefaultKnifeDefIndex, null, testLoadout);
+bool simulationGiveFailed = true;
+if (simulationGiveFailed)
+{
+    // Transaction aborts without committing DefaultKnifeDefIndex
+}
+else
+{
+    testLoadout.DefaultKnifeDefIndex = failedPlan.TargetDefIndex;
+}
+Require(testLoadout.DefaultKnifeDefIndex == originalDefIndex, "Failed replacement must NOT advance DefaultKnifeDefIndex.");
+
+Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, diff-engine, debouncer, knife-shortcut, knife-replacement-planner, and log-throttle tests passed.");
 

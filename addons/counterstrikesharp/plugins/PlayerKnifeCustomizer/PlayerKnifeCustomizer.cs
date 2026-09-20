@@ -568,7 +568,17 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             {
                 weapon.AcceptInput("ChangeSubclass", value: target.ToString());
                 item.ItemDefinitionIndex = target;
-                return ApplyPreset(weapon, target, targetPreset);
+                if (targetPreset.Paint > 0)
+                {
+                    return ApplyPreset(weapon, target, targetPreset);
+                }
+                item.EntityQuality = 3;
+                AssignItemId(item);
+                weapon.FallbackPaintKit = 0;
+                weapon.FallbackSeed = 0;
+                weapon.FallbackWear = 0.01f;
+                Utilities.SetStateChanged(weapon, "CEconEntity", "m_AttributeManager");
+                return true;
             }
 
             ushort current = item.ItemDefinitionIndex;
@@ -1465,34 +1475,100 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             }
         }
 
-        IReadOnlyList<ushort> list = _config.ShortcutKnives is { Count: > 0 }
-            ? _config.ShortcutKnives
-            : KnifeShortcutCycle.DefaultShortcutKnives;
-        ushort nextDefIndex = KnifeShortcutCycle.GetNextKnifeDefIndex(currentDefIndex, list);
-
         var loadout = _config.Loadouts.For(team.Value);
-        loadout.DefaultKnifeDefIndex = nextDefIndex;
-
-        if (!loadout.KnifePresets.TryGetValue(nextDefIndex, out var preset))
+        var plan = KnifeReplacementPlanner.Plan(currentDefIndex, _config.ShortcutKnives, loadout);
+        if (!plan.IsValid)
         {
-            preset = new KnifePreset { Paint = 0, Seed = 0, Wear = 0.01f };
-            loadout.KnifePresets[nextDefIndex] = preset;
+            player.PrintToChat($" [LocalCosmetics] Cannot switch knife: {plan.ErrorMessage}");
+            return;
         }
 
-        if (currentKnife != null)
+        // Transactional Controlled Replacement
+        // Step 1: Unbind old knife from inventory without deleting entity yet
+        if (currentKnife != null && currentKnife.IsValid)
         {
-            currentKnife.AcceptInput("ChangeSubclass", value: nextDefIndex.ToString());
-            var item = currentKnife.AttributeManager?.Item;
-            if (item != null)
+            try
             {
-                item.ItemDefinitionIndex = nextDefIndex;
-                ApplyPreset(currentKnife, nextDefIndex, preset);
+                pawn.RemovePlayerItem(currentKnife);
+            }
+            catch (Exception ex)
+            {
+                LogApplyError("remove player item", ex);
             }
         }
 
-        string knifeName = KnifeShortcutCycle.GetKnifeDisplayName(nextDefIndex);
-        player.PrintToChat($" [LocalCosmetics] Knife switched to: {knifeName} (#{preset.Paint})");
+        // Step 2: Spawn new knife entity with native designer name
+        CBasePlayerWeapon? newKnife = null;
+        try
+        {
+            newKnife = player.GiveNamedItem<CBasePlayerWeapon>(plan.DesignerName);
+        }
+        catch (Exception ex)
+        {
+            LogApplyError("give new knife", ex);
+        }
+
+        // Step 3: Verify new knife
+        if (newKnife == null || !newKnife.IsValid)
+        {
+            // Rollback: try to select previous knife if still valid
+            if (currentKnife != null && currentKnife.IsValid)
+            {
+                player.ExecuteClientCommand("slot3");
+            }
+            player.PrintToChat($" [LocalCosmetics] Failed to equip {plan.DisplayName}. Previous knife retained.");
+            return;
+        }
+
+        // Step 4: Register in provenance tracker
+        _provenanceTracker.RegisterGrantedWeapon(player.Handle, (int)team.Value, newKnife.Handle, newKnife.Index, plan.TargetDefIndex);
+
+        // Step 5: Apply cosmetics or vanilla attributes
+        if (plan.IsVanilla)
+        {
+            var item = newKnife.AttributeManager?.Item;
+            if (item != null)
+            {
+                item.ItemDefinitionIndex = plan.TargetDefIndex;
+                item.EntityQuality = 3;
+                item.AttributeList.Attributes.RemoveAll();
+                item.NetworkedDynamicAttributes.Attributes.RemoveAll();
+                AssignItemId(item);
+                newKnife.FallbackPaintKit = 0;
+                newKnife.FallbackSeed = 0;
+                newKnife.FallbackWear = 0.01f;
+                Utilities.SetStateChanged(newKnife, "CEconEntity", "m_AttributeManager");
+            }
+        }
+        else
+        {
+            ApplyPreset(newKnife, plan.TargetDefIndex, plan.Preset);
+        }
+        _provenanceTracker.RecordApplied(newKnife.Handle, newKnife.Index);
+
+        // Step 6: Commit loadout config and save
+        loadout.DefaultKnifeDefIndex = plan.TargetDefIndex;
         SaveConfig();
+
+        // Step 7: Equip newly granted knife
+        player.ExecuteClientCommand("slot3");
+
+        // Step 8: Safely destroy old knife entity (no drop on ground)
+        if (currentKnife != null && currentKnife.IsValid)
+        {
+            try
+            {
+                currentKnife.Remove();
+            }
+            catch (Exception ex)
+            {
+                LogApplyError("remove old knife entity", ex);
+            }
+        }
+
+        // Step 9: User chat notification
+        string finish = plan.IsVanilla ? "Vanilla" : $"#{plan.Preset.Paint}";
+        player.PrintToChat($" [LocalCosmetics] Knife switched to: {plan.DisplayName} ({finish})");
     }
 
     private void LogApplyError(string operation, Exception ex)
