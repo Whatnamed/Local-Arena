@@ -2642,6 +2642,32 @@ fn recover_isolation_on_startup(app: &AppHandle) {
     }
 }
 
+/// A second launch is how a user tries to get the Panel back, so the existing
+/// window has to be raised rather than merely focused: Windows ignores
+/// `set_focus` for a minimized or hidden window. Every step is logged because
+/// the reported symptom was "the process is there, the window is not".
+fn restore_existing_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else { return; };
+    let outcome = |label: &str, result: std::result::Result<(), tauri::Error>| match result {
+        Ok(()) => format!("{label}=ok"),
+        Err(error) => format!("{label}=error({error})"),
+    };
+    let detail = format!(
+        "before visible={} minimized={} {}",
+        window.is_visible().unwrap_or(false),
+        window.is_minimized().unwrap_or(false),
+        [
+            outcome("unminimize", window.unminimize()),
+            outcome("show", window.show()),
+            outcome("focus", window.set_focus()),
+        ]
+        .join(" ")
+    );
+    if let Ok(root) = app_storage::root() {
+        logging::append(&root, "INFO", "panel.restore_window", &detail);
+    }
+}
+
 pub fn run() {
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -2651,7 +2677,7 @@ pub fn run() {
         previous_hook(info);
     }));
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| { if let Some(w) = app.get_webview_window("main") { let _ = w.set_focus(); } }))
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| restore_existing_window(app)))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
