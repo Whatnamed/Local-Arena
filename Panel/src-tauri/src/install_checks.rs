@@ -219,6 +219,19 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
             true,
         ));
     }
+    checks.push(target_file_check(
+        "TARGET_CSS_CORE_CONFIG",
+        "Installed CounterStrikeSharp core.json",
+        target,
+        crate::core_config::CORE_CONFIG_RELATIVE,
+        installed,
+    ));
+    checks.push(source_file_check(
+        "PAYLOAD_CSS_CORE_CONFIG",
+        "Package CounterStrikeSharp core.json",
+        payload_root,
+        crate::core_config::CORE_CONFIG_RELATIVE,
+    ));
     for (code, name, relative) in [
         ("PLAYER_COSMETICS_MANAGED", "PlayerCosmetics", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll"),
     ] {

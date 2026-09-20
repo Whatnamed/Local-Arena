@@ -207,6 +207,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private bool _stickersSanitizedDuringLoad;
     private readonly ApplyGenerationTracker _applyTracker = new();
     private readonly WeaponProvenanceTracker _weaponProvenance = new();
+    private readonly HashSet<nint> _knifeReplacementInProgress = new();
     private readonly object _configReloadGate = new();
     private System.Threading.Timer? _configReloadTimer;
     private FileSystemWatcher? _configWatcher;
@@ -227,6 +228,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
         AddCommand("css_cs2bi_knives_reload", "Reload player knife presets", OnReloadCommand);
         AddCommand("css_cs2bi_knives_status", "Show player knife preset status", OnStatusCommand);
+        AddCommand("css_cs2bi_knife_cycle", "Cycle the configured player knife list", OnKnifeShortcut);
         StartConfigWatcher();
 
         try
@@ -261,6 +263,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         StopConfigWatcher();
         _applyTracker.CancelAll();
         _weaponProvenance.ClearAll();
+        _knifeReplacementInProgress.Clear();
         VirtualFunctions.GiveNamedItemFunc.Unhook(OnGiveNamedItemPost, HookMode.Post);
     }
 
@@ -394,6 +397,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             var weapon = new CBasePlayerWeapon(weaponHandle);
             if (!weapon.IsValid) return HookResult.Continue;
             _weaponProvenance.MarkOwned(playerHandle, weaponHandle);
+            if (_knifeReplacementInProgress.Contains(playerHandle)) return HookResult.Continue;
             if (!CanApplyToPlayer(player)) return HookResult.Continue;
             long generation = _applyTracker.Begin(
                 playerHandle, CosmeticApplyPhase.Guns, GunApplyScope.Targeted, weaponHandle);
@@ -461,6 +465,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         {
             _applyTracker.Cancel(victim.Handle);
             _weaponProvenance.ClearPlayer(victim.Handle);
+            _knifeReplacementInProgress.Remove(victim.Handle);
         }
         if (!CanApplyToPlayer(attacker) || victim == null || !victim.IsValid || attacker == victim)
             return HookResult.Continue;
@@ -496,6 +501,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         {
             _applyTracker.Cancel(player.Handle);
             _weaponProvenance.ClearPlayer(player.Handle);
+            _knifeReplacementInProgress.Remove(player.Handle);
         }
         return HookResult.Continue;
     }
@@ -504,6 +510,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         _applyTracker.CancelAll();
         _weaponProvenance.ClearAll();
+        _knifeReplacementInProgress.Clear();
         return HookResult.Continue;
     }
 
@@ -610,32 +617,171 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private bool TryApplyDefaultKnife(nint playerHandle, CCSPlayerPawn pawn, CosmeticTeam team)
     {
-        var weapons = pawn.WeaponServices?.MyWeapons;
-        if (weapons == null) return false;
+        var player = ResolvePlayer(playerHandle);
+        if (player == null) return false;
+        var weapon = FindOwnedKnife(playerHandle, pawn);
+        if (weapon == null) return false;
+        var item = weapon.AttributeManager?.Item;
+        if (item == null || !HasReadyAttributeLists(item)) return false;
         var loadout = _config.Loadouts.For(team);
+        ushort current = item.ItemDefinitionIndex;
+        ushort target = loadout.DefaultKnifeDefIndex;
+        if (target > 0 && !KnifeShortcutResolver.IsSupported(target)) return false;
+        if (target > 0 && target != current)
+            return TryReplaceKnife(player, pawn, team, weapon, target);
+        return !TryGetPreset(current, team, out var currentPreset) ||
+               ApplyPreset(weapon, current, currentPreset);
+    }
 
+    private void OnKnifeShortcut(CCSPlayerController? player, CommandInfo command)
+    {
+        if (!CanApplyToPlayer(player)) return;
+        var selected = new List<ushort>();
+        for (int index = 1; index < command.ArgCount; index++)
+        {
+            if (!ushort.TryParse(command.GetArg(index), out ushort defIndex) ||
+                !KnifeShortcutResolver.IsSupported(defIndex) || selected.Contains(defIndex))
+                continue;
+            selected.Add(defIndex);
+        }
+        if (selected.Count == 0) return;
+
+        nint playerHandle = player!.Handle;
+        Server.NextFrame(() => ExecuteKnifeShortcut(playerHandle, selected));
+    }
+
+    private void ExecuteKnifeShortcut(nint playerHandle, IReadOnlyList<ushort> selected)
+    {
+        var player = ResolvePlayer(playerHandle);
+        if (!CanApplyToPlayer(player)) return;
+        var pawn = player!.PlayerPawn.Value;
+        var team = GetCosmeticTeam(player);
+        var weapon = pawn is { IsValid: true } && team.HasValue
+            ? FindOwnedKnife(playerHandle, pawn!)
+            : null;
+        if (weapon == null || !team.HasValue) return;
+        var item = weapon.AttributeManager?.Item;
+        if (item == null || !HasReadyAttributeLists(item)) return;
+        ushort current = item.ItemDefinitionIndex;
+        if (!KnifeShortcutResolver.TryNext(selected, current, out ushort target)) return;
+        if (target == current)
+        {
+            if (TryGetPreset(current, team.Value, out var currentPreset))
+                ApplyPreset(weapon, current, currentPreset);
+            return;
+        }
+
+        TryReplaceKnife(player, pawn!, team.Value, weapon, target);
+    }
+
+    private CBasePlayerWeapon? FindOwnedKnife(nint playerHandle, CCSPlayerPawn pawn)
+    {
+        var active = pawn.WeaponServices?.ActiveWeapon.Value;
+        if (active is { IsValid: true } && IsKnifeName(active.DesignerName) &&
+            _weaponProvenance.IsOwned(playerHandle, active.Handle))
+            return active;
+
+        var weapons = pawn.WeaponServices?.MyWeapons;
+        if (weapons == null) return null;
         foreach (var handle in weapons)
         {
             var weapon = handle.Value;
-            if (weapon == null || !weapon.IsValid || !IsKnifeName(weapon.DesignerName) ||
-                !_weaponProvenance.IsOwned(playerHandle, weapon.Handle)) continue;
-            var item = weapon.AttributeManager?.Item;
-            if (item == null || !HasReadyAttributeLists(item)) return false;
+            if (weapon is { IsValid: true } && IsKnifeName(weapon.DesignerName) &&
+                _weaponProvenance.IsOwned(playerHandle, weapon.Handle))
+                return weapon;
+        }
+        return null;
+    }
 
-            ushort target = loadout.DefaultKnifeDefIndex;
-            if (target > 0 && loadout.KnifePresets.TryGetValue(target, out var targetPreset))
-            {
-                weapon.AcceptInput("ChangeSubclass", value: target.ToString());
-                item.ItemDefinitionIndex = target;
-                return ApplyPreset(weapon, target, targetPreset);
-            }
-
-            ushort current = item.ItemDefinitionIndex;
-            return !TryGetPreset(current, team, out var currentPreset) ||
-                   ApplyPreset(weapon, current, currentPreset);
+    private bool TryReplaceKnife(
+        CCSPlayerController player,
+        CCSPlayerPawn pawn,
+        CosmeticTeam team,
+        CBasePlayerWeapon current,
+        ushort target)
+    {
+        if (!KnifeShortcutResolver.IsSupported(target) || !current.IsValid) return false;
+        KnifePreset? preset = _config.Loadouts.For(team).KnifePresets.TryGetValue(target, out var configured)
+            ? configured
+            : null;
+        CBasePlayerWeapon? replacement = null;
+        bool oldRemoved = false;
+        _knifeReplacementInProgress.Add(player.Handle);
+        try
+        {
+            replacement = player.GiveNamedItem<CBasePlayerWeapon>("weapon_knife");
+        }
+        catch (Exception ex)
+        {
+            LogApplyError("knife replacement give", ex);
+        }
+        finally
+        {
+            _knifeReplacementInProgress.Remove(player.Handle);
         }
 
-        return false;
+        if (replacement == null || !replacement.IsValid || replacement.Handle == current.Handle)
+        {
+            if (replacement is { IsValid: true } && replacement.Handle != current.Handle)
+                RemoveKnifeReplacement(player, replacement);
+            return false;
+        }
+        _weaponProvenance.MarkOwned(player.Handle, replacement.Handle);
+
+        try
+        {
+            var item = replacement.AttributeManager?.Item;
+            if (item == null || !HasReadyAttributeLists(item))
+            {
+                RemoveKnifeReplacement(player, replacement);
+                return false;
+            }
+
+            replacement.AcceptInput("ChangeSubclass", value: target.ToString());
+            bool applied = preset != null
+                ? ApplyPreset(replacement, target, preset)
+                : ApplyVanillaKnife(replacement, target);
+            if (!applied)
+            {
+                RemoveKnifeReplacement(player, replacement);
+                return false;
+            }
+
+            pawn.RemovePlayerItem(current);
+            oldRemoved = true;
+            _weaponProvenance.ClearWeapon(player.Handle, current.Handle);
+            current.Remove();
+            player.ExecuteClientCommand("slot3");
+            Server.NextFrame(() =>
+            {
+                var live = ResolvePlayer(player.Handle);
+                if (CanApplyToPlayer(live)) live!.ExecuteClientCommand("slot3");
+            });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (!oldRemoved) RemoveKnifeReplacement(player, replacement);
+            LogApplyError("knife replacement", ex);
+            return oldRemoved;
+        }
+    }
+
+    private void RemoveKnifeReplacement(CCSPlayerController player, CBasePlayerWeapon? replacement)
+    {
+        if (replacement == null) return;
+        _weaponProvenance.ClearWeapon(player.Handle, replacement.Handle);
+        if (replacement.IsValid) replacement.Remove();
+    }
+
+    private bool ApplyVanillaKnife(CBasePlayerWeapon weapon, ushort defIndex)
+    {
+        if (!weapon.IsValid || !KnifeShortcutResolver.IsSupported(defIndex)) return false;
+        var item = weapon.AttributeManager?.Item;
+        if (item == null || !HasReadyAttributeLists(item)) return false;
+        item.ItemDefinitionIndex = defIndex;
+        Utilities.SetStateChanged(weapon, "CEconEntity", "m_AttributeManager");
+        return true;
     }
 
     private bool TryApplyGunPresets(
@@ -902,7 +1048,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         !string.IsNullOrWhiteSpace(name) && (name.Contains("knife", StringComparison.OrdinalIgnoreCase)
                                              || name.Contains("bayonet", StringComparison.OrdinalIgnoreCase));
 
-    private static bool IsKnifeDefIndex(ushort defIndex) => defIndex is >= 500 and <= 526;
+    private static bool IsKnifeDefIndex(ushort defIndex) => KnifeShortcutResolver.IsSupported(defIndex);
 
     private CCSPlayerController? GetEligibleHumanOwner(CBasePlayerWeapon weapon)
     {
@@ -1345,6 +1491,37 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         Logger.LogError(ex,
             "[PlayerKnifeCustomizer] Apply failed during {Operation}; suppressed_since_last={Suppressed}: {Message}",
             operation, decision.Suppressed, ex.Message);
+    }
+}
+
+public static class KnifeShortcutResolver
+{
+    public static readonly ushort[] Supported =
+    [
+        500, 503, 505, 506, 507, 508, 509, 512, 514, 515,
+        516, 517, 518, 519, 520, 521, 522, 523, 525, 526,
+    ];
+
+    public static bool IsSupported(ushort defIndex) => Supported.Contains(defIndex);
+
+    public static bool TryNext(IReadOnlyList<ushort> selected, ushort current, out ushort target)
+    {
+        if (selected.Count == 0)
+        {
+            target = 0;
+            return false;
+        }
+        int currentIndex = -1;
+        for (int index = 0; index < selected.Count; index++)
+        {
+            if (selected[index] == current)
+            {
+                currentIndex = index;
+                break;
+            }
+        }
+        target = selected[(currentIndex + 1 + selected.Count) % selected.Count];
+        return true;
     }
 }
 

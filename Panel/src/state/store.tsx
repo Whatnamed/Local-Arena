@@ -596,8 +596,8 @@ setNadesPending(false);
           /* best-effort cleanup of legacy .bak files */
         }
         try {
-          // Bring CounterStrikeSharp's core.json FollowCS2ServerGuidelines in
-          // line with the current Skins state on every launch.
+          // Reconcile the CSS economic-attribute guard for a remembered local
+          // mode. launch_cs2 repeats this fail-closed before touching gameinfo.
           await api.reconcileCoreJson(csgo);
         } catch {
           /* best-effort: core.json / core.example.json may be absent */

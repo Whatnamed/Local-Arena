@@ -14,6 +14,7 @@ mod app_version;
 mod appearance;
 mod atomic_fs;
 mod cs2ss_bridge;
+mod core_config;
 mod diagnostics;
 mod install_checks;
 mod installer;
@@ -746,9 +747,7 @@ fn cfg_paths(csgo: &Path) -> [PathBuf; 2] {
 }
 
 fn cfg_files_present(csgo: &Path) -> bool {
-    cfg_paths(csgo)
-        .iter()
-        .all(|path| mode_layout::active_or_disabled(path).is_some())
+    csgo.join("cfg").is_dir()
 }
 
 fn replace_managed_cfg_command(csgo: &Path, command: &str, replacement: &str) -> Result<()> {
@@ -778,6 +777,83 @@ fn replace_cfg_command(path: &Path, command: &str, replacement: &str) -> Result<
     }
     fs::write(path, format!("{}\r\n", lines.join("\r\n")))?;
     Ok(())
+}
+
+const KNIFE_SHORTCUT_IDS: &[u16] = &[
+    500, 503, 505, 506, 507, 508, 509, 512, 514, 515,
+    516, 517, 518, 519, 520, 521, 522, 523, 525, 526,
+];
+const KNIFE_SHORTCUT_COMMAND: &str = "css_cs2bi_knife_cycle";
+const KNIFE_SHORTCUT_CFG_RELATIVE: &str = "cfg/csbip_cosmetics_knife.cfg";
+const KNIFE_SHORTCUT_CFG_MARKER: &str = "// Local Cosmetics managed knife shortcut v1";
+
+fn knife_shortcut_cfg_path(csgo: &Path) -> PathBuf {
+    csgo.join(KNIFE_SHORTCUT_CFG_RELATIVE.replace('/', "\\"))
+}
+
+fn managed_knife_shortcut_content(bind_key: &str, selected: &[u16]) -> String {
+    format!(
+        "{KNIFE_SHORTCUT_CFG_MARKER}\n// This file is written only when the optional shortcut is enabled.\nbind {bind_key} \"{KNIFE_SHORTCUT_COMMAND} {}\"\n",
+        selected.iter().map(u16::to_string).collect::<Vec<_>>().join(" ")
+    )
+}
+
+fn validate_knife_bind_key(bind_key: &str) -> Result<()> {
+    if bind_key.is_empty()
+        || bind_key.chars().any(|character| character.is_whitespace() || matches!(character, '"' | ';'))
+    {
+        return Err(AppError::invalid("Shortcut key contains unsupported bind syntax"));
+    }
+    Ok(())
+}
+
+fn is_managed_knife_shortcut_file(text: &str) -> bool {
+    text.lines().any(|line| line.trim() == KNIFE_SHORTCUT_CFG_MARKER)
+}
+
+fn sync_knife_shortcut_cfg(csgo: &Path, bind_key: &str, selected: &[u16]) -> Result<()> {
+    validate_knife_bind_key(bind_key)?;
+    if selected.iter().any(|id| !KNIFE_SHORTCUT_IDS.contains(id)) {
+        return Err(AppError::invalid("Shortcut list contains an unsupported knife type"));
+    }
+
+    let path = knife_shortcut_cfg_path(csgo);
+    if selected.is_empty() {
+        if !path.is_file() {
+            return Ok(());
+        }
+        let text = fs::read_to_string(&path)?;
+        if !is_managed_knife_shortcut_file(&text) {
+            return Err(AppError::invalid(format!(
+                "Cannot disable the shortcut because {} is not owned by Local Cosmetics; it was left untouched",
+                path.display()
+            )));
+        }
+        fs::remove_file(path).map_err(AppError::transaction_io)?;
+        return Ok(());
+    }
+
+    if path.is_file() {
+        let text = fs::read_to_string(&path)?;
+        if !is_managed_knife_shortcut_file(&text) {
+            return Err(AppError::invalid(format!(
+                "Cannot configure the shortcut because {} already exists outside Local Cosmetics ownership",
+                path.display()
+            )));
+        }
+    } else if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(AppError::transaction_io)?;
+    }
+
+    atomic_fs::write_replace(
+        &path,
+        managed_knife_shortcut_content(bind_key, selected).as_bytes(),
+    )
+    .map_err(AppError::transaction_io)
+}
+
+fn remove_managed_knife_shortcut(csgo: &Path) -> Result<()> {
+    sync_knife_shortcut_cfg(csgo, "\\", &[])
 }
 
 #[tauri::command]
@@ -1077,6 +1153,9 @@ fn set_mode(app: AppHandle, csgo: String, mode: String) -> Result<ModeInfo> {
     mode_layout::recover(&state, &root)?;
     recover_launch_transaction(&state, &root).map_err(AppError::invalid)?;
     restore_clean_launch(&state, &root).map_err(AppError::invalid)?;
+    if launch_mode == LaunchMode::Preview {
+        core_config::ensure_local_mode(&state, &root)?;
+    }
     mode_layout::set_preview(&state, &root, launch_mode == LaunchMode::Preview)?;
     let mut config = read_config(&app)?;
     enforce_mode_cosmetics(&root, &mut config, launch_mode)?;
@@ -1118,14 +1197,23 @@ fn find_steam_executable() -> Result<PathBuf> {
         .ok_or_else(|| AppError::launch("Steam.exe was not found. Start Steam, then try again"))
 }
 
-fn launch_request(mode: LaunchMode) -> (Vec<&'static str>, String) {
+fn launch_request(mode: LaunchMode, shortcut_enabled: bool) -> (Vec<String>, String) {
     if mode.insecure() {
-        (
-            vec!["-applaunch", "730", "-insecure", "-console"],
-            "-insecure -console".into(),
-        )
+        let mut arguments = vec![
+            "-applaunch".into(),
+            "730".into(),
+            "-insecure".into(),
+            "-console".into(),
+        ];
+        let mut options = "-insecure -console".to_string();
+        if shortcut_enabled {
+            arguments.extend(["+exec".into(), KNIFE_SHORTCUT_CFG_RELATIVE[4..].into()]);
+            options.push_str(" +exec ");
+            options.push_str(&KNIFE_SHORTCUT_CFG_RELATIVE[4..]);
+        }
+        (arguments, options)
     } else {
-        (vec!["-applaunch", "730"], String::new())
+        (vec!["-applaunch".into(), "730".into()], String::new())
     }
 }
 
@@ -1160,6 +1248,18 @@ fn launch_cs2(app: AppHandle) -> Result<LaunchResult> {
         restore_clean_launch(&state, &root).map_err(AppError::invalid)?;
     } else {
         prepare_local_launch(&state, &root, mode).map_err(AppError::invalid)?;
+        if let Err(error) = core_config::ensure_local_mode(&state, &root) {
+            let _ = restore_clean_launch(&state, &root);
+            return Err(error);
+        }
+        if let Err(error) = sync_knife_shortcut_cfg(
+            &root,
+            &config.drop_knife_bind,
+            &config.drop_knife_subclasses,
+        ) {
+            let _ = restore_clean_launch(&state, &root);
+            return Err(error);
+        }
     }
     mode_layout::set_preview(&state, &root, mode == LaunchMode::Preview)?;
     if let Err(error) = enforce_mode_cosmetics(&root, &mut config, mode) {
@@ -1178,7 +1278,7 @@ fn launch_cs2(app: AppHandle) -> Result<LaunchResult> {
             return Err(error);
         }
     };
-    let (arguments, options) = launch_request(mode);
+    let (arguments, options) = launch_request(mode, !config.drop_knife_subclasses.is_empty());
     if let Err(error) = Command::new(steam).args(arguments).spawn() {
         let _ = restore_clean_launch(&state, &root);
         return Err(error.into());
@@ -1754,7 +1854,12 @@ fn ensure_match_components_pass(report: &InstallCheckReport) -> Result<()> {
 }
 
 #[tauri::command]
-fn reconcile_core_json(_csgo: String) -> Result<()> {
+fn reconcile_core_json(app: AppHandle, csgo: String) -> Result<()> {
+    let root = csgo_path(&csgo)?;
+    let config = read_config(&app)?;
+    if config.mode.as_deref() == Some("preview") {
+        core_config::ensure_local_mode(&local_state_root(&app)?, &root)?;
+    }
     Ok(())
 }
 
@@ -2045,14 +2150,8 @@ fn set_drop_knives(
     selected: Vec<u16>,
 ) -> Result<DropKnivesState> {
     let root = csgo_path(&csgo)?;
-    let commands = selected
-        .iter()
-        .map(|id| format!("subclass_create {id}"))
-        .collect::<Vec<_>>()
-        .join(";");
-    let line = format!("bind {bind_key} \"{commands}\"");
-    replace_managed_cfg_command(&root, "bind ", &line)?;
     let mut config = read_config(&app)?;
+    sync_knife_shortcut_cfg(&root, &bind_key, &selected)?;
     config.drop_knife_bind = bind_key;
     config.drop_knife_subclasses = selected;
     write_config(&app, &config)?;
@@ -2847,11 +2946,15 @@ async fn install_payload(app: AppHandle, csgo: String) -> Result<InstallTransact
         ensure_steam_app_idle(&root)?;
         let config = read_config(&app)?;
         let restore_preview = config.mode.as_deref() == Some("preview");
+        let captured_core = core_config::capture_before_install(&state, &root)?;
         logging::append(&state, "INFO", "install.started", &root.to_string_lossy());
         let result = with_canonical_layout(&state, &root, restore_preview, || {
             let result = installer::install(&payload, &state, &root, false)?;
             Ok(result)
         });
+        if result.is_err() && captured_core {
+            let _ = core_config::discard_capture(&state, &root);
+        }
         match &result {
             Ok(value) => logging::append(
                 &state,
@@ -2879,11 +2982,15 @@ async fn repair_payload(app: AppHandle, csgo: String) -> Result<InstallTransacti
         ensure_steam_app_idle(&root)?;
         let config = read_config(&app)?;
         let restore_preview = config.mode.as_deref() == Some("preview");
+        let captured_core = core_config::capture_before_install(&state, &root)?;
         logging::append(&state, "INFO", "repair.started", &root.to_string_lossy());
         let result = with_canonical_layout(&state, &root, restore_preview, || {
             let result = installer::install(&payload, &state, &root, true)?;
             Ok(result)
         });
+        if result.is_err() && captured_core {
+            let _ = core_config::discard_capture(&state, &root);
+        }
         match &result {
             Ok(value) => logging::append(
                 &state,
@@ -2940,11 +3047,36 @@ fn restore_payload_impl(app: &AppHandle, csgo: &str, pristine: bool) -> Result<R
         &format!("{operation}.started"),
         &root.to_string_lossy(),
     );
+    let core_snapshot = core_config::snapshot_current(&root)?;
     let result = if pristine {
         installer::restore_pristine(&payload_root()?, &state, &root)
     } else {
         installer::restore(&payload_root()?, &state, &root)
     };
+    if result.is_ok() {
+        if let Err(error) = core_config::restore_owned_with_current(
+            &state,
+            &root,
+            Some(core_snapshot),
+        ) {
+            logging::append(
+                &state,
+                "ERROR",
+                &format!("{operation}.core_config_failed"),
+                &error.detail,
+            );
+            return Err(error);
+        }
+        if let Err(error) = remove_managed_knife_shortcut(&root) {
+            logging::append(
+                &state,
+                "ERROR",
+                &format!("{operation}.knife_shortcut_failed"),
+                &error.detail,
+            );
+            return Err(error);
+        }
+    }
     match &result {
         Ok(value) => logging::append(
             &state,
@@ -3564,21 +3696,31 @@ mod tests {
 
     #[test]
     fn bot_mode_launch_always_includes_insecure_arguments() {
-        let (arguments, options) = launch_request(LaunchMode::Preview);
+        let (arguments, options) = launch_request(LaunchMode::Preview, false);
         assert_eq!(
             arguments,
             vec!["-applaunch", "730", "-insecure", "-console"]
         );
         assert_eq!(options, "-insecure -console");
 
-        let (preview_arguments, preview_options) = launch_request(LaunchMode::Preview);
+        let (preview_arguments, preview_options) = launch_request(LaunchMode::Preview, true);
         assert_eq!(
             preview_arguments,
-            vec!["-applaunch", "730", "-insecure", "-console"]
+            vec![
+                "-applaunch",
+                "730",
+                "-insecure",
+                "-console",
+                "+exec",
+                "csbip_cosmetics_knife.cfg",
+            ]
         );
-        assert_eq!(preview_options, "-insecure -console");
+        assert_eq!(
+            preview_options,
+            "-insecure -console +exec csbip_cosmetics_knife.cfg"
+        );
 
-        let (online_arguments, online_options) = launch_request(LaunchMode::Online);
+        let (online_arguments, online_options) = launch_request(LaunchMode::Online, true);
         assert_eq!(online_arguments, vec!["-applaunch", "730"]);
         assert!(online_options.is_empty());
     }
@@ -3715,6 +3857,44 @@ mod tests {
                     .contains("bot_aim head")
             );
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn knife_shortcut_uses_a_project_owned_cfg_and_can_remove_it() {
+        let root = test_root();
+        fs::create_dir_all(root.join("cfg")).unwrap();
+        sync_knife_shortcut_cfg(
+            &root,
+            "\\",
+            &[515, 508],
+        )
+        .unwrap();
+        let path = knife_shortcut_cfg_path(&root);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(KNIFE_SHORTCUT_CFG_MARKER));
+        assert!(text.contains("bind \\ \"css_cs2bi_knife_cycle 515 508\""));
+
+        sync_knife_shortcut_cfg(&root, "\\", &[]).unwrap();
+        assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn knife_shortcut_does_not_overwrite_an_unknown_cfg_file() {
+        let root = test_root();
+        let path = knife_shortcut_cfg_path(&root);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"bind \\ \"+lookatweapon\"\n").unwrap();
+        let original = fs::read(&path).unwrap();
+        let error = sync_knife_shortcut_cfg(
+            &root,
+            "\\",
+            &[515],
+        )
+        .unwrap_err();
+        assert!(error.detail.contains("outside Local Cosmetics ownership"));
+        assert_eq!(fs::read(&path).unwrap(), original);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -4114,6 +4294,47 @@ mod tests {
     }
 }
 
+fn restore_main_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        if let Ok(root) = app_storage::root() {
+            logging::append(&root, "WARN", "panel.window_restore", "main window was not found");
+        }
+        return;
+    };
+
+    let mut state = Vec::new();
+    let mut failed = false;
+    match window.show() {
+        Ok(()) => state.push("show=ok".to_string()),
+        Err(error) => {
+            failed = true;
+            state.push(format!("show=error:{error}"));
+        }
+    }
+    match window.unminimize() {
+        Ok(()) => state.push("unminimize=ok".to_string()),
+        Err(error) => {
+            failed = true;
+            state.push(format!("unminimize=error:{error}"));
+        }
+    }
+    match window.set_focus() {
+        Ok(()) => state.push("focus=ok".to_string()),
+        Err(error) => {
+            failed = true;
+            state.push(format!("focus=error:{error}"));
+        }
+    }
+    if let Ok(root) = app_storage::root() {
+        logging::append(
+            &root,
+            if failed { "WARN" } else { "INFO" },
+            "panel.window_restore",
+            &state.join(", "),
+        );
+    }
+}
+
 pub fn run() {
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -4123,7 +4344,7 @@ pub fn run() {
         previous_hook(info);
     }));
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| { if let Some(w) = app.get_webview_window("main") { let _ = w.set_focus(); } }))
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| { restore_main_window(app); }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

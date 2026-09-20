@@ -166,6 +166,19 @@ Require(linkedStickerConfig.Loadouts.T.GunPresets[9].Paint == 344
     && linkedStickerConfig.Loadouts.T.GunPresets[9].Charm?.Id == 38,
     "Shared CT/T normalization must synchronize base skin fields without replacing team decorations.");
 
+var shortcut = new ushort[] { 507, 515, 508 };
+Require(KnifeShortcutResolver.TryNext(shortcut, 507, out var nextKnife) && nextKnife == 515,
+    "Knife shortcut rotation must advance from the actual current entity defindex.");
+Require(KnifeShortcutResolver.TryNext(shortcut, 508, out nextKnife) && nextKnife == 507,
+    "Knife shortcut rotation must wrap at the end of the selected list.");
+Require(KnifeShortcutResolver.TryNext(shortcut, 503, out nextKnife) && nextKnife == 507,
+    "Knife shortcut rotation must start at the first selected type when the current knife is external.");
+Require(KnifeShortcutResolver.IsSupported(515) && !KnifeShortcutResolver.IsSupported(501),
+    "Knife shortcut input must be restricted to the catalog-owned knife types.");
+var defaultCosmetics = new KnifeConfig();
+Require(!defaultCosmetics.Loadouts.Ct.Glove.Enabled && !defaultCosmetics.Loadouts.T.Glove.Enabled,
+    "Glove presets must remain disabled until the user explicitly enables a team loadout.");
+
 var provenance = new WeaponProvenanceTracker();
 nint provenancePlayer = (nint)0x5000;
 nint ownedWeapon = (nint)0x5100;
