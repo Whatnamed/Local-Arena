@@ -32,6 +32,55 @@ public static class PresetWearClamp
 }
 
 /// <summary>
+/// The one CounterStrikeSharp setting this runtime cannot work without. Guideline
+/// mode blocks every economic item field a cosmetic preset writes — the entity
+/// quality, the fallback paint kit, seed and wear, the item id and the initialized
+/// flag — so knives, gloves and guns all need it disabled. The Panel reconciles the
+/// setting before it launches a local cosmetics session; this class only reads it,
+/// because a Mod that started without a Panel launch must say why it stays inert.
+/// </summary>
+public static class CosmeticRuntimeRequirement
+{
+    public const string GuidelineSettingName = "FollowCS2ServerGuidelines";
+
+    /// <summary>The setting as CounterStrikeSharp reads it, or null when the file is
+    /// absent, unparsable, or holds a non-boolean value. CounterStrikeSharp defaults
+    /// the setting to enabled when it has no configuration file, so null is not safe.</summary>
+    public static bool? ReadGuidelineSetting(string coreJsonPath)
+    {
+        if (!File.Exists(coreJsonPath)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(coreJsonPath));
+            if (!document.RootElement.TryGetProperty(GuidelineSettingName, out var setting)) return null;
+            return setting.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => null,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
+    public static bool AllowsCosmeticWrites(bool? followCs2ServerGuidelines) => followCs2ServerGuidelines == false;
+
+    public static string BlockReason(bool? followCs2ServerGuidelines) => followCs2ServerGuidelines switch
+    {
+        true => $"{GuidelineSettingName} is enabled, so CounterStrikeSharp refuses the economic item fields cosmetics write. Launch CS2 from the Local Cosmetics Panel, or set {GuidelineSettingName} to false in addons/counterstrikesharp/configs/core.json.",
+        null => $"{GuidelineSettingName} could not be read from addons/counterstrikesharp/configs/core.json, so CounterStrikeSharp keeps its safe default and refuses the economic item fields cosmetics write. Launch CS2 from the Local Cosmetics Panel.",
+        _ => $"{GuidelineSettingName} holds a value that is not a boolean, so CounterStrikeSharp keeps its safe default and refuses the economic item fields cosmetics write.",
+    };
+}
+
+/// <summary>
 /// Rotation rules for the optional quick-knife command. The list is user ordered
 /// and each knife keeps its own saved preset, so advancing the rotation only
 /// moves which defindex is the team's default knife.
@@ -245,6 +294,13 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private readonly HashSet<(ushort DefIndex, int Paint)> _legacyPaints = new();
     private KnifeConfig _config = new();
     private MemoryFunctionVoid<nint, string, float>? _setAttrByName;
+
+    /// <summary>
+    /// Set once at load from the CounterStrikeSharp guideline setting. While it is
+    /// false, every preset write would throw per weapon, so the pipeline refuses up
+    /// front and the reason is logged a single time.
+    /// </summary>
+    private bool _econWritesAllowed = true;
     private ulong _nextItemId = 0xC5200000;
     private readonly ApplyErrorThrottle _applyErrorThrottle = new(TimeSpan.FromSeconds(30));
     private int _loadedConfigSchema = KnifeConfig.CurrentSchemaVersion;
@@ -278,6 +334,9 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private string StickerCatalogPath => Path.Combine(ModuleDirectory, "sticker_ids.json");
     private string PlayerCosmeticCatalogPath => Path.Combine(ModuleDirectory, "player_cosmetic_catalog.json");
 
+    /// <summary>CounterStrikeSharp's own configuration, two levels above this plugin directory.</summary>
+    private string CoreConfigPath => Path.GetFullPath(Path.Combine(ModuleDirectory, "..", "..", "configs", "core.json"));
+
     public override void Load(bool hotReload)
     {
         _unloading = false;
@@ -305,6 +364,12 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             _setAttrByName = null;
         }
 
+        var guidelineSetting = CosmeticRuntimeRequirement.ReadGuidelineSetting(CoreConfigPath);
+        _econWritesAllowed = CosmeticRuntimeRequirement.AllowsCosmeticWrites(guidelineSetting);
+        if (!_econWritesAllowed)
+            Logger.LogError("[PlayerKnifeCustomizer] {Reason}",
+                CosmeticRuntimeRequirement.BlockReason(guidelineSetting));
+
         RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
         RegisterEventHandler<EventRoundMvp>(OnRoundMvp, HookMode.Pre);
         RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
@@ -314,8 +379,8 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
         RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         VirtualFunctions.GiveNamedItemFunc.Hook(OnGiveNamedItemPost, HookMode.Post);
-        Logger.LogInformation("[PlayerKnifeCustomizer] Loaded generation-safe pipeline; enabled={Enabled}, signature={Signature}, catalog={Catalog}, panel_launch={PanelLaunch}",
-            _config.Enabled, _setAttrByName != null, _skinCatalog.Values.Sum(skins => skins.Count), _panelLaunchSession);
+        Logger.LogInformation("[PlayerKnifeCustomizer] Loaded generation-safe pipeline; enabled={Enabled}, signature={Signature}, catalog={Catalog}, panel_launch={PanelLaunch}, econ_writes={EconWrites}",
+            _config.Enabled, _setAttrByName != null, _skinCatalog.Values.Sum(skins => skins.Count), _panelLaunchSession, _econWritesAllowed);
     }
 
     public override void Unload(bool hotReload)
@@ -827,7 +892,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private bool ApplyPreset(CBasePlayerWeapon weapon, ushort defIndex, KnifePreset preset)
     {
-        if (_setAttrByName == null || !weapon.IsValid || !ValidatePreset(defIndex, preset)) return false;
+        if (!_econWritesAllowed || _setAttrByName == null || !weapon.IsValid || !ValidatePreset(defIndex, preset)) return false;
 
         try
         {
@@ -869,7 +934,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         var preset = _config.Loadouts.For(team).Glove;
         if (!preset.Enabled) return true;
-        if (_setAttrByName == null || preset.DefIndex == 0 || preset.Paint <= 0) return false;
+        if (!_econWritesAllowed || _setAttrByName == null || preset.DefIndex == 0 || preset.Paint <= 0) return false;
 
         try
         {
@@ -1483,7 +1548,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private void OnStatusCommand(CCSPlayerController? player, CommandInfo command)
     {
-        command.ReplyToCommand($"[PlayerKnifeCustomizer] enabled={_config.Enabled}, stickers={DecorationReleaseEnabled && _config.StickersEnabled}, charms={DecorationReleaseEnabled && _config.CharmsEnabled}, agents={DecorationReleaseEnabled && _config.AgentsEnabled}, signature={(_setAttrByName == null ? "missing" : "loaded")}, ct_knives={_config.Loadouts.Ct.KnifePresets.Count}, t_knives={_config.Loadouts.T.KnifePresets.Count}, ct_guns={_config.Loadouts.Ct.GunPresets.Count}, t_guns={_config.Loadouts.T.GunPresets.Count}, music={_config.MusicKitId}, catalog={_skinCatalog.Values.Sum(skins => skins.Count)}, sticker_catalog={_validStickers.Count}, charm_catalog={_validCharms.Count}, agent_catalog={_agentModels.Values.Sum(models => models.Count)}, active_generations={_applyTracker.ActiveCount}, schedules={_applyTracker.Schedules}, phase_completions={_applyTracker.PhaseCompletions}, retry_exhaustions={_applyTracker.RetryExhaustions}, context_invalidations={_applyTracker.ContextInvalidations}");
+        command.ReplyToCommand($"[PlayerKnifeCustomizer] enabled={_config.Enabled}, stickers={DecorationReleaseEnabled && _config.StickersEnabled}, charms={DecorationReleaseEnabled && _config.CharmsEnabled}, agents={DecorationReleaseEnabled && _config.AgentsEnabled}, signature={(_setAttrByName == null ? "missing" : "loaded")}, econ_writes={(_econWritesAllowed ? "allowed" : "blocked-by-guidelines")}, ct_knives={_config.Loadouts.Ct.KnifePresets.Count}, t_knives={_config.Loadouts.T.KnifePresets.Count}, ct_guns={_config.Loadouts.Ct.GunPresets.Count}, t_guns={_config.Loadouts.T.GunPresets.Count}, music={_config.MusicKitId}, catalog={_skinCatalog.Values.Sum(skins => skins.Count)}, sticker_catalog={_validStickers.Count}, charm_catalog={_validCharms.Count}, agent_catalog={_agentModels.Values.Sum(models => models.Count)}, active_generations={_applyTracker.ActiveCount}, schedules={_applyTracker.Schedules}, phase_completions={_applyTracker.PhaseCompletions}, retry_exhaustions={_applyTracker.RetryExhaustions}, context_invalidations={_applyTracker.ContextInvalidations}");
     }
 
     private void LogApplyError(string operation, Exception ex)

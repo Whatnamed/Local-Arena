@@ -455,4 +455,42 @@ Require(resumed.ShouldLog && resumed.Suppressed == 1,
         "A paint kit missing from the catalog has no published range, so nothing may be rewritten.");
 }
 
-Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, live-reload, launch-isolation and wear-clamp tests passed.");
+// The CounterStrikeSharp guideline setting is a hard runtime requirement, so the
+// plugin has to read it the same way CounterStrikeSharp does.
+{
+    string directory = Path.Combine(Path.GetTempPath(), $"pkc-guideline-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(directory);
+    string Core(string text)
+    {
+        string path = Path.Combine(directory, "core.json");
+        File.WriteAllText(path, text);
+        return path;
+    }
+
+    Require(CosmeticRuntimeRequirement.ReadGuidelineSetting(Core("{\"FollowCS2ServerGuidelines\": true}")) == true,
+        "An explicit enabled guideline setting must be read as enabled.");
+    Require(CosmeticRuntimeRequirement.ReadGuidelineSetting(Core("{\"FollowCS2ServerGuidelines\": false, \"FutureSetting\": {\"a\": 1}}")) == false,
+        "The setting must be read even when the file carries settings this plugin does not know.");
+    Require(CosmeticRuntimeRequirement.ReadGuidelineSetting(Core("{\"ServerName\": \"mine\"}")) == null,
+        "A configuration without the setting must not be reported as satisfied.");
+    Require(CosmeticRuntimeRequirement.ReadGuidelineSetting(Core("{ not json")) == null,
+        "An unparsable configuration must be reported as unknown instead of throwing during plugin load.");
+    Require(CosmeticRuntimeRequirement.ReadGuidelineSetting(Core("{\"FollowCS2ServerGuidelines\": \"yes\"}")) == null,
+        "A non-boolean setting must be reported as unknown, because CounterStrikeSharp will not treat it as disabled.");
+    Require(CosmeticRuntimeRequirement.ReadGuidelineSetting(Path.Combine(directory, "absent.json")) == null,
+        "A missing core.json must be reported as unknown; CounterStrikeSharp defaults the setting to enabled.");
+
+    Require(CosmeticRuntimeRequirement.AllowsCosmeticWrites(false),
+        "Cosmetic writes are only allowed when the guideline setting is explicitly disabled.");
+    Require(!CosmeticRuntimeRequirement.AllowsCosmeticWrites(true) && !CosmeticRuntimeRequirement.AllowsCosmeticWrites(null),
+        "An enabled or unknown guideline setting must refuse cosmetic writes, which covers knives, gloves and guns alike.");
+    Require(CosmeticRuntimeRequirement.BlockReason(true).Contains(CosmeticRuntimeRequirement.GuidelineSettingName)
+            && CosmeticRuntimeRequirement.BlockReason(true).Contains("configs/core.json"),
+        "The refusal has to name the setting and the file the Panel reconciles.");
+    Require(CosmeticRuntimeRequirement.BlockReason(null).Contains("Local Cosmetics Panel"),
+        "The unknown-setting refusal must point at the supported way to satisfy the requirement.");
+
+    Directory.Delete(directory, true);
+}
+
+Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, provenance, live-reload, launch-isolation, wear-clamp and runtime-requirement tests passed.");
