@@ -22,7 +22,9 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] 打开 Panel，通过本项目入口启动本地饰品模式。
 - [ ] Panel 不要求永久修改 Steam Launch Options。
 - [ ] 该次启动使用 `-insecure`。
-- [ ] MetaMod、CounterStrikeSharp 和 PlayerCosmetics 正常加载。
+- [ ] CounterStrikeSharp 配置协调生效：`addons/counterstrikesharp/configs/core.json` 中的 `FollowCS2ServerGuidelines` 自动确保为 `false`。若原文件不存在，根据 `core.example.json` 模板安全生成；若原文件损坏，启动被安全阻止并给出明确提示。
+- [ ] MetaMod、CounterStrikeSharp 和 PlayerCosmetics 正常加载，控制台与日志中无 `FollowCS2ServerGuidelines` 阻断 CEconItemView 属性写入报错。
+- [ ] 购买轮盘说明：CS2 客户端购买菜单（Panorama UI）基于本地 Steam 库存缓存展示图标，属于客户端原生行为；购买发放后实际武器和手持视图正确套用本项目饰品预设。
 - [ ] 使用的是 CS2 官方普通 Bot，而不是 Enhanced Bot AI。
 - [ ] Bot 瞄准、投掷物、购买和行为没有出现旧 Bot Improver 的增强逻辑。
 
@@ -44,8 +46,10 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 若启用了快捷刀：
 
 - [ ] 默认或自定义快捷列表按预期轮换。
-- [ ] 不再像旧 cfg 一样一次在地面生成大量刀具实体。
-- [ ] 每把刀切换后恢复该刀自己的皮肤预设。
+- [ ] 受控实体替换生效：按下 `\` 快捷键切刀时，新刀以完整独立实体加载，骨骼动画、动作、手持视角模型（viewmodel）与音效完全匹配，绝无骨骼错位、模型穿模或动作混乱（如在蝴蝶刀模型上播放爪子刀动作）。
+- [ ] 实体安全替换：旧刀从背包解绑并直接销毁，绝不掉落到地面，地上不产生残留刀具实体。
+- [ ] 预设与原皮表现正确：该刀若配置了皮肤则应用对应预设；若未配置或为原皮（Paint = 0 / Vanilla），则加载正确的默认原皮外观。
+- [ ] 若切刀步骤异常，回滚保留原刀，不导致玩家空手或手持损坏实体。
 - [ ] 快捷功能关闭时不修改 `\` 或其他按键。
 - [ ] 除用户明确选择的快捷键外，WASD、1/2/3、Q、E、F、鼠标、购买键等均未改变。
 
@@ -84,6 +88,7 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] CS2 运行期间修改配置不会要求重启整个游戏才能永久保存。
 - [ ] 如果实现允许 Panel 关闭后继续使用饰品，关闭 Panel 后本局饰品不消失。
 - [ ] Panel 重开后能重新连接 / 同步到合理状态，不产生重复应用风暴。
+- [ ] 窗口唤醒：当 Panel 处于最小化状态时，再次运行可执行文件或点击快捷方式，窗口能正常恢复（unminimize）、展示（show）并获取焦点（set_focus），回到前台可见状态，不出现点击后无反应的现象。
 
 ## I. 异常恢复
 
@@ -117,6 +122,7 @@ Coding agent **不应自行启动 CS2 完成本清单**。Agent 只负责对应�
 - [ ] 原旧 Bot Improver 不再作为运行依赖。
 - [ ] “修复安装”不会清空自己的饰品预设。
 - [ ] “恢复 / 卸载”不会删除未知第三方插件或个人 cfg。
+- [ ] “恢复 / 卸载”针对 CounterStrikeSharp 配置只按 property 级 ownership 恢复：若安装前 core.json 存在，仅恢复原 FollowCS2ServerGuidelines 值；若原文件为本项目由 example 生成，则安全清理 core.json；保留文件中其他第三方配置。
 - [ ] 恢复后 Steam Verify Integrity 能顺利回到官方文件状态。
 - [ ] 恢复后再直接 Steam 启动，没有本项目 runtime 残留。
 
