@@ -382,7 +382,7 @@ fn installation_id(target: &Path) -> String {
     format!("{:x}", digest)[..16].to_string()
 }
 
-fn installation_dir(state_root: &Path, target: &Path) -> PathBuf {
+pub(crate) fn installation_dir(state_root: &Path, target: &Path) -> PathBuf {
     state_root
         .join("installations")
         .join(installation_id(target))
@@ -1214,6 +1214,16 @@ pub fn install(
             .or(detection.version),
         entries: record_entries.into_values().collect(),
     };
+    let includes_counterstrikesharp = manifest
+        .entries
+        .iter()
+        .any(|entry| entry.component == "counterstrikesharp" || entry.path == crate::guidelines::CORE_EXAMPLE_JSON_REL || entry.path == crate::guidelines::CORE_JSON_REL)
+        || target.join("addons/counterstrikesharp/configs").is_dir()
+        || target.join(crate::guidelines::CORE_JSON_REL).is_file()
+        || target.join(crate::guidelines::CORE_EXAMPLE_JSON_REL).is_file();
+    if includes_counterstrikesharp {
+        crate::guidelines::reconcile_core_json(target, Some(state_root))?;
+    }
     write_json_atomic(&directory.join("record.json"), &record)?;
     journal.committed = true;
     write_json_atomic(&journal_path, &journal)?;
@@ -1347,6 +1357,7 @@ pub fn restore(payload_root: &Path, state_root: &Path, target: &Path) -> Result<
         return Err(rollback_error.or(record_error).unwrap_or(error));
     }
 
+    let _ = crate::guidelines::restore_core_json(target, state_root);
     journal.committed = true;
     write_json_atomic(&journal_path, &journal)?;
     let _ = fs::remove_dir_all(&transaction_root);
@@ -1662,6 +1673,19 @@ mod tests {
                 restore_policy: "preserve-config".to_string(),
             });
         }
+        let config_dir = payload.join("addons/counterstrikesharp/configs");
+        fs::create_dir_all(&config_dir).unwrap();
+        let example_bytes = br#"{ "FollowCS2ServerGuidelines": true }"#;
+        let example_path = config_dir.join("core.example.json");
+        fs::write(&example_path, example_bytes).unwrap();
+        manifest.entries.push(PayloadEntry {
+            path: "addons/counterstrikesharp/configs/core.example.json".to_string(),
+            size: example_bytes.len() as u64,
+            sha256: sha256(&example_path).unwrap(),
+            component: "counterstrikesharp".to_string(),
+            ownership: "plus".to_string(),
+            restore_policy: "restore".to_string(),
+        });
         write_json_atomic(&payload.join(MANIFEST_FILE), &manifest).unwrap();
     }
 

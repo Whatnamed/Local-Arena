@@ -14,6 +14,7 @@ mod appearance;
 mod atomic_fs;
 mod cs2ss_bridge;
 mod diagnostics;
+pub mod guidelines;
 mod install_checks;
 mod installer;
 mod logging;
@@ -30,13 +31,13 @@ use match_system::{MatchCatalog, MatchResult, MatchSession, MatchRequest, MatchS
 use mode_files::{LaunchMode, apply_launch_mode, contains_metamod_search_path};
 use runtime_state::{Cs2ProcessInfo, blocks_target_write, inspect_cs2_process};
 
-type Result<T> = std::result::Result<T, AppError>;
+pub(crate) type Result<T> = std::result::Result<T, AppError>;
 
 #[derive(Debug, Serialize)]
-struct AppError {
-    code: &'static str,
-    category: &'static str,
-    detail: String,
+pub(crate) struct AppError {
+    pub(crate) code: &'static str,
+    pub(crate) category: &'static str,
+    pub(crate) detail: String,
 }
 
 impl AppError {
@@ -76,6 +77,9 @@ impl AppError {
     }
     fn update(detail: impl Into<String>) -> Self {
         Self::new("E1601", "update", detail)
+    }
+    pub(crate) fn config(detail: impl Into<String>) -> Self {
+        Self::new("E1502", "config", detail)
     }
 }
 
@@ -1158,6 +1162,12 @@ fn launch_cs2(app: AppHandle) -> Result<LaunchResult> {
     let state = local_state_root(&app)?;
     mode_layout::recover(&state, &root)?;
     if mode.insecure() {
+        guidelines::reconcile_core_json(&root, Some(&state)).map_err(|e| {
+            AppError::config(format!(
+                "CounterStrikeSharp configuration does not meet Local Cosmetics runtime requirements: {}",
+                e.detail
+            ))
+        })?;
         mode_files::prepare_local_launch(&root, Some(&state)).map_err(AppError::invalid)?;
     } else {
         mode_files::restore_clean_launch(&root, Some(&state)).map_err(AppError::invalid)?;
@@ -1751,7 +1761,10 @@ fn ensure_match_components_pass(report: &InstallCheckReport) -> Result<()> {
 }
 
 #[tauri::command]
-fn reconcile_core_json(_csgo: String) -> Result<()> {
+fn reconcile_core_json(app: AppHandle, csgo: String) -> Result<()> {
+    let root = csgo_path(&csgo)?;
+    let state = local_state_root(&app)?;
+    guidelines::reconcile_core_json(&root, Some(&state))?;
     Ok(())
 }
 
@@ -4049,7 +4062,30 @@ pub fn run() {
         previous_hook(info);
     }));
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| { if let Some(w) = app.get_webview_window("main") { let _ = w.set_focus(); } }))
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(w) = app.get_webview_window("main") {
+                let before_vis = w.is_visible().unwrap_or(false);
+                let before_min = w.is_minimized().unwrap_or(false);
+                let before_foc = w.is_focused().unwrap_or(false);
+                let show_res = w.show();
+                let unmin_res = w.unminimize();
+                let focus_res = w.set_focus();
+                let after_vis = w.is_visible().unwrap_or(false);
+                let after_min = w.is_minimized().unwrap_or(false);
+                let after_foc = w.is_focused().unwrap_or(false);
+                let detail = format!(
+                    "before(visible={},minimized={},focused={}), after(visible={},minimized={},focused={}), call_results(show={:?},unminimize={:?},focus={:?})",
+                    before_vis, before_min, before_foc,
+                    after_vis, after_min, after_foc,
+                    show_res.as_ref().map_err(|e| e.to_string()),
+                    unmin_res.as_ref().map_err(|e| e.to_string()),
+                    focus_res.as_ref().map_err(|e| e.to_string())
+                );
+                if let Ok(root) = app_storage::root() {
+                    logging::append(&root, "INFO", "window.single_instance_awaken", &detail);
+                }
+            }
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

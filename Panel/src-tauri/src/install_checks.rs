@@ -254,6 +254,42 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
         checks.push(source_file_check(&format!("PAYLOAD_{code}"), &format!("Package {title}"), payload_root, relative));
     }
 
+    let guidelines_check = match crate::guidelines::is_guidelines_compliant(target) {
+        Ok(true) => item(
+            "CSS_GUIDELINES",
+            CheckStatus::Pass,
+            "CounterStrikeSharp server guidelines",
+            target.join(crate::guidelines::CORE_JSON_REL).display().to_string(),
+            "FollowCS2ServerGuidelines is disabled as required for local cosmetics",
+            "No action required",
+        ),
+        Ok(false) => {
+            let mut check = item(
+                "CSS_GUIDELINES",
+                if installed { CheckStatus::Fail } else { CheckStatus::Warn },
+                "CounterStrikeSharp server guidelines",
+                target.join(crate::guidelines::CORE_JSON_REL).display().to_string(),
+                "Current CounterStrikeSharp configuration does not meet Local Cosmetics runtime requirements (FollowCS2ServerGuidelines is enabled or unconfigured)",
+                "Launch Local Cosmetics from Panel or Repair installation to automatically configure it",
+            );
+            check.blocking = installed;
+            check
+        }
+        Err(e) => {
+            let mut check = item(
+                "CSS_GUIDELINES",
+                CheckStatus::Fail,
+                "CounterStrikeSharp server guidelines",
+                target.join(crate::guidelines::CORE_JSON_REL).display().to_string(),
+                &format!("CounterStrikeSharp core.json is invalid: {}", e.detail),
+                "Repair installation to restore a valid configuration",
+            );
+            check.blocking = installed;
+            check
+        }
+    };
+    checks.push(guidelines_check);
+
     let pass_count = checks.iter().filter(|check| check.status == CheckStatus::Pass).count();
     let warn_count = checks.iter().filter(|check| check.status == CheckStatus::Warn).count();
     let fail_count = checks.iter().filter(|check| check.status == CheckStatus::Fail).count();
