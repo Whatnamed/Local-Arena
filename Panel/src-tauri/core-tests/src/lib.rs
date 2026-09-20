@@ -29,6 +29,8 @@ mod app_storage;
 mod app_version;
 #[path = "../../src/atomic_fs.rs"]
 mod atomic_fs;
+#[path = "../../src/css_settings.rs"]
+mod css_settings;
 #[path = "../../src/diagnostics.rs"]
 mod diagnostics;
 #[path = "../../src/installer.rs"]

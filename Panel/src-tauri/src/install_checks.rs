@@ -250,6 +250,7 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
     }
     for (code, title, relative) in [
         ("METAMOD_CSS_VDF", "MetaMod CounterStrikeSharp load file", "addons/metamod/counterstrikesharp.vdf"),
+        ("CSS_CORE_EXAMPLE", "CounterStrikeSharp configuration template", "addons/counterstrikesharp/configs/core.example.json"),
         ("COSMETICS_CATALOG", "Cosmetic catalog", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json"),
     ] {
         checks.push(target_file_check(&format!("TARGET_{code}"), &format!("Installed {title}"), target, relative, installed));
@@ -262,6 +263,47 @@ pub fn run(payload_root: &Path, state_root: &Path, target: &Path, cs2_running: b
         ("COSMETICS_GUN_PRESETS", "Saved weapon presets", "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_gun_presets.json"),
     ] {
         checks.push(target_file_check(&format!("TARGET_{code}"), title, target, relative, installed));
+    }
+
+    {
+        // CounterStrikeSharp refuses the economic item attributes a cosmetic preset
+        // needs while its guideline mode is on, so this is a runtime requirement and
+        // not a preference the user has to remember.
+        let core = crate::css_settings::core_path(target);
+        let (status, evidence, cause, action) = match crate::css_settings::read_guideline(target) {
+            Ok(Some(false)) => (
+                CheckStatus::Pass,
+                format!("{}; {} = false", core.display(), crate::css_settings::GUIDELINE_KEY),
+                "The CounterStrikeSharp configuration meets the cosmetics runtime requirement".to_string(),
+                "No action required".to_string(),
+            ),
+            Ok(Some(true)) => (
+                CheckStatus::Warn,
+                format!("{}; {} = true", core.display(), crate::css_settings::GUIDELINE_KEY),
+                "The current CounterStrikeSharp configuration does not meet the Local Cosmetics cosmetics runtime requirement".to_string(),
+                "Launching local cosmetics mode reconciles this setting automatically; knife, glove and gun appearances stay unapplied until it is false".to_string(),
+            ),
+            Ok(None) => (
+                CheckStatus::Warn,
+                core.display().to_string(),
+                "CounterStrikeSharp has not written its configuration file yet".to_string(),
+                "Launching local cosmetics mode creates it from core.example.json with the required setting".to_string(),
+            ),
+            Err(error) => (
+                CheckStatus::Fail,
+                error.detail.clone(),
+                "The CounterStrikeSharp configuration cannot be inspected safely".to_string(),
+                "Restore a readable core.json, then run the checks again".to_string(),
+            ),
+        };
+        checks.push(item(
+            "CSS_GUIDELINE_MODE",
+            status,
+            "CounterStrikeSharp guideline mode",
+            evidence,
+            cause.as_str(),
+            action.as_str(),
+        ));
     }
 
     let pass_count = checks.iter().filter(|check| check.status == CheckStatus::Pass).count();

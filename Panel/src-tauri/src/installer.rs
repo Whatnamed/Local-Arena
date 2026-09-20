@@ -1102,6 +1102,16 @@ pub fn install(
             installed_files += 1;
         }
 
+        // CounterStrikeSharp rejects the economic item attributes a cosmetic preset
+        // needs while guideline mode is on, so installing claims that one property
+        // and records the value it replaced. An existing record survives an upgrade
+        // so the original value is never overwritten by our own.
+        if crate::css_settings::read_ownership(&directory).is_none() {
+            let ownership = crate::css_settings::capture_ownership(target)?;
+            crate::css_settings::write_ownership(&directory, &ownership)?;
+        }
+        crate::css_settings::reconcile(target)?;
+
         Ok(())
     })();
 
@@ -1270,6 +1280,11 @@ pub fn restore(payload_root: &Path, state_root: &Path, target: &Path) -> Result<
     fs::remove_file(&journal_path).map_err(AppError::transaction_io)?;
     // The payload is gone, so no launch window may stay armed for it.
     crate::launch_isolation::forget_launch_window(state_root, target);
+    // Hand the CounterStrikeSharp setting back the way it was found.
+    if let Some(ownership) = crate::css_settings::read_ownership(&directory) {
+        crate::css_settings::revert(target, &ownership)?;
+        crate::css_settings::clear_ownership(&directory);
+    }
 
     Ok(RestoreResult {
         restored_files,
@@ -1462,6 +1477,11 @@ pub fn restore_pristine(
         let _ = remove_empty_tree(&target.join(raw.replace('/', "\\")));
     }
     crate::launch_isolation::forget_launch_window(state_root, target);
+    // A pristine CS2 must not keep a CounterStrikeSharp setting this product asked for.
+    if let Some(ownership) = crate::css_settings::read_ownership(&directory) {
+        crate::css_settings::revert(target, &ownership)?;
+        crate::css_settings::clear_ownership(&directory);
+    }
 
     Ok(RestoreResult {
         restored_files: 0,
@@ -1516,6 +1536,15 @@ mod tests {
         fs::write(payload.join("cfg/test.cfg"), b"plus").unwrap();
         fs::write(target.join("cfg/test.cfg"), b"steam").unwrap();
         fs::write(target.join("cfg/foreign.cfg"), b"foreign").unwrap();
+        // CounterStrikeSharp ships this example next to the configuration it writes
+        // for itself, and the cosmetics runtime derives the required setting from it.
+        let configs = target.join("addons/counterstrikesharp/configs");
+        fs::create_dir_all(&configs).unwrap();
+        fs::write(
+            configs.join("core.example.json"),
+            "{\n  \"FollowCS2ServerGuidelines\": true\n}\n",
+        )
+        .unwrap();
         let hash = sha256(&payload.join("cfg/test.cfg")).unwrap();
         write_json_atomic(
             &payload.join(MANIFEST_FILE),
@@ -1761,6 +1790,90 @@ mod tests {
     }
 
     #[test]
+    fn installing_meets_the_cosmetics_runtime_requirement_and_restore_hands_the_setting_back() {
+        let base = root("guideline-ownership");
+        let payload = base.join("payload");
+        let target = base.join("target");
+        let state = base.join("state");
+        cosmetics_fixture(&payload, &target);
+        let core = target.join("addons\\counterstrikesharp\\configs\\core.json");
+        fs::write(
+            &core,
+            "{\n  \"FollowCS2ServerGuidelines\": true,\n  \"ServerName\": \"mine\"\n}\n",
+        )
+        .unwrap();
+
+        install(&payload, &state, &target, false).unwrap();
+
+        assert_eq!(
+            crate::css_settings::read_guideline(&target).unwrap(),
+            Some(false),
+            "installation must satisfy the setting the cosmetic writes depend on"
+        );
+        let stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&core).unwrap()).unwrap();
+        assert_eq!(stored["ServerName"], "mine", "unrelated settings survive");
+
+        restore(&payload, &state, &target).unwrap();
+
+        assert_eq!(crate::css_settings::read_guideline(&target).unwrap(), Some(true));
+        assert!(core.is_file(), "a core.json the user had is never deleted");
+        let stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&core).unwrap()).unwrap();
+        assert_eq!(stored["ServerName"], "mine");
+        assert!(crate::css_settings::read_ownership(&installation_dir(&state, &target)).is_none());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn an_upgrade_still_restores_the_setting_the_first_install_replaced() {
+        let base = root("guideline-upgrade");
+        let payload = base.join("payload");
+        let target = base.join("target");
+        let state = base.join("state");
+        cosmetics_fixture(&payload, &target);
+        let core = target.join("addons\\counterstrikesharp\\configs\\core.json");
+        fs::write(&core, "{\"FollowCS2ServerGuidelines\": true}\n").unwrap();
+
+        install(&payload, &state, &target, false).unwrap();
+        fs::write(&core, "{\"FollowCS2ServerGuidelines\": false}\n").unwrap();
+        install(&payload, &state, &target, false).unwrap();
+
+        restore(&payload, &state, &target).unwrap();
+
+        assert_eq!(
+            crate::css_settings::read_guideline(&target).unwrap(),
+            Some(true),
+            "the second install must not mistake the first install's value for the original"
+        );
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn installing_generates_a_missing_configuration_and_restore_removes_it_again() {
+        let base = root("guideline-generated");
+        let payload = base.join("payload");
+        let target = base.join("target");
+        let state = base.join("state");
+        cosmetics_fixture(&payload, &target);
+        let core = target.join("addons\\counterstrikesharp\\configs\\core.json");
+        assert!(!core.is_file());
+
+        install(&payload, &state, &target, false).unwrap();
+
+        assert!(core.is_file(), "the setting has to exist before the first launch");
+        assert_eq!(crate::css_settings::read_guideline(&target).unwrap(), Some(false));
+
+        restore(&payload, &state, &target).unwrap();
+
+        assert!(!core.is_file(), "a configuration this product generated is not left behind");
+        assert!(target
+            .join("addons\\counterstrikesharp\\configs\\core.example.json")
+            .is_file());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn install_repair_and_restore_preserve_originals_and_foreign_files() {
         let base = root("roundtrip");
         let payload = base.join("payload");
@@ -1993,6 +2106,13 @@ mod tests {
         let payload = base.join("payload");
         let target = base.join("target");
         let state = base.join("state");
+        let configs = target.join("addons/counterstrikesharp/configs");
+        fs::create_dir_all(&configs).unwrap();
+        fs::write(
+            configs.join("core.example.json"),
+            "{\n  \"FollowCS2ServerGuidelines\": true\n}\n",
+        )
+        .unwrap();
         let mut entries = Vec::new();
         for index in 0..512 {
             let relative = format!("addons/runtime/file-{index:04}.bin");

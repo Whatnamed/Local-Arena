@@ -12,6 +12,7 @@
     "addons/metamod/metaplugins.ini",
     "addons/metamod/counterstrikesharp.vdf",
     "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll",
+    "addons/counterstrikesharp/configs/core.example.json",
     "addons/counterstrikesharp/dotnet/dotnet.exe",
     "addons/counterstrikesharp/gamedata/gamedata.json",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll",

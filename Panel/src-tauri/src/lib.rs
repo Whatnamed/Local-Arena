@@ -12,6 +12,7 @@ mod app_storage;
 mod app_version;
 mod appearance;
 mod atomic_fs;
+mod css_settings;
 mod diagnostics;
 mod install_checks;
 mod installer;
@@ -889,6 +890,11 @@ fn launch_local_cosmetics(app: AppHandle) -> Result<LaunchResult> {
     let now = launch_isolation::unix_now();
     // Heal an interrupted transaction before arming a new one.
     launch_isolation::recover(&state, &root, false, now)?;
+    // CounterStrikeSharp refuses every economic item write a cosmetic preset needs
+    // while its guideline mode is on, so the setting is a launch requirement rather
+    // than a preference. Nothing is inserted yet, so a failure here is just a
+    // refused launch.
+    css_settings::reconcile(&root)?;
     let prepared = launch_isolation::prepare_local_launch(&state, &root, now)?;
     let steam = match find_steam_executable() {
         Ok(steam) => steam,
