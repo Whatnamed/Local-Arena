@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,8 +16,6 @@ const UPDATE_PUBLIC_KEY: &str = "RbIjlfASpYVu740SsmQMLuLO7ExxiDBYTdnYThfqU/4=";
 const CACHE_SECONDS: u64 = 6 * 60 * 60;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const PANEL_EXECUTABLE_NAME: &str = "LocalArena.exe";
-const LEGACY_PANEL_EXECUTABLE_NAME: &str = "CS2BotImproverPlus.exe";
 
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 static RUNTIME: OnceLock<Mutex<RuntimeState>> = OnceLock::new();
@@ -34,6 +31,7 @@ struct RuntimeState {
 pub struct UpdateComponentState {
     pub current_version: String,
     pub latest_version: Option<String>,
+    pub reference_available: bool,
     pub update_available: bool,
     pub compatible: bool,
     pub status: String,
@@ -89,16 +87,6 @@ struct ActivePayload {
     schema_version: u8,
     version: String,
     path: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct PanelUpdatePlan {
-    schema_version: u8,
-    old_pid: u32,
-    current: String,
-    target: String,
-    staged: String,
-    backup: String,
 }
 
 fn runtime() -> &'static Mutex<RuntimeState> {
@@ -213,7 +201,7 @@ fn component_state(
     error: Option<String>,
 ) -> UpdateComponentState {
     let latest = component.map(|value| value.version.clone());
-    let update_available = component
+    let reference_available = component
         .and_then(|value| {
             Some(
                 update_core::DisplayVersion::parse(&value.version).ok()?
@@ -221,6 +209,9 @@ fn component_state(
             )
         })
         .unwrap_or(false);
+    // The personal fork only checks the upstream manifest for reference. It never
+    // exposes an installable update state to the Panel or its status banner.
+    let update_available = false;
     let compatible = component
         .and_then(|value| {
             Some(
@@ -241,14 +232,9 @@ fn component_state(
             0,
             component.map(|value| value.size).unwrap_or(0),
         )
-    } else if update_available {
+    } else if reference_available {
         (
-            if compatible {
-                "available"
-            } else {
-                "panel-required"
-            }
-            .into(),
+            "reference".into(),
             0,
             component.map(|value| value.size).unwrap_or(0),
         )
@@ -262,6 +248,7 @@ fn component_state(
     UpdateComponentState {
         current_version: current.into(),
         latest_version: latest,
+        reference_available,
         update_available,
         compatible,
         status,
@@ -563,92 +550,10 @@ pub fn active_payload_root() -> Option<PathBuf> {
     Some(path)
 }
 
-pub fn prepare_panel(app: &AppHandle) -> Result<UpdateResult> {
-    let (component, archive) = download_component(app, "panel")?;
-    set_progress(
-        app,
-        UpdateProgress {
-            component: "panel".into(),
-            stage: "extracting".into(),
-            downloaded_bytes: component.size,
-            total_bytes: component.size,
-        },
-    );
-    let directory = update_root()?.join("panel").join(&component.version);
-    clear_directory(&directory)?;
-    update_core::extract_zip_safely(
-        File::open(archive).map_err(AppError::transaction_io)?,
-        &directory,
-    )
-    .map_err(AppError::update)?;
-    let staged = if directory.join(PANEL_EXECUTABLE_NAME).is_file() {
-        directory.join(PANEL_EXECUTABLE_NAME)
-    } else {
-        fs::read_dir(&directory)
-            .map_err(AppError::transaction_io)?
-            .flatten()
-            .map(|entry| entry.path().join(PANEL_EXECUTABLE_NAME))
-            .find(|path| path.is_file())
-            .ok_or_else(|| {
-                AppError::payload(format!(
-                    "Panel update ZIP has no {PANEL_EXECUTABLE_NAME}"
-                ))
-            })?
-    };
-    schedule_panel_replace(&component.version, &staged)?;
-    Ok(UpdateResult {
-        component: "panel".into(),
-        version: component.version,
-        installed: true,
-        restart_required: true,
-        rollback_succeeded: None,
-        detail: "Panel update is staged and will be applied after restart".into(),
-    })
-}
-
-fn schedule_panel_replace(version: &str, staged: &Path) -> Result<()> {
-    let current = std::env::current_exe().map_err(AppError::transaction_io)?;
-    let parent = current
-        .parent()
-        .ok_or_else(|| AppError::update("Panel executable has no parent directory"))?;
-    let current_name = current.file_name().and_then(|name| name.to_str());
-    if !matches!(
-        current_name,
-        Some(name)
-            if name.eq_ignore_ascii_case(PANEL_EXECUTABLE_NAME)
-                || name.eq_ignore_ascii_case(LEGACY_PANEL_EXECUTABLE_NAME)
-    ) {
-        return Err(AppError::update(
-            format!(
-                "Online Panel updates require {PANEL_EXECUTABLE_NAME} or the legacy filename {LEGACY_PANEL_EXECUTABLE_NAME}"
-            ),
-        ));
-    }
-    let target = parent.join(PANEL_EXECUTABLE_NAME);
-    let helper_dir = update_root()?.join("helper");
-    fs::create_dir_all(&helper_dir).map_err(AppError::transaction_io)?;
-    let helper = helper_dir.join("LocalArena-update-helper.exe");
-    fs::copy(&current, &helper).map_err(AppError::transaction_io)?;
-    let plan_path = helper_dir.join("panel-update-plan.json");
-    let backup = update_root()?
-        .join("panel-backups")
-        .join(format!("{version}-previous.exe"));
-    let plan = serde_json::to_vec_pretty(&PanelUpdatePlan {
-        schema_version: 1,
-        old_pid: std::process::id(),
-        current: current.to_string_lossy().into_owned(),
-        target: target.to_string_lossy().into_owned(),
-        staged: staged.to_string_lossy().into_owned(),
-        backup: backup.to_string_lossy().into_owned(),
-    })
-    .map_err(|error| AppError::update(error.to_string()))?;
-    atomic_fs::write_replace(&plan_path, &plan).map_err(AppError::transaction_io)?;
-    Command::new(helper)
-        .arg("--apply-panel-update")
-        .arg(plan_path)
-        .spawn()
-        .map_err(|error| AppError::update(format!("Cannot start Panel update helper: {error}")))?;
-    Ok(())
+pub fn prepare_panel(_app: &AppHandle) -> Result<UpdateResult> {
+    Err(AppError::update(
+        "Online Panel installation is disabled for this personal Local Arena fork",
+    ))
 }
 
 pub fn cancel() {
@@ -693,90 +598,21 @@ pub fn cleanup_cache(active_version: Option<&str>) -> Result<usize> {
     Ok(removed)
 }
 
-#[cfg(windows)]
-fn process_exists(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if handle.is_null() {
-        false
-    } else {
-        unsafe {
-            CloseHandle(handle);
-        }
-        true
-    }
-}
-
-#[cfg(not(windows))]
-fn process_exists(_pid: u32) -> bool {
-    false
-}
-
 pub fn maybe_apply_panel_update() -> bool {
     let mut arguments = std::env::args_os();
     let _ = arguments.next();
     if arguments.next().as_deref() != Some(std::ffi::OsStr::new("--apply-panel-update")) {
         return false;
     }
-    let Some(plan_path) = arguments.next() else {
-        return true;
-    };
-    let outcome = (|| -> std::result::Result<(), String> {
-        let plan: PanelUpdatePlan =
-            serde_json::from_slice(&fs::read(&plan_path).map_err(|error| error.to_string())?)
-                .map_err(|error| error.to_string())?;
-        if plan.schema_version != 1 {
-            return Err("Unsupported Panel update plan".into());
-        }
-        for _ in 0..300 {
-            if !process_exists(plan.old_pid) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if process_exists(plan.old_pid) {
-            return Err("Timed out waiting for the old Panel process".into());
-        }
-        let target = PathBuf::from(&plan.target);
-        let current = PathBuf::from(&plan.current);
-        let staged = PathBuf::from(&plan.staged);
-        let backup = PathBuf::from(&plan.backup);
-        update_core::install_file_with_backup(&staged, &current, &target, &backup)?;
-        if let Err(error) = Command::new(&target).spawn() {
-            let migrated = !current.eq_ignore_ascii_case(&target);
-            let rollback = if migrated {
-                let target_removed = !target.exists() || fs::remove_file(&target).is_ok();
-                target_removed && fs::copy(&backup, &current).is_ok()
-            } else {
-                fs::copy(&backup, &target).is_ok()
-            };
-            return Err(format!(
-                "Panel updated but could not restart; rollback_succeeded={rollback}: {error}"
-            ));
-        }
-        if !current.eq_ignore_ascii_case(&target) {
-            let _ = fs::remove_file(current);
-        }
-        let _ = fs::remove_file(plan_path);
-        Ok(())
-    })();
-    if let Err(error) = outcome {
-        if let Ok(root) = app_storage::root() {
-            logging::append(&root, "ERROR", "update.panel_helper_failed", &error);
-        }
+    if let Ok(root) = app_storage::root() {
+        logging::append(
+            &root,
+            "WARN",
+            "update.panel_helper_disabled",
+            "The personal fork does not apply staged upstream Panel updates",
+        );
     }
     true
-}
-
-trait EqIgnoreAsciiCasePath {
-    fn eq_ignore_ascii_case(&self, other: &Path) -> bool;
-}
-impl EqIgnoreAsciiCasePath for PathBuf {
-    fn eq_ignore_ascii_case(&self, other: &Path) -> bool {
-        self.to_string_lossy()
-            .eq_ignore_ascii_case(&other.to_string_lossy())
-    }
 }
 
 #[cfg(test)]

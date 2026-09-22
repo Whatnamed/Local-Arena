@@ -286,6 +286,7 @@ export type KnifeCustomizerConfig = {
   stickers_enabled: boolean;
   charms_enabled: boolean;
   agents_enabled: boolean;
+  shortcut_knives: number[];
 };
 
 export type KnifeCustomizerState = {
@@ -410,6 +411,7 @@ export type AppearanceExportResult = { path: string; size_bytes: number };
 export type UpdateComponentState = {
   current_version: string;
   latest_version: string | null;
+  reference_available: boolean;
   update_available: boolean;
   compatible: boolean;
   status: string;

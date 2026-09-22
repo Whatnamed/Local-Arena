@@ -32,6 +32,27 @@ Require(WeaponPresetResolver.TryResolveGunPreset(config, 9, CosmeticTeam.T, out 
 Require(!WeaponPresetResolver.TryResolveGunPreset(config, 9, null, out _),
     "A spectator or unknown team must not receive a cosmetic preset.");
 
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(507) == 515 &&
+        KnifeShortcutCycle.GetNextKnifeDefIndex(512) == 507,
+    "The default quick-knife cycle must use the documented order and wrap around.");
+Require(KnifeShortcutCycle.GetNextKnifeDefIndex(507, [515, 507, 526]) == 526,
+    "A configured quick-knife list must control the next target.");
+Require(GiveNamedItemPhaseResolver.Resolve("weapon_knife_karambit", 507) == CosmeticApplyPhase.Knife &&
+        GiveNamedItemPhaseResolver.Resolve("weapon_ak47", 7) == CosmeticApplyPhase.Guns &&
+        GiveNamedItemPhaseResolver.Resolve(null, 0) == (CosmeticApplyPhase.Knife | CosmeticApplyPhase.Guns),
+    "GiveNamedItem return inspection must select knife, gun, or conservative combined phases.");
+
+var plannerLoadout = new TeamLoadout();
+var planner = KnifeReplacementPlanner.Plan(507, null, plannerLoadout);
+Require(planner.IsValid && planner.TargetDefIndex == 515 && planner.IsVanilla &&
+        plannerLoadout.KnifePresets.Count == 0,
+    "A vanilla quick-knife plan must not create a preset before replacement succeeds.");
+plannerLoadout.KnifePresets[515] = Preset(568);
+var configuredPlan = KnifeReplacementPlanner.Plan(507, null, plannerLoadout);
+Require(configuredPlan.IsValid && !configuredPlan.IsVanilla && configuredPlan.Preset.Paint == 568 &&
+        !ReferenceEquals(configuredPlan.Preset, plannerLoadout.KnifePresets[515]),
+    "A configured quick-knife plan must clone the preset without mutating loadout state.");
+
 tAwp.StatTrakCount++;
 Require(config.Loadouts.T.GunPresets[9].StatTrakCount == 21 && config.Loadouts.Ct.GunPresets[9].StatTrakCount == 10,
     "StatTrak must update only the resolved team preset.");

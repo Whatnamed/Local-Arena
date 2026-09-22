@@ -6,13 +6,14 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::sync::OnceLock;
 use sysinfo::{ProcessesToUpdate, System};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, UserAttentionType};
 
 mod app_storage;
 mod app_version;
 mod appearance;
 mod atomic_fs;
 mod cs2ss_bridge;
+mod core_config;
 mod diagnostics;
 mod install_checks;
 mod installer;
@@ -382,6 +383,10 @@ const COSMETICS_SCHEMA_VERSION: u8 = 5;
 const STICKER_RELEASE_ENABLED: bool = true;
 const CT_ONLY_WEAPONS: &[u16] = &[3, 8, 10, 16, 27, 32, 34, 38, 60, 61];
 const T_ONLY_WEAPONS: &[u16] = &[4, 7, 11, 13, 17, 29, 30, 39];
+const SHORTCUT_KNIVES: &[u16] = &[
+    500, 503, 505, 506, 507, 508, 509, 512, 514, 515, 516, 517, 518, 519, 520, 521, 522, 523,
+    525, 526,
+];
 const SHARED_WEAPONS: &[u16] = &[
     1, 2, 9, 14, 19, 23, 24, 25, 26, 28, 31, 33, 35, 36, 40, 63, 64,
 ];
@@ -459,6 +464,8 @@ struct KnifeCustomizerConfig {
     charms_enabled: bool,
     #[serde(default)]
     agents_enabled: bool,
+    #[serde(default)]
+    shortcut_knives: Vec<u16>,
 
     // Read-only v1 fields. They are migrated in memory and never serialized again.
     #[serde(default, skip_serializing)]
@@ -541,6 +548,7 @@ impl Default for KnifeCustomizerConfig {
             stickers_enabled: false,
             charms_enabled: false,
             agents_enabled: false,
+            shortcut_knives: Vec::new(),
             default_knife_defindex: 0,
             presets: BTreeMap::new(),
             gun_presets: BTreeMap::new(),
@@ -1080,6 +1088,9 @@ fn set_mode(app: AppHandle, csgo: String, mode: String) -> Result<ModeInfo> {
     let launch_mode = LaunchMode::parse(Some(&mode)).map_err(AppError::invalid)?;
     let state = local_state_root(&app)?;
     mode_layout::recover(&state, &root)?;
+    if launch_mode.insecure() {
+        core_config::ensure_local_mode(&state, &root)?;
+    }
     apply_launch_mode(&root, launch_mode).map_err(AppError::invalid)?;
     mode_layout::set_preview(&state, &root, launch_mode != LaunchMode::Bots)?;
     let mut config = read_config(&app)?;
@@ -1145,6 +1156,9 @@ fn launch_cs2(app: AppHandle) -> Result<LaunchResult> {
     ensure_target_not_running(&root)?;
     let state = local_state_root(&app)?;
     mode_layout::recover(&state, &root)?;
+    if mode.insecure() {
+        core_config::ensure_local_mode(&state, &root)?;
+    }
     apply_launch_mode(&root, mode).map_err(AppError::invalid)?;
     mode_layout::set_preview(&state, &root, mode != LaunchMode::Bots)?;
     enforce_mode_cosmetics(&root, &mut config, mode)?;
@@ -1719,7 +1733,13 @@ fn ensure_match_components_pass(report: &InstallCheckReport) -> Result<()> {
 }
 
 #[tauri::command]
-fn reconcile_core_json(_csgo: String) -> Result<()> {
+fn reconcile_core_json(app: AppHandle, csgo: String) -> Result<()> {
+    let root = csgo_path(&csgo)?;
+    let config = read_config(&app)?;
+    let mode = LaunchMode::parse(config.mode.as_deref()).map_err(AppError::invalid)?;
+    if mode.insecure() {
+        core_config::ensure_local_mode(&local_state_root(&app)?, &root)?;
+    }
     Ok(())
 }
 
@@ -2010,18 +2030,139 @@ fn set_drop_knives(
     selected: Vec<u16>,
 ) -> Result<DropKnivesState> {
     let root = csgo_path(&csgo)?;
-    let commands = selected
+    validate_quick_knife_bind(&bind_key)?;
+    if selected.iter().any(|defindex| !SHORTCUT_KNIVES.contains(defindex)) {
+        return Err(AppError::invalid("Invalid quick-knife definition index"));
+    }
+    let mut config = read_config(&app)?;
+    let previous_selected = config.drop_knife_subclasses.clone();
+    let cosmetics_snapshot = snapshot_cosmetics_files(&root)?;
+    let cfg_snapshot = snapshot_quick_knife_cfg(&root)?;
+    let mut knife_config = read_knife_config(&root)?;
+    knife_config.shortcut_knives = selected.clone();
+    if let Err(error) = replace_quick_knife_bind(&root, &bind_key, &previous_selected, !selected.is_empty()) {
+        let _ = restore_quick_knife_cfg(&cfg_snapshot);
+        return Err(error);
+    }
+    if let Err(error) = save_knife_config(&root, &mut knife_config) {
+        let _ = restore_quick_knife_cfg(&cfg_snapshot);
+        return Err(error);
+    }
+    config.drop_knife_bind = bind_key;
+    config.drop_knife_subclasses = selected;
+    if let Err(error) = write_config(&app, &config) {
+        let _ = restore_quick_knife_cfg(&cfg_snapshot);
+        let _ = restore_cosmetics_files(&cosmetics_snapshot);
+        return Err(error);
+    }
+    get_drop_knives(app, csgo)
+}
+
+fn validate_quick_knife_bind(bind_key: &str) -> Result<()> {
+    if bind_key.is_empty()
+        || bind_key.len() > 32
+        || bind_key
+            .chars()
+            .any(|value| !(value.is_ascii_alphanumeric() || matches!(value, '_' | '\\')))
+    {
+        return Err(AppError::invalid(
+            "Quick-knife bind key contains unsupported characters",
+        ));
+    }
+    Ok(())
+}
+
+fn replace_quick_knife_bind(
+    csgo: &Path,
+    bind_key: &str,
+    previous_selected: &[u16],
+    enabled: bool,
+) -> Result<()> {
+    let key_prefix = format!("bind {bind_key}");
+    let previous_command = previous_selected
         .iter()
         .map(|id| format!("subclass_create {id}"))
         .collect::<Vec<_>>()
         .join(";");
-    let line = format!("bind {bind_key} \"{commands}\"");
-    replace_managed_cfg_command(&root, "bind ", &line)?;
-    let mut config = read_config(&app)?;
-    config.drop_knife_bind = bind_key;
-    config.drop_knife_subclasses = selected;
-    write_config(&app, &config)?;
-    get_drop_knives(app, csgo)
+    let previous_line = format!("{key_prefix} \"{previous_command}\"");
+    let replacement = if enabled {
+        format!("{key_prefix} \"css_quick_knife\"")
+    } else {
+        format!("unbind {bind_key}")
+    };
+
+    let mut files = Vec::new();
+    for canonical in cfg_paths(csgo) {
+        let path = mode_layout::active_or_disabled(&canonical).unwrap_or(canonical);
+        let text = fs::read_to_string(&path)?;
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            if !is_bind_line_for_key(trimmed, &key_prefix) {
+                continue;
+            }
+            let owned = trimmed.contains("css_quick_knife") || trimmed == previous_line;
+            if !owned && enabled {
+                return Err(AppError::invalid(format!(
+                    "Bind key {bind_key} is already used by a user command"
+                )));
+            }
+        }
+        files.push((path, text));
+    }
+
+    for (path, text) in files {
+        let mut found_owned = false;
+        let mut lines = Vec::new();
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            if is_bind_line_for_key(trimmed, &key_prefix)
+                && (trimmed.contains("css_quick_knife") || trimmed == previous_line)
+            {
+                if !found_owned {
+                    lines.push(replacement.clone());
+                    found_owned = true;
+                }
+            } else {
+                lines.push(line.to_string());
+            }
+        }
+        if enabled && !found_owned {
+            lines.push(replacement.clone());
+        }
+        if enabled || found_owned {
+            fs::write(path, format!("{}\r\n", lines.join("\r\n")))?;
+        }
+    }
+    Ok(())
+}
+
+fn is_bind_line_for_key(line: &str, prefix: &str) -> bool {
+    line == prefix
+        || line
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.chars().next().is_some_and(|value| value.is_ascii_whitespace()))
+}
+
+fn snapshot_quick_knife_cfg(root: &Path) -> Result<Vec<(PathBuf, Option<Vec<u8>>)>> {
+    cfg_paths(root)
+        .into_iter()
+        .map(|canonical| {
+            let path = mode_layout::active_or_disabled(&canonical).unwrap_or(canonical);
+            let bytes = if path.is_file() { Some(fs::read(&path)?) } else { None };
+            Ok((path, bytes))
+        })
+        .collect()
+}
+
+fn restore_quick_knife_cfg(snapshot: &[(PathBuf, Option<Vec<u8>>)]) -> Result<()> {
+    for (path, bytes) in snapshot {
+        match bytes {
+            Some(bytes) => fs::write(path, bytes)?,
+            None if path.exists() => fs::remove_file(path)?,
+            None => {}
+        }
+    }
+    Ok(())
 }
 
 fn knife_config_path(root: &Path) -> PathBuf {
@@ -2377,6 +2518,10 @@ fn normalize_knife_config(config: &mut KnifeCustomizerConfig) -> Result<()> {
     config.stickers_enabled = STICKER_RELEASE_ENABLED && config.stickers_enabled;
     config.charms_enabled = STICKER_RELEASE_ENABLED && config.charms_enabled;
     config.agents_enabled = STICKER_RELEASE_ENABLED && config.agents_enabled;
+    let mut seen_shortcut_knives = BTreeSet::new();
+    config.shortcut_knives.retain(|defindex| {
+        SHORTCUT_KNIVES.contains(defindex) && seen_shortcut_knives.insert(*defindex)
+    });
     config.music_kit_id = config.music_kit_id.clamp(0, u16::MAX as i32);
     normalize_team_loadout(WeaponSide::Ct, &mut config.loadouts.ct)?;
     normalize_team_loadout(WeaponSide::T, &mut config.loadouts.t)?;
@@ -2816,12 +2961,23 @@ async fn install_payload(app: AppHandle, csgo: String) -> Result<InstallTransact
         ensure_steam_app_idle(&root)?;
         let config = read_config(&app)?;
         let restore_preview = config.mode.as_deref() == Some("preview");
+        let captured_core = core_config::capture_before_install(&state, &root)?;
+        if let Err(error) = core_config::validate_before_install(&root) {
+            if captured_core {
+                let _ = core_config::discard_capture(&state, &root);
+            }
+            return Err(error);
+        }
         logging::append(&state, "INFO", "install.started", &root.to_string_lossy());
         let result = with_canonical_layout(&state, &root, restore_preview, || {
             let result = installer::install(&payload, &state, &root, false)?;
+            core_config::ensure_local_mode(&state, &root)?;
             write_bot_randomizer_options(&root, &config.bot_items)?;
             Ok(result)
         });
+        if result.is_err() && captured_core {
+            let _ = core_config::discard_capture(&state, &root);
+        }
         match &result {
             Ok(value) => logging::append(
                 &state,
@@ -2849,12 +3005,23 @@ async fn repair_payload(app: AppHandle, csgo: String) -> Result<InstallTransacti
         ensure_steam_app_idle(&root)?;
         let config = read_config(&app)?;
         let restore_preview = config.mode.as_deref() == Some("preview");
+        let captured_core = core_config::capture_before_install(&state, &root)?;
+        if let Err(error) = core_config::validate_before_install(&root) {
+            if captured_core {
+                let _ = core_config::discard_capture(&state, &root);
+            }
+            return Err(error);
+        }
         logging::append(&state, "INFO", "repair.started", &root.to_string_lossy());
         let result = with_canonical_layout(&state, &root, restore_preview, || {
             let result = installer::install(&payload, &state, &root, true)?;
+            core_config::ensure_local_mode(&state, &root)?;
             write_bot_randomizer_options(&root, &config.bot_items)?;
             Ok(result)
         });
+        if result.is_err() && captured_core {
+            let _ = core_config::discard_capture(&state, &root);
+        }
         match &result {
             Ok(value) => logging::append(
                 &state,
@@ -2911,11 +3078,23 @@ fn restore_payload_impl(app: &AppHandle, csgo: &str, pristine: bool) -> Result<R
         &format!("{operation}.started"),
         &root.to_string_lossy(),
     );
+    let core_snapshot = core_config::snapshot_current(&root)?;
     let result = if pristine {
         installer::restore_pristine(&payload_root()?, &state, &root)
     } else {
         installer::restore(&payload_root()?, &state, &root)
     };
+    if result.is_ok() {
+        if let Err(error) = core_config::restore_owned_with_current(&state, &root, Some(core_snapshot)) {
+            logging::append(
+                &state,
+                "ERROR",
+                &format!("{operation}.core_config_failed"),
+                &error.detail,
+            );
+            return Err(error);
+        }
+    }
     match &result {
         Ok(value) => logging::append(
             &state,
@@ -2966,76 +3145,21 @@ async fn check_online_updates(
     .map_err(|error| AppError::update(format!("Update check task failed: {error}")))?
 }
 
-fn install_plugin_update_impl(app: &AppHandle, csgo: &str) -> Result<online_update::UpdateResult> {
-    let root = csgo_path(csgo)?;
-    ensure_target_not_running(&root)?;
-    ensure_steam_app_idle(&root)?;
-    let state = local_state_root(app)?;
-    let config = read_config(app)?;
-    let restore_preview = config.mode.as_deref() == Some("preview");
-    logging::append(&state, "INFO", "update.plugin_started", "host=github.com");
-    let (version, payload) = online_update::prepare_plugin(app)?;
-    online_update::activate_payload(&version, &payload)?;
-    match with_canonical_layout(&state, &root, restore_preview, || {
-        let result = installer::install(&payload, &state, &root, false)?;
-        write_bot_randomizer_options(&root, &config.bot_items)?;
-        Ok(result)
-    }) {
-        Ok(value) => {
-            logging::append(
-                &state,
-                "INFO",
-                "update.plugin_completed",
-                &format!("version={version}, files={}", value.installed_files),
-            );
-            Ok(online_update::UpdateResult {
-                component: "plugin".into(),
-                version,
-                installed: true,
-                restart_required: false,
-                rollback_succeeded: None,
-                detail: format!("Plugin update installed ({} files)", value.installed_files),
-            })
-        }
-        Err(error) => {
-            logging::append(
-                &state,
-                "ERROR",
-                "update.plugin_failed",
-                &format!("stage=install, rollback=attempted, {}", error.detail),
-            );
-            Err(error)
-        }
-    }
-}
-
 #[tauri::command]
 async fn install_plugin_update(
-    app: AppHandle,
-    csgo: String,
+    _app: AppHandle,
+    _csgo: String,
 ) -> Result<online_update::UpdateResult> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let _busy = online_update::OperationGuard::acquire()?;
-        install_plugin_update_impl(&app, &csgo)
-    })
-    .await
-    .map_err(|error| AppError::update(format!("Plugin update task failed: {error}")))?
+    Err(AppError::update(
+        "Online installation is disabled for this personal Local Arena fork; update through reviewed Git changes and a local package.",
+    ))
 }
 
 #[tauri::command]
-async fn install_panel_update(app: AppHandle) -> Result<online_update::UpdateResult> {
-    let worker_app = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let _busy = online_update::OperationGuard::acquire()?;
-        online_update::prepare_panel(&worker_app)
-    })
-    .await
-    .map_err(|error| AppError::update(format!("Panel update task failed: {error}")))??;
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        app.exit(0);
-    });
-    Ok(result)
+async fn install_panel_update(_app: AppHandle) -> Result<online_update::UpdateResult> {
+    Err(AppError::update(
+        "Online installation is disabled for this personal Local Arena fork; update through reviewed Git changes and a local package.",
+    ))
 }
 
 #[tauri::command]
@@ -3043,53 +3167,10 @@ async fn install_all_updates(
     app: AppHandle,
     csgo: Option<String>,
 ) -> Result<online_update::UpdateBatchResult> {
-    let worker_app = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let _busy = online_update::OperationGuard::acquire()?;
-        let plugin_version = installed_plugin_version(&worker_app);
-        let snapshot = online_update::snapshot(plugin_version.as_deref())?;
-
-        let plugin = if snapshot.plugin.update_available {
-            if !snapshot.plugin.compatible {
-                return Err(AppError::update(
-                    "This plugin update requires a newer Panel updater",
-                ));
-            }
-            let target = csgo.as_deref().ok_or_else(|| {
-                AppError::directory("Select the CS2 game/csgo directory before updating the plugin")
-            })?;
-            Some(install_plugin_update_impl(&worker_app, target)?)
-        } else {
-            None
-        };
-
-        let panel = if snapshot.panel.update_available {
-            if !snapshot.panel.compatible {
-                return Err(AppError::update(
-                    "This Panel update requires a newer updater baseline",
-                ));
-            }
-            Some(online_update::prepare_panel(&worker_app)?)
-        } else {
-            None
-        };
-
-        Ok(online_update::UpdateBatchResult {
-            restart_required: panel.is_some(),
-            panel,
-            plugin,
-        })
-    })
-    .await
-    .map_err(|error| AppError::update(format!("Combined update task failed: {error}")))??;
-
-    if result.restart_required {
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            app.exit(0);
-        });
-    }
-    Ok(result)
+    let _ = (app, csgo);
+    Err(AppError::update(
+        "Online installation is disabled for this personal Local Arena fork; update through reviewed Git changes and a local package.",
+    ))
 }
 
 #[tauri::command]
@@ -4089,6 +4170,58 @@ mod tests {
     }
 }
 
+fn restore_panel_window(app: &AppHandle, trigger: &str, args: &[String], cwd: &str) {
+    let Some(window) = app.get_webview_window("main") else {
+        if let Ok(root) = app_storage::root() {
+            logging::append(&root, "WARN", "window.single_instance_restore_failed", "main window was not found");
+        }
+        return;
+    };
+
+    let show = window.show();
+    let unminimize = window.unminimize();
+    let mut reposition = "not-needed";
+    if let (Ok(position), Ok(size), Ok(monitors)) = (
+        window.outer_position(),
+        window.outer_size(),
+        window.available_monitors(),
+    ) {
+        let right = position.x.saturating_add(size.width as i32);
+        let bottom = position.y.saturating_add(size.height as i32);
+        let visible = monitors.iter().any(|monitor| {
+            let monitor_position = monitor.position();
+            let monitor_size = monitor.size();
+            let monitor_right = monitor_position.x.saturating_add(monitor_size.width as i32);
+            let monitor_bottom = monitor_position.y.saturating_add(monitor_size.height as i32);
+            position.x < monitor_right
+                && right > monitor_position.x
+                && position.y < monitor_bottom
+                && bottom > monitor_position.y
+        });
+        if !visible {
+            reposition = if window.center().is_ok() { "centered" } else { "center-failed" };
+        }
+    }
+    let focus = window.set_focus();
+    if focus.is_err() {
+        let _ = window.request_user_attention(Some(UserAttentionType::Informational));
+    }
+
+    if let Ok(root) = app_storage::root() {
+        logging::append(
+            &root,
+            if show.is_ok() && unminimize.is_ok() { "INFO" } else { "WARN" },
+            "window.single_instance_awaken",
+            &format!(
+                "trigger={trigger}, show={}, unminimize={}, focus={}, reposition={reposition}, args={args:?}, cwd={cwd}",
+                show.is_ok(),
+                unminimize.is_ok(),
+                focus.is_ok(),
+            ),
+        );
+    }
+}
+
 pub fn run() {
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -4098,7 +4231,9 @@ pub fn run() {
         previous_hook(info);
     }));
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| { if let Some(w) = app.get_webview_window("main") { let _ = w.set_focus(); } }))
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            restore_panel_window(app, "single-instance", &args, &cwd);
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

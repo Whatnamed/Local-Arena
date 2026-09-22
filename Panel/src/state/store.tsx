@@ -599,8 +599,8 @@ setNadesPending(false);
           // Bring CounterStrikeSharp's core.json FollowCS2ServerGuidelines in
           // line with the current Skins state on every launch.
           await api.reconcileCoreJson(csgo);
-        } catch {
-          /* best-effort: core.json / core.example.json may be absent */
+        } catch (e) {
+          reportError(e);
         }
       }
       await refreshAll();
