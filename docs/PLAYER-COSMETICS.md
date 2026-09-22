@@ -23,11 +23,13 @@ The plugin applies presets at bounded game events:
 
 - human player spawn;
 - `GiveNamedItem` completion for purchases and grants;
-- item pickup;
+- item pickup according to the original Local Arena semantics;
 - dropped knife entity creation;
 - round MVP for the configured music kit.
 
-There is no periodic held-weapon listener and no always-on-top in-game overlay.
+For a picked-up Bot / ground weapon, a preset for the current team and weapon defindex may be applied. If no matching
+preset exists, the entity is left unchanged. This project does not require a separate foreign-weapon provenance
+subsystem. There is no periodic held-weapon listener and no always-on-top in-game overlay.
 
 ## Language Independence
 
@@ -35,11 +37,11 @@ Configuration stores defindexes, paint kits, floats, integers, booleans, and nam
 used by the Panel search and display layer. Switching Steam accounts or Panel languages does not invalidate a preset;
 the same local practice installation applies it to eligible human players.
 
-## Matchmaking Isolation
+## Mode Compatibility
 
-When Online Mode is selected, the backend records whether player cosmetics were enabled, disables them, verifies that
-the online `gameinfo.gi` does not load Metamod, and launches without `-insecure` or bot arguments. Returning to
-Enhanced Bots restores the previous enablement state and leaves all preset values intact.
+Local Arena's existing Local / Preview / Bots / Online mode management remains the source of truth for launch and
+runtime behavior. Cosmetic configuration is kept across mode changes, and the application does not use the official
+upstream release updater to overwrite this personal fork.
 
-This is a defense-in-depth workflow, not a promise about Valve policy. Do not load unsigned server modifications in a
-VAC-secured session.
+Do not load unsigned server modifications in a VAC-secured session. Actual mode, model, animation, and online behavior
+must be checked through `docs/MANUAL-ACCEPTANCE.md` rather than inferred from Panel text alone.
