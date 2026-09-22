@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import Modal from "../components/Modal";
+import MediaImage from "../components/MediaImage";
 import Toggle from "../components/Toggle";
 import WearGauge from "../components/WearGauge";
-import GLOVE_SKINS, { gloveModelName, type GloveSkin } from "../data/gloveSkins";
+import GLOVE_SKINS, { gloveModelName, gloveSkinName, type GloveSkin } from "../data/gloveSkins";
 import { finishName, localizedSkinName } from "../data/skinLocalization";
 import { api, type GlovePreset, type KnifeCustomizerConfig } from "../lib/api";
 import { useT } from "../i18n";
@@ -26,7 +27,7 @@ export default function GlovePresetModal({ open, csgoPath, config, onSaved, onEr
   const [team, setTeam] = useCosmeticsTeam();
   const skinListRef = useSelectedPickerScroll(open, `${team}:${draft.defindex}:${draft.paint}`);
   const modelName = (defindex: number) => gloveModelName(language, defindex);
-  const skinName = (skin: GloveSkin) => finishName(localizedSkinName(language, skin.defindex, skin.paint, `${modelName(skin.defindex)} | ${skin.name}`));
+  const skinName = (skin: GloveSkin) => finishName(localizedSkinName(language, skin.defindex, skin.paint, `${modelName(skin.defindex)} | ${gloveSkinName(language, skin)}`));
 
   useEffect(() => {
     if (!open || !config) return;
@@ -71,7 +72,7 @@ export default function GlovePresetModal({ open, csgoPath, config, onSaved, onEr
       <div className="kp__side">
         <div className="kp__preview">
           <span className="kp__team-fab"><CosmeticsTeamSwitch value={team} onChange={setTeam} ariaLabel={t("cosmetics.teamLoadout")} compact /></span>
-          <img src={selected?.image} alt="" />
+          <MediaImage src={selected?.image} alt="" fallbackLabel={t("cosmetics.chooseGlove")} />
           <div><strong>{selected ? `${modelName(selected.defindex)} · ${skinName(selected)}` : t("cosmetics.chooseGlove")}</strong><span>{t("cosmetics.paintKit")} {draft.paint || "-"}</span></div>
         </div>
         <div className="kp__toggle-row"><span>{team === "ct" ? t("cosmetics.enableGloveCt") : t("cosmetics.enableGloveT")}</span><Toggle checked={draft.enabled} onChange={(enabled) => setDraft((value) => ({ ...value, enabled }))} /></div>
@@ -84,7 +85,7 @@ export default function GlovePresetModal({ open, csgoPath, config, onSaved, onEr
           const isSelected = skin.defindex === draft.defindex && skin.paint === draft.paint;
           return (
             <button key={`${skin.defindex}-${skin.paint}`} className={isSelected ? "is-selected" : ""} onClick={() => setDraft((value) => ({ ...value, defindex: skin.defindex, paint: skin.paint, wear: Math.min(skin.maxWear, Math.max(skin.minWear, value.wear)) }))}>
-              <img src={skin.image} alt="" loading="lazy" />
+              <MediaImage src={skin.image} alt="" loading="lazy" fallbackLabel={skinName(skin)} />
               <span>{modelName(skin.defindex)} · {skinName(skin)} [{skin.paint}]</span>
             </button>
           );

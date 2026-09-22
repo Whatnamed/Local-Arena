@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, Download, ExternalLink, PackageCheck, RefreshCw, X } from "lucide-react";
-import { api, toAppError, type OnlineUpdateSnapshot, type UpdateProgress } from "../../lib/api";
-import { useStore } from "../../state/store";
+import { ArrowRight, ExternalLink, RefreshCw } from "lucide-react";
+import { api, toAppError, type OnlineUpdateSnapshot } from "../../lib/api";
 import { useT } from "../../i18n";
-import { listenAppEvent, openExternalUrl } from "../../lib/platform";
+import { openExternalUrl } from "../../lib/platform";
 
 function formatBytes(value: number) {
   if (!value) return "0 B";
@@ -17,82 +16,50 @@ function formatTime(value: number | null) {
 }
 
 export default function OnlineUpdatePage() {
-  const { csgoPath, process } = useStore();
   const t = useT();
   const [snapshot, setSnapshot] = useState<OnlineUpdateSnapshot | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
-  const [working, setWorking] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
 
   const refreshSnapshot = useCallback(async () => {
-    try { setSnapshot(await api.getUpdateSnapshot()); } catch { /* startup checks stay silent */ }
+    try {
+      setSnapshot(await api.getUpdateSnapshot());
+    } catch {
+      /* The read-only status surface may remain empty until an explicit check. */
+    }
   }, []);
 
   useEffect(() => {
     void refreshSnapshot();
-    const unlisten = listenAppEvent<UpdateProgress>("update-progress", () => void refreshSnapshot());
-    return () => { void unlisten.then((dispose) => dispose()); };
   }, [refreshSnapshot]);
 
   const check = async () => {
-    setWorking("check");
-    setLocalError(null);
-    try { setSnapshot(await api.checkOnlineUpdates(true)); }
-    catch (error) { setLocalError(toAppError(error).detail); await refreshSnapshot(); }
-    finally { setWorking(null); }
-  };
-
-  const installAll = async () => {
-    setWorking("all");
+    setChecking(true);
     setLocalError(null);
     try {
-      await api.installAllUpdates(snapshot?.plugin.update_available ? csgoPath : null);
-      await refreshSnapshot();
+      setSnapshot(await api.checkOnlineUpdates(true));
     } catch (error) {
       setLocalError(toAppError(error).detail);
       await refreshSnapshot();
-    } finally { setWorking(null); }
+    } finally {
+      setChecking(false);
+    }
   };
 
-  const cancel = async () => {
-    await api.cancelUpdate();
-    setWorking(null);
-  };
-
-  const blocked = !!process?.running && (process.matches_selected || !process.path_accessible);
-  const panelAvailable = !!snapshot?.panel.update_available;
-  const pluginAvailable = !!snapshot?.plugin.update_available;
-  const hasUpdates = panelAvailable || pluginAvailable;
-  const pluginNeedsDirectory = pluginAvailable && !csgoPath;
-  const pluginIncompatible = pluginAvailable && snapshot?.plugin.compatible === false;
-  const panelIncompatible = panelAvailable && snapshot?.panel.compatible === false;
-  const canInstallAll = hasUpdates && !snapshot?.busy && !working
-    && !pluginNeedsDirectory && !(pluginAvailable && blocked)
-    && !pluginIncompatible && !panelIncompatible;
-  const blockingNote = pluginNeedsDirectory ? t("update.selectDirectory")
-    : pluginAvailable && blocked ? t("update.closeCs2")
-      : pluginIncompatible || panelIncompatible ? t("update.incompatible")
-        : null;
   const componentSection = (component: "panel" | "plugin") => {
     const state = snapshot?.[component];
-    const progress = state?.total_bytes
-      ? Math.min(100, Math.round((state.downloaded_bytes / state.total_bytes) * 100)) : 0;
-    const installing = !!snapshot?.busy && ["downloading", "extracting"].includes(state?.status ?? "");
-    const available = !!state?.update_available;
+    const available = !!state?.reference_available;
     return (
       <section className="upd-card" key={component}>
         <div className="upd-card__head">
-          <span className={`upd-card__icon upd-card__icon--${component}`}>
-            {component === "panel" ? <Download size={20} /> : <PackageCheck size={20} />}
-          </span>
           <div>
             <strong>{component === "panel" ? t("update.panel") : t("update.plugin")}</strong>
-            <small>{component === "panel" ? t("update.panelDesc") : t("update.pluginDesc")}</small>
+            <small>{t("update.referenceDesc")}</small>
           </div>
-          <span className={`update-status update-status--${state?.status ?? "idle"}`}>
-            {available ? t("update.available") : t("update.current")}
+          <span className={`update-status update-status--${available ? "available" : "current"}`}>
+            {available ? t("update.reference") : t("update.current")}
           </span>
         </div>
-
         <div className="upd-card__versions">
           <span className="upd-ver">
             <small>{t("update.currentVersion")}</small>
@@ -108,21 +75,6 @@ export default function OnlineUpdatePage() {
             <strong>{formatBytes(state?.total_bytes ?? 0)}</strong>
           </span>
         </div>
-
-        {(installing || !!state?.downloaded_bytes) && (
-          <div className="update-progress">
-            <div><span style={{ width: `${progress}%` }} /></div>
-            <small>{state?.status === "extracting" ? t("update.extracting") : t("update.downloading", { n: progress })}</small>
-          </div>
-        )}
-
-        {component === "plugin" && blocked && (
-          <p className="upd-note"><AlertTriangle size={14} aria-hidden="true" />{t("update.closeCs2")}</p>
-        )}
-        {state && !state.compatible && (
-          <p className="upd-note"><AlertTriangle size={14} aria-hidden="true" />{t("update.panelRequired")}</p>
-        )}
-
       </section>
     );
   };
@@ -137,26 +89,19 @@ export default function OnlineUpdatePage() {
               <ExternalLink size={16} />{t("update.releaseNotes")}
             </button>
           )}
-          <button disabled={working === "check" || snapshot?.busy} onClick={check}>
-            <RefreshCw size={16} />{working === "check" ? t("update.checking") : t("update.check")}
+          <button disabled={checking} onClick={check}>
+            <RefreshCw size={16} />{checking ? t("update.checking") : t("update.check")}
           </button>
         </div>
       </div>
       {(localError || snapshot?.error) && <div className="update-error">{localError ?? snapshot?.error}</div>}
       <section className="update-primary-action">
         <span>
-          <strong>{t("update.allTitle")}</strong>
-          <small>{t("update.allDesc")}</small>
+          <strong>{t("update.readOnlyTitle")}</strong>
+          <small>{t("update.readOnlyDesc")}</small>
         </span>
-        <div>
-          <button className="is-primary" disabled={!canInstallAll} onClick={installAll}>
-            <Download size={16} />
-            {working === "all" ? t("update.updatingAll") : hasUpdates ? t("update.installAll") : t("update.current")}
-          </button>
-          {working === "all" && <button onClick={cancel}><X size={16} />{t("update.cancel")}</button>}
-        </div>
       </section>
-      {blockingNote && <p className="upd-note update-primary-note"><AlertTriangle size={14} aria-hidden="true" />{blockingNote}</p>}
+      <p className="upd-note update-primary-note">{t("update.readOnlyNote")}</p>
       <div className="upd-grid">
         {componentSection("panel")}
         {componentSection("plugin")}

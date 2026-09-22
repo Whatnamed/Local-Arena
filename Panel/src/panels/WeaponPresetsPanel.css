@@ -26,7 +26,7 @@
 .wp__music:hover { background: var(--card); border-color: var(--line-strong); }
 .wp__music.is-configured { border-color: rgba(95,138,85,.38); background: var(--st-green-soft); }
 .wp__music-art { width: 72px; height: 60px; display: grid; place-items: center; border-radius: var(--r-sm); background: rgba(120,120,128,.1); overflow: hidden; }
-.wp__music-art img { width: 100%; height: 100%; object-fit: contain; }
+.wp__music-art img, .wp__music-art .media-image-fallback { width: 100%; height: 100%; object-fit: contain; }
 .wp__music-art > span { font-size: 12px; font-weight: 650; color: var(--text-secondary); }
 .wp__music-copy { min-width: 0; display: grid; gap: 3px; }
 .wp__music-copy small { font-size: 10px; font-weight: 650; color: var(--text-tertiary); text-transform: uppercase; }
@@ -37,7 +37,7 @@
 .wp__weapon { position: relative; aspect-ratio: 1.18 / 1; min-width: 0; padding: 7px; display: grid; grid-template-rows: minmax(0, 1fr) auto; align-items: center; gap: 3px; border: 1px solid rgba(0,0,0,.06); border-radius: var(--r-sm); background: rgba(255,255,255,.62); color: var(--text-primary); transition: transform var(--dur) var(--ease), background var(--dur) var(--ease), border-color var(--dur) var(--ease); }
 .wp__weapon:hover { background: var(--card); border-color: var(--line-strong); }
 .wp__weapon.is-configured { border-color: rgba(95,138,85,.42); background: var(--st-green-soft); }
-.wp__weapon img { width: 100%; height: 100%; min-height: 0; object-fit: contain; filter: drop-shadow(0 1px 1px rgba(0,0,0,.15)); }
+.wp__weapon img, .wp__weapon .media-image-fallback { width: 100%; height: 100%; min-height: 0; object-fit: contain; filter: drop-shadow(0 1px 1px rgba(0,0,0,.15)); }
 .wp__weapon span { min-width: 0; height: 24px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 9px; line-height: 12px; font-weight: 650; text-align: center; overflow: hidden; overflow-wrap: anywhere; }
 .wp__dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--st-green); }
 
@@ -76,7 +76,7 @@
 .mk-modal__list button:hover { background: var(--card); border-color: var(--line-strong); }
 .mk-modal__list button.is-selected { border-color: var(--c-accent-line); background: var(--c-accent-soft); box-shadow: 0 0 0 2px var(--c-accent-soft); }
 .mk-modal__list button.is-selected::after { content: "✓"; position: absolute; top: 5px; right: 5px; width: 17px; height: 17px; display: grid; place-items: center; border-radius: 50%; background: var(--c-accent); color: #fff; font-size: 10px; font-weight: 650; }
-.mk-modal__list img { width: 100%; height: 84px; object-fit: contain; filter: drop-shadow(0 2px 3px rgba(18,24,28,.18)); }
+.mk-modal__list img, .mk-modal__list .media-image-fallback { width: 100%; height: 84px; object-fit: contain; filter: drop-shadow(0 2px 3px rgba(18,24,28,.18)); }
 .mk-modal__list span { min-width: 0; max-width: 100%; height: 26px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; color: var(--text-secondary); font-size: 10px; line-height: 13px; font-weight: 650; overflow-wrap: anywhere; }
 .mk-modal__list button.is-selected span { color: var(--c-accent-hover); }
 

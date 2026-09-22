@@ -175,6 +175,7 @@ try {
     }
     Invoke-Checked $npm @("run", "test:stickers") $panel
     Invoke-Checked $npm @("run", "test:install-gate") $panel
+    Invoke-Checked $npm @("run", "test:cosmetic-media") $panel
     Invoke-Checked $npm @("run", "build") $panel
 
     $rayTraceApi = Get-RayTraceApi

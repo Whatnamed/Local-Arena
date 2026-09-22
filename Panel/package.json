@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:cosmetic-media": "node ../scripts/check-cosmetic-media.mjs",
     "test:stickers": "node ../scripts/test-sticker-editor.mjs",
     "test:install-gate": "node ../scripts/test-install-gate.mjs"
   },

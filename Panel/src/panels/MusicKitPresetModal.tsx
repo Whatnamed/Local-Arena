@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Disc3 } from "lucide-react";
 import Modal from "../components/Modal";
+import MediaImage from "../components/MediaImage";
 import { MUSIC_KITS, musicKitName } from "../data/musicKits";
 import { useT } from "../i18n";
 import { api, type KnifeCustomizerConfig } from "../lib/api";
@@ -60,14 +61,14 @@ export default function MusicKitPresetModal({ open, csgoPath, config, onSaved, o
     <div className="mk-modal">
       <div className="mk-modal__side">
         <div className="mk-modal__preview">
-          {selected ? <img src={selected.image} alt="" /> : <span><Disc3 size={64} strokeWidth={1.35} aria-hidden="true" /></span>}
+          {selected ? <MediaImage src={selected.image} alt="" fallbackLabel={musicKitName(selected, language)} /> : <span><Disc3 size={64} strokeWidth={1.35} aria-hidden="true" /></span>}
           <div><strong>{selected ? musicKitName(selected, language) : t("music.default")}</strong></div>
         </div>
       </div>
       <div className="mk-modal__main">
         <label className="kp__field"><span>{t("music.title")}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("music.search")} /></label>
         {visible.length ? <div className="mk-modal__list" ref={kitListRef}>{visible.map((kit) => <button key={kit.def_index} className={kit.def_index === selectedId ? "is-selected" : ""} onClick={() => setSelectedId(kit.def_index)}>
-          <img src={kit.image} alt="" loading="lazy" />
+          <MediaImage src={kit.image} alt="" loading="lazy" fallbackLabel={musicKitName(kit, language)} />
           <span>{musicKitName(kit, language)}</span>
         </button>)}</div> : <div className="wp-modal__empty">{t("music.noResults")}</div>}
       </div>

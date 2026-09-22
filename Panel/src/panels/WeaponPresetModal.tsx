@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Modal from "../components/Modal";
 import Toggle from "../components/Toggle";
+import MediaImage from "../components/MediaImage";
 import WearGauge from "../components/WearGauge";
 import { useT } from "../i18n";
 import { api, type CosmeticsTeam, type KnifeCustomizerConfig, type KnifePreset } from "../lib/api";
@@ -88,7 +89,7 @@ export default function WeaponPresetModal({ weapon, team, csgoPath, config, onSa
   return <Modal open={!!weapon} title={weapon ? `${weapon.name} · ${t("weapons.title")}` : t("weapons.title")} onClose={onClose} width={880} scrimClassName="picker-modal" footer={<div className="kp__footer-actions"><button className="wp-modal__remove" disabled={saving || !existing} onClick={() => void persist(true)}>{t("weapons.remove")}</button><button className="kp__save" disabled={saving || !selected} onClick={() => void persist()}>{saving ? t("weapons.saving") : t("weapons.apply")}</button></div>}>
     <div className="kp kp--split">
       <div className="kp__side">
-        <div className="kp__preview"><img src={selected?.image || weapon?.url} alt="" /><div><i className={`wp-modal__team wp-modal__team--${team}`}>{team.toUpperCase()}</i><strong>{selected ? localizedSkinName(appConfig?.language, selected.weapon_defindex, selected.paint, selected.name) : t("weapons.noSkins")}</strong><span>{t("cosmetics.paintKit")} {draft.paint || "-"}</span></div></div>
+        <div className="kp__preview"><MediaImage src={selected?.image || weapon?.url} alt="" fallbackLabel={weapon?.name ?? t("weapons.noSkins")} /><div><i className={`wp-modal__team wp-modal__team--${team}`}>{team.toUpperCase()}</i><strong>{selected ? localizedSkinName(appConfig?.language, selected.weapon_defindex, selected.paint, selected.name) : t("weapons.noSkins")}</strong><span>{t("cosmetics.paintKit")} {draft.paint || "-"}</span></div></div>
         <div className="kp__columns"><label className="kp__field"><span>{t("live.wear")}</span><input type="number" min={selected?.min_wear ?? 0} max={selected?.max_wear ?? 1} step="0.000001" value={draft.wear} onChange={(event) => setDraft((value) => ({ ...value, wear: Math.min(selected?.max_wear ?? 1, Math.max(selected?.min_wear ?? 0, Number(event.target.value))) }))} /></label><label className="kp__field"><span>{t("live.seed")}</span><input type="number" min="0" max="1000" step="1" value={draft.seed} placeholder={t("live.seedPlaceholder")} onChange={(event) => setDraft((value) => ({ ...value, seed: Math.min(1000, Math.max(0, Number(event.target.value))) }))} /></label></div>
         <WearGauge min={selected?.min_wear ?? 0} max={selected?.max_wear ?? 1} value={draft.wear} />
         <label className="kp__field"><span>{t("live.nameTag")}</span><input maxLength={20} value={draft.name_tag} placeholder={t("cosmetics.namePlaceholder")} onChange={(event) => setDraft((value) => ({ ...value, name_tag: event.target.value }))} /></label>
@@ -107,7 +108,7 @@ export default function WeaponPresetModal({ weapon, team, csgoPath, config, onSa
                 {skin.souvenir && <i className="is-sv">SV</i>}
               </span>
             )}
-            <img src={skin.image || weapon?.url} alt="" loading="lazy" />
+            <MediaImage src={skin.image || weapon?.url} alt="" loading="lazy" fallbackLabel={localizedSkinName(appConfig?.language, skin.weapon_defindex, skin.paint, skin.name)} />
             <span>{localizedSkinName(appConfig?.language, skin.weapon_defindex, skin.paint, skin.name)} [{skin.paint}]</span>
           </button>
         ))}</div> : <div className="wp-modal__empty">{t("weapons.noSkins")}</div>}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Crosshair, Gem, Swords } from "lucide-react";
 import SubPage from "../components/SubPage";
+import MediaImage from "../components/MediaImage";
 import { useT } from "../i18n";
 import { api, type KnifeCustomizerConfig } from "../lib/api";
 import { useStore } from "../state/store";
@@ -90,7 +91,7 @@ export default function WeaponPresetsPanel({ onBack }: { onBack?: () => void }) 
       const configured = !!presets[String(weapon.id)];
       return <button key={weapon.id} className={`wp__weapon ${configured ? "is-configured" : ""}`} onClick={() => setEditing(weapon)} title={`${weapon.name} · ${configured ? t("weapons.configured") : t("weapons.unconfigured")}`}>
         {configured && <i className="wp__dot" />}
-        <img src={weapon.url} alt="" draggable={false} />
+        <MediaImage src={weapon.url} alt="" draggable={false} fallbackLabel={weapon.name} />
         <span>{weapon.name}</span>
       </button>;
     })}
@@ -157,7 +158,7 @@ export default function WeaponPresetsPanel({ onBack }: { onBack?: () => void }) 
                   {hasT && <i className="is-t">T</i>}
                 </span>}
                 {isDrop && <i className="wp__drop-check" aria-hidden="true">✓</i>}
-                <img src={knife.url} alt={name} draggable={false} />
+                <MediaImage src={knife.url} alt={name} draggable={false} fallbackLabel={name} />
                 <span>{name}</span>
               </button>
             );
@@ -176,7 +177,7 @@ export default function WeaponPresetsPanel({ onBack }: { onBack?: () => void }) 
       </header>
       <div className="cos-card__body cos-card__body--rows">
         <button className={`wp__music ${selectedMusicKit ? "is-configured" : ""}`} onClick={() => setEditingMusicKit(true)}>
-          <span className="wp__music-art">{selectedMusicKit ? <img src={selectedMusicKit.image} alt="" /> : <span>Steam</span>}</span>
+          <span className="wp__music-art">{selectedMusicKit ? <MediaImage src={selectedMusicKit.image} alt="" fallbackLabel={musicKitName(selectedMusicKit, appConfig?.language)} /> : <span>Steam</span>}</span>
           <span className="wp__music-copy"><small>{t("music.title")}</small><strong>{selectedMusicKit ? musicKitName(selectedMusicKit, appConfig?.language) : t("music.default")}</strong><em>{selectedMusicKit ? t("music.configured") : t("music.select")}</em></span>
           <span className="wp__music-action">›</span>
         </button>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Modal from "../components/Modal";
+import MediaImage from "../components/MediaImage";
 import Toggle from "../components/Toggle";
 import WearGauge from "../components/WearGauge";
 import { api, type KnifeCustomizerConfig, type KnifePreset } from "../lib/api";
@@ -144,7 +145,7 @@ export default function KnifePresetModal({ knife, csgoPath, config, onSaved, onE
       <div className="kp__side">
         <div className="kp__preview">
           <span className="kp__team-fab"><CosmeticsTeamSwitch value={team} onChange={setTeam} ariaLabel={t("cosmetics.teamLoadout")} compact /></span>
-          <img src={selectedSkin?.image || knife?.url} alt="" />
+          <MediaImage src={selectedSkin?.image || knife?.url} alt="" fallbackLabel={knifeName} />
           <div><strong>{selectedSkin ? label(selectedSkin) : t("cosmetics.chooseSkin")}</strong><span>{t("cosmetics.paintKit")} {draft.paint || "-"}</span></div>
         </div>
         <div className="kp__columns"><label className="kp__field"><span>{t("live.wear")}</span><input type="number" min={selectedCatalog?.min_wear ?? 0} max={selectedCatalog?.max_wear ?? 1} step="0.000001" value={draft.wear} onChange={(event) => setDraft((value) => ({ ...value, wear: Math.min(selectedCatalog?.max_wear ?? 1, Math.max(selectedCatalog?.min_wear ?? 0, Number(event.target.value))) }))} /></label><label className="kp__field"><span>{t("live.seed")}</span><input type="number" min="0" max="1000" step="1" value={draft.seed} placeholder={t("live.seedPlaceholder")} onChange={(event) => setDraft((value) => ({ ...value, seed: Math.min(1000, Math.max(0, Number(event.target.value))) }))} /></label></div>
@@ -161,7 +162,7 @@ export default function KnifePresetModal({ knife, csgoPath, config, onSaved, onE
           return (
             <button key={skin.paint} className={skin.paint === draft.paint ? "is-selected" : ""} onClick={() => choose(skin)}>
               {details?.stattrak && <span className="kp__badges" aria-hidden="true"><i className="is-st">ST</i></span>}
-              <img src={skin.image} alt="" loading="lazy" />
+              <MediaImage src={skin.image} alt="" loading="lazy" fallbackLabel={label(skin)} />
               <span>{label(skin)}</span>
             </button>
           );

@@ -65,7 +65,7 @@ const INSTALL_STEPS: GuideStep[] = [
 
 const USAGE_STEPS: GuideStep[] = [
   { id: "guide-usage-1", image: overviewImage, title: "guide.step2.title", body: "guide.step2.body", points: ["guide.step2.point1", "guide.step2.point2", "guide.step2.point3"] },
-  { id: "guide-usage-2", image: botPresetsImage, title: "guide.step3.title", body: "guide.step3.body", points: ["guide.step3.point1", "guide.step3.point2", "guide.step3.point3"] },
+  { id: "guide-usage-2", image: botPresetsImage, title: "guide.step3.title", body: "guide.step3.body", points: ["guide.step3.point1", "guide.step3.point2", "guide.step3.point3", "guide.step3.point4"] },
   { id: "guide-usage-3", image: botItemsImage, title: "guide.step4.title", body: "guide.step4.body", points: ["guide.step4.point1", "guide.step4.point2", "guide.step4.point3", "guide.step4.point4"] },
   { id: "guide-usage-4", image: weaponPresetsImage, title: "guide.step5.title", body: "guide.step5.body", points: ["guide.step5.point1", "guide.step5.point2", "guide.step5.point3", "guide.step5.point4"] },
   { id: "guide-usage-5", image: commandsImage, title: "guide.step6.title", body: "guide.step6.body", points: ["guide.step6.point1", "guide.step6.point2", "guide.step6.point3"] },
