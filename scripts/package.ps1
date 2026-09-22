@@ -8,7 +8,6 @@ param(
     [string]$XwinCache,
     [string]$OutputDirectory,
     [string]$ReleaseVersion = "1.4.3.3",
-    [string]$MinimumPanelVersion = "1.4.2.4",
     [switch]$SkipBuild,
     [switch]$SkipNpmInstall
 )
@@ -18,10 +17,6 @@ $repo = Split-Path -Parent $PSScriptRoot
 $displayVersion = $ReleaseVersion.Trim().TrimStart('v', 'V')
 if ($displayVersion -notmatch '^\d+\.\d+\.\d+\.\d+(?:-Preview\.\d+)?$') {
     throw "ReleaseVersion must use four numeric parts with an optional -Preview.N suffix."
-}
-$minimumPanelVersion = $MinimumPanelVersion.Trim().TrimStart('v', 'V')
-if ($minimumPanelVersion -notmatch '^\d+\.\d+\.\d+\.\d+(?:-Preview\.\d+)?$') {
-    throw "MinimumPanelVersion must use four numeric parts with an optional -Preview.N suffix."
 }
 $isPreview = $displayVersion -match '-Preview\.\d+$'
 $releaseTag = "v$displayVersion"
@@ -386,73 +381,13 @@ if ($LASTEXITCODE -ne 0) { throw "Package verification failed." }
 
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 Get-ChildItem -LiteralPath $OutputDirectory -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match '^(?:CS2BotImproverPlus|LocalArena)-.*\.zip$|^latest\.json(\.sig)?$|^SHA256SUMS\.txt$' } |
+    Where-Object { $_.Name -match '^LocalArena-.*\.zip$|^SHA256SUMS\.txt$' } |
     Remove-Item -Force
 
 $fullZip = Join-Path $OutputDirectory "LocalArena-$releaseTag-windows.zip"
 Compress-Archive -Path $releaseRoot -DestinationPath $fullZip -CompressionLevel Optimal
 
-$panelStage = Join-Path $stage "panel-update"
-New-Item -ItemType Directory -Path $panelStage -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $releaseRoot "LocalArena.exe") -Destination $panelStage -Force
-# Releases through 1.4.2.5 look up this legacy name before the new updater can run.
-Copy-Item -LiteralPath (Join-Path $releaseRoot "LocalArena.exe") -Destination (Join-Path $panelStage "CS2BotImproverPlus.exe") -Force
-@{
-    schema_version = 1
-    component = "panel-online-update"
-    version = $displayVersion
-    first_install_supported = $false
-} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $panelStage "csbip-panel-update.json") -Encoding utf8
-if (Test-Path -LiteralPath (Join-Path $releaseRoot "WebView2Loader.dll")) {
-    Copy-Item -LiteralPath (Join-Path $releaseRoot "WebView2Loader.dll") -Destination $panelStage -Force
-}
-$panelZip = Join-Path $OutputDirectory "LocalArena-panel-$releaseTag-windows.zip"
-Compress-Archive -Path (Join-Path $panelStage "*") -DestinationPath $panelZip -CompressionLevel Optimal
-
-$pluginStage = Join-Path $stage "plugin-update"
-New-Item -ItemType Directory -Path $pluginStage -Force | Out-Null
-foreach ($name in @("addons", "cfg", "overrides", "plus-payload-manifest.json")) {
-    $source = Join-Path $releaseRoot $name
-    if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $pluginStage -Recurse -Force }
-}
-$pluginZip = Join-Path $OutputDirectory "LocalArena-plugin-$releaseTag-windows.zip"
-Compress-Archive -Path (Join-Path $pluginStage "*") -DestinationPath $pluginZip -CompressionLevel Optimal
-
-$releaseBase = "https://github.com/numakkiyu/Local-Arena/releases/download/$releaseTag"
-$latest = [ordered]@{
-    schema_version = 1
-    release_version = $displayVersion
-    published_at = [DateTimeOffset]::UtcNow.ToString("o")
-    release_notes_url = "https://github.com/numakkiyu/Local-Arena/releases/tag/$releaseTag"
-    components = [ordered]@{
-        panel = [ordered]@{
-            version = $displayVersion
-            url = "$releaseBase/$([IO.Path]::GetFileName($panelZip))"
-            size = (Get-Item -LiteralPath $panelZip).Length
-            sha256 = (Get-FileHash -LiteralPath $panelZip -Algorithm SHA256).Hash.ToLowerInvariant()
-            min_panel_version = $minimumPanelVersion
-        }
-        plugin = [ordered]@{
-            version = $displayVersion
-            url = "$releaseBase/$([IO.Path]::GetFileName($pluginZip))"
-            size = (Get-Item -LiteralPath $pluginZip).Length
-            sha256 = (Get-FileHash -LiteralPath $pluginZip -Algorithm SHA256).Hash.ToLowerInvariant()
-            min_panel_version = $minimumPanelVersion
-        }
-    }
-}
-$latestPath = Join-Path $OutputDirectory "latest.json"
-$latest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $latestPath -Encoding utf8
-$signaturePath = Join-Path $OutputDirectory "latest.json.sig"
-if ($env:CSBIP_UPDATE_SIGNING_KEY) {
-    $python = (Get-Command python -ErrorAction Stop).Source
-    & $python (Join-Path $PSScriptRoot "sign-update.py") $latestPath $signaturePath `
-        --public-key (Join-Path $PSScriptRoot "update-public-key.txt")
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $signaturePath)) { throw "Update signing failed." }
-}
-
-$sumFiles = @($fullZip, $panelZip, $pluginZip, $latestPath)
-if (Test-Path -LiteralPath $signaturePath) { $sumFiles += $signaturePath }
+$sumFiles = @($fullZip)
 $sumLines = foreach ($file in $sumFiles) {
     "$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($file))"
 }
@@ -460,5 +395,4 @@ $sums = Join-Path $OutputDirectory "SHA256SUMS.txt"
 Set-Content -LiteralPath $sums -Value $sumLines -Encoding ascii
 
 Write-Host "Package complete: $fullZip"
-Write-Host "Panel update: $panelZip"
-Write-Host "Plugin update: $pluginZip"
+Write-Host "SHA256 manifest: $sums"

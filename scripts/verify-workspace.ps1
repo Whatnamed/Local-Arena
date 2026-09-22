@@ -277,7 +277,8 @@ if ($giveHookStart -lt 0 -or $nextMethodStart -le $giveHookStart) {
 }
 else {
     $giveHook = $playerCosmetics.Substring($giveHookStart, $nextMethodStart - $giveHookStart)
-    if ($giveHook -notmatch "_applyTracker\.Begin\(playerHandle, CosmeticApplyPhase\.Guns\)" -or
+    if ($giveHook -notmatch "GiveNamedItemPhaseResolver\.Resolve" -or
+        $giveHook -notmatch "_applyTracker\.Begin\(playerHandle, phases\)" -or
         $giveHook -notmatch "ScheduleApplyCallbacks\(playerHandle, generation\)" -or
         $giveHook -match "ApplyPreset\(" -or
         $giveHook -match "_setAttrByName.*Invoke") {

@@ -26,7 +26,7 @@
 >
 > Selected enhanced-bot components remain derived from upstream AGPL-3.0 code. Their origin and authorship remain credited below, while development, releases, issue tracking, and user support are managed independently by Local Arena
 >
-> During the repository transition, existing installations intentionally retain the legacy executable name, `.csbip` state directory, icon, and Panel appearance so online updates, backups, presets, and match history remain compatible
+> Existing installations retain the portable executable name, `.csbip` state directory, icon, and Panel appearance so installation records, backups, presets, and match history remain compatible
 
 <div align="center">
 
@@ -58,9 +58,10 @@ Beginning with the next version, Local Arena will adopt a new UI design language
 - Shared weapons can use one linked skin or separate CT and T skins
 - Human-player music kit presets and compatible StatTrak or Souvenir options
 - Three launch modes for online play, cosmetic preview, and enhanced bots
+- The original Local Arena Bot, Match, Stats, and diagnostics workflow remains available in this personal fork
 - A four-step installer that detects clean CS2, legacy compatible builds, and the original upstream plugin
 - Transactional backups, installation verification, repair, rollback, and pristine-CS2 recovery
-- Separate online updates for the Panel and plugin payload
+- Read-only upstream version and compatibility references; fork updates are applied through reviewed Git changes and a complete local package
 - One-click diagnostic ZIP export that opens the output folder automatically
 - A built-in guide with real screenshots and troubleshooting steps
 
@@ -71,7 +72,7 @@ Beginning with the next version, Local Arena will adopt a new UI design language
 
 - Local Arena is currently packaged for Windows
 - Extract the complete ZIP to a normal folder before opening the Panel
-- Keep the legacy executable, `addons`, `cfg`, `overrides`, and `plus-payload-manifest.json` together
+- Keep the Panel executable, `addons`, `cfg`, `overrides`, and `plus-payload-manifest.json` together
 - Do not run the Panel from inside the ZIP
 - The correct game directory ends with `Counter-Strike Global Offensive\game\csgo`
 - Cosmetic preview and enhanced-bot mode use `-insecure` and cannot enter official matchmaking
@@ -130,7 +131,7 @@ Do not launch CS2, close the Panel, or repeatedly click the install button while
 
 ## Updating an Existing Installation
 
-Prefer **Settings → Online Update** when it is available
+**Settings → Online Update** is a read-only upstream compatibility reference in this personal fork. Apply fork changes through a reviewed Git commit and a complete local package.
 
 For a manual package update, close CS2 and the old Panel, extract the new package into the existing portable Panel folder, and keep the hidden `.csbip` folder
 
@@ -205,11 +206,13 @@ Knife and glove dialogs share the current CT or T selection
 
 Each team stores its own model, paint kit, wear, pattern seed, name tag, default knife, and supported StatTrak values
 
-Only the default knife held by the player is guaranteed to receive the configured appearance, while dropped ground knives are not given live cosmetic rendering
+The default knife and Quick Knife replacements use bounded event-driven application. Dropped and picked-up entities follow the existing Local Arena runtime semantics; when no matching preset exists, the current entity is left unchanged
+
+When enabled from the Quick Knife selector, the `\\` key cycles Karambit, Butterfly, M9 Bayonet, Bayonet, Skeleton, and Falchion. The replacement is completed only after the new knife is valid; a failed replacement leaves the current knife recoverable
 
 ### Bot presets
 
-The Presets page controls bot aiming, grenade behavior, the dropped-knife key, and entry points for player knife and glove settings
+The Presets page controls bot aiming, grenade behavior, Quick Knife selection, and entry points for player knife and glove settings
 
 <p align="center">
   <img src="./Panel/src/assets/guide/03-bot-presets.png" alt="Bot behavior and player knife presets" width="100%">
@@ -250,15 +253,13 @@ Changing cosmetics, CT/T presets, difficulty, or managed bot options must not be
   <img src="./Panel/src/assets/guide/13-health-repair.jpg" alt="Installation health and repair" width="49%">
 </p>
 
-### Online updates
+### Upstream reference and local updates
 
-The Panel and plugin payload are checked and installed separately
+The Panel can check upstream version and release-note metadata without installing anything over this personal fork
 
-- Startup checks are non-blocking and cached for six hours
-- Manual checks bypass the cache
-- Plugin updates require the selected CS2 process to be closed
-- Downloads are verified by signature, size, and SHA-256 before installation
-- Player presets use the preserve-config policy and are not overwritten by repair or update
+- The check is read-only and does not download or activate a Panel or plugin payload
+- Fork updates are made through reviewed source changes, local builds, and a complete package from the `main` worktree
+- Player presets remain under the preserve-config policy during installation, repair, and restore
 
 <p align="center">
   <img src="./Panel/src/assets/guide/05-online-update.png" alt="Panel and plugin online updates" width="100%">
@@ -312,11 +313,11 @@ Only use **Repair installation** when a managed payload file is actually missing
 
 Cosmetic presets, difficulty selections, and supported bot option files are preserved and should not be counted as corruption
 
-### Online update cannot connect or verification fails
+### The upstream reference check cannot connect
 
-The updater stops before installation when network, signature, size, hash, compatibility, or rollback validation fails
+The read-only reference check may be unavailable when the network or upstream metadata is unavailable. This does not change the installed fork
 
-Keep the current version, confirm GitHub connectivity, retry a manual check, and export diagnostics if the same error repeats
+Keep the current version, retry the reference check later, and export diagnostics if the same error repeats. Do not treat the reference as an installable update
 
 <p align="center">
   <img src="./Panel/src/assets/guide/16-update-error.jpg" alt="Online update error details" width="100%">
