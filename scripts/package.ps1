@@ -4,8 +4,6 @@ param(
     [string]$Cargo,
     [string]$Rustc,
     [string]$RustToolchain,
-    [string]$LlvmBin,
-    [string]$XwinCache,
     [string]$OutputDirectory,
     [string]$ReleaseVersion = "1.4.3.3",
     [switch]$SkipBuild,
@@ -83,8 +81,6 @@ if (-not $SkipBuild) {
     if ($Cargo) { $buildArguments.Cargo = $Cargo }
     if ($Rustc) { $buildArguments.Rustc = $Rustc }
     if ($RustToolchain) { $buildArguments.RustToolchain = $RustToolchain }
-    if ($LlvmBin) { $buildArguments.LlvmBin = $LlvmBin }
-    if ($XwinCache) { $buildArguments.XwinCache = $XwinCache }
     & (Join-Path $PSScriptRoot "build.ps1") @buildArguments
     if ($LASTEXITCODE -ne 0) { throw "Build failed." }
 }

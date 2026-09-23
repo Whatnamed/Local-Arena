@@ -4,8 +4,6 @@ param(
     [string]$Cargo,
     [string]$Rustc,
     [string]$RustToolchain = "stable-x86_64-pc-windows-msvc",
-    [string]$LlvmBin,
-    [string]$XwinCache,
     [string]$CargoHome,
     [string]$RustupHome,
     [string]$NodeBin,
@@ -30,6 +28,60 @@ function Resolve-ToolExecutable {
     $command = Get-Command $Value -ErrorAction SilentlyContinue
     if ($command) { return $command.Source }
     throw "Build tool $Label was not found: $Value"
+}
+
+function Import-VisualStudioEnvironment {
+    $requiredTools = @("cl.exe", "link.exe", "rc.exe")
+    $missingTools = @($requiredTools | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
+    if ($missingTools.Count -eq 0) { return }
+
+    $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    $vswhereCandidates = @(
+        (Join-Path $programFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"),
+        (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+    $vswhere = $vswhereCandidates | Select-Object -First 1
+    if (-not $vswhere) {
+        throw "Native MSVC tools are not on PATH, and vswhere.exe was not found. Run this script from Visual Studio Developer PowerShell or install the x64 C++ build tools."
+    }
+
+    $installPaths = & $vswhere -latest -products "*" -requires "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" -property installationPath
+    $vswhereExitCode = $LASTEXITCODE
+    $installPath = $installPaths | Select-Object -First 1
+    if ($vswhereExitCode -ne 0 -or -not $installPath) {
+        throw "A Visual Studio installation with the x64 C++ toolset was not found."
+    }
+
+    $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvars64.bat"
+    if (-not (Test-Path -LiteralPath $vcvars -PathType Leaf)) {
+        throw "Visual Studio x64 environment setup was not found: $vcvars"
+    }
+
+    $command = 'call "' + $vcvars + '" >nul && set'
+    $environmentOutput = & $env:ComSpec /d /s /c $command
+    if ($LASTEXITCODE -ne 0) {
+        throw "Visual Studio x64 environment setup failed: $vcvars"
+    }
+
+    $allowedNames = @(
+        "PATH", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir",
+        "VCToolsVersion", "VSINSTALLDIR", "VisualStudioVersion", "WindowsSdkDir",
+        "WindowsSDKVersion", "WindowsSDKLibVersion", "UniversalCRTSdkDir", "UCRTVersion",
+        "VSCMD_VER", "VSCMD_ARG_TGT_ARCH", "VSCMD_ARG_HOST_ARCH"
+    )
+    foreach ($line in $environmentOutput) {
+        $separator = $line.IndexOf('=')
+        if ($separator -le 0) { continue }
+        $name = $line.Substring(0, $separator)
+        if ($name -in $allowedNames) {
+            [Environment]::SetEnvironmentVariable($name, $line.Substring($separator + 1), "Process")
+        }
+    }
+
+    $stillMissing = @($requiredTools | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
+    if ($stillMissing.Count -gt 0) {
+        throw "Visual Studio environment did not expose required native tools: $($stillMissing -join ', ')"
+    }
 }
 
 if (-not $DotNet) { $DotNet = "dotnet" }
@@ -112,31 +164,16 @@ else {
     $command.Source
 }
 
-$environmentNames = @(
-    "CARGO_HOME",
-    "CARGO_TARGET_DIR",
-    "DOTNET_CLI_HOME",
-    "DOTNET_ROLL_FORWARD",
-    "NUGET_HTTP_CACHE_PATH",
-    "NUGET_PACKAGES",
-    "npm_config_cache",
-    "PATH",
-    "RC",
-    "RUSTC",
-    "RUSTUP_HOME",
-    "RUSTUP_TOOLCHAIN",
-    "XWIN_CACHE_DIR"
-)
-$previousEnvironment = @{}
-foreach ($name in $environmentNames) {
-    $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
-}
+$previousEnvironment = [Environment]::GetEnvironmentVariables("Process")
 
 try {
+    Import-VisualStudioEnvironment
+
     New-Item -ItemType Directory -Path $cache -Force | Out-Null
     $env:CARGO_HOME = if ($CargoHome) { $CargoHome } else { Join-Path $cache "cargo-home" }
     if ($RustupHome) { $env:RUSTUP_HOME = $RustupHome }
-    $env:CARGO_TARGET_DIR = Join-Path $panel "src-tauri\target"
+    $targetDirectory = Join-Path $panel "src-tauri\target"
+    $env:CARGO_TARGET_DIR = $targetDirectory
     $env:DOTNET_CLI_HOME = Join-Path $cache "dotnet-home"
     $env:DOTNET_ROLL_FORWARD = "Major"
     $env:NUGET_HTTP_CACHE_PATH = Join-Path $cache "nuget\http"
@@ -145,28 +182,15 @@ try {
     $env:RUSTC = $rustc
     $env:RUSTUP_TOOLCHAIN = $RustToolchain
 
-    if (-not $LlvmBin) { $LlvmBin = Join-Path $cache "toolchains\llvm\bin" }
-    if (-not $XwinCache) { $XwinCache = Join-Path $cache "xwin" }
-    $clang = Join-Path $LlvmBin "clang-cl.exe"
-    $linker = Join-Path $LlvmBin "lld-link.exe"
-    $resourceCompiler = Join-Path $LlvmBin "llvm-rc.exe"
-    foreach ($tool in @($clang, $linker, $resourceCompiler)) {
-        if (-not (Test-Path -LiteralPath $tool)) {
-            throw "LLVM tool not found: $tool"
-        }
-    }
-    $cargoXwin = Join-Path $env:CARGO_HOME "bin\cargo-xwin.exe"
-    if (-not (Test-Path -LiteralPath $cargoXwin)) {
-        throw "cargo-xwin is not installed in the configured Cargo home: $cargoXwin"
+    $rustInfo = & $rustc -vV
+    $rustcExitCode = $LASTEXITCODE
+    $rustHost = ($rustInfo | Where-Object { $_ -like "host: *" } | Select-Object -First 1) -replace "^host: ", ""
+    if ($rustcExitCode -ne 0 -or $rustHost -ne "x86_64-pc-windows-msvc") {
+        throw "The selected Rust toolchain must target x86_64-pc-windows-msvc; detected host '$rustHost'."
     }
 
-    $env:XWIN_CACHE_DIR = $XwinCache
-    $env:RC = $resourceCompiler
-    $rustTarget = "x86_64-pc-windows-msvc"
-    $targetDirectory = Join-Path $panel "src-tauri\target-msvc"
-    $env:CARGO_TARGET_DIR = $targetDirectory
     $nodePath = if ($NodeBin) { (Resolve-Path -LiteralPath $NodeBin).Path } else { $null }
-    $toolPaths = @((Split-Path $cargo), (Split-Path $rustc), $LlvmBin, (Split-Path $cargoXwin), $nodePath) |
+    $toolPaths = @((Split-Path $cargo), (Split-Path $rustc), $nodePath) |
         Where-Object { $_ } | Select-Object -Unique
     $env:PATH = ($toolPaths -join ";") + ";" + $env:PATH
 
@@ -209,34 +233,17 @@ try {
     )
 
     $tauriSource = Join-Path $panel "src-tauri"
-    Invoke-Checked $cargo @(
-        "xwin", "test", "--target", $rustTarget, "--locked", "--no-run",
-        "--target-dir", $targetDirectory
-    ) $tauriSource
-
-    $testRoot = Join-Path $targetDirectory "$rustTarget\debug\deps"
-    # Cargo retains hash-named test executables from older source revisions.
-    # Run only the newest binary for the application and library test targets.
-    $testExecutables = @(Get-ChildItem -LiteralPath $testRoot -File -Filter "cs2_bot_improver_plus_panel*.exe" |
-        Group-Object { if ($_.BaseName -like "*_lib-*") { "lib" } else { "app" } } |
-        ForEach-Object { $_.Group | Sort-Object LastWriteTime -Descending | Select-Object -First 1 })
-    if ($testExecutables.Count -eq 0) {
-        throw "No Panel test executables were produced under $testRoot"
-    }
-    foreach ($test in $testExecutables) {
-        Invoke-Checked $test.FullName @("--nocapture") $tauriSource
-    }
+    Invoke-Checked $cargo @("test", "--locked") $tauriSource
 
     Invoke-Checked $cargo @(
-        "xwin", "build", "--target", $rustTarget, "--release", "--locked",
-        "--features", "tauri/custom-protocol", "--target-dir", $targetDirectory
+        "build", "--release", "--locked", "--features", "tauri/custom-protocol"
     ) $tauriSource
 
-    $builtExe = Join-Path $targetDirectory "$rustTarget\release\cs2-bot-improver-plus-panel.exe"
+    $builtExe = Join-Path $targetDirectory "release\cs2-bot-improver-plus-panel.exe"
     if (-not (Test-Path -LiteralPath $builtExe)) {
         throw "Expected MSVC Panel executable was not produced: $builtExe"
     }
-    $releaseBuildRoot = Join-Path $targetDirectory "$rustTarget\release\build"
+    $releaseBuildRoot = Join-Path $targetDirectory "release\build"
     $tauriBuildOutput = Get-ChildItem -LiteralPath $releaseBuildRoot -Directory |
         Where-Object { $_.Name -match '^tauri-[0-9a-f]+$' } |
         Sort-Object LastWriteTime -Descending |
@@ -257,13 +264,16 @@ try {
         (Get-Content -LiteralPath $appBuildOutput -Raw).Contains("cargo:rustc-cfg=dev")) {
         throw "Release Panel application still uses Tauri's development URL."
     }
-    $canonicalRelease = Join-Path $panel "src-tauri\target\release"
-    New-Item -ItemType Directory -Path $canonicalRelease -Force | Out-Null
-    Copy-Item -LiteralPath $builtExe -Destination (Join-Path $canonicalRelease "cs2-bot-improver-plus-panel.exe") -Force
 }
 finally {
-    foreach ($name in $environmentNames) {
-        [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], "Process")
+    $currentEnvironment = [Environment]::GetEnvironmentVariables("Process")
+    foreach ($name in @($currentEnvironment.Keys)) {
+        if (-not $previousEnvironment.Contains($name)) {
+            [Environment]::SetEnvironmentVariable([string]$name, $null, "Process")
+        }
+    }
+    foreach ($name in $previousEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable([string]$name, [string]$previousEnvironment[$name], "Process")
     }
 }
 
