@@ -66,4 +66,13 @@
 
 ## I. 回归记录建议
 
+### 2026-09-23 main 审计后的定向实机项（尚未通过）
+
+- [ ] 快捷刀至少连续 5 个完整循环，观察 client 错误、`MyWeapons`/active slot、模型与动画；失败后确认原刀保留或有界重建，不接受仅有成功聊天提示。
+- [ ] 切换过程中死亡、换队、回合结束，确认不操作新 Pawn 或被重用的实体，不留下悬空刀。
+- [ ] 回防第一次选枪、重复选择、死亡重生后的刀均正确；确认新刀事件能覆盖绕过 `GiveNamedItem` 的路径。未重建实体、仅原地重置 econ 的引擎路径仍需现场确认。
+- [ ] 从默认 `enabled=false`、旧 Preview/Online 状态分别进入 Enhanced bots 和 Match，CT/T 刀枪手套及音乐盒均启用；Normal matchmaking 不加载增强插件。
+- [ ] CS2 正常退出及报错退出后 Panel 内容能交互，无 Ghost 窗口；原生 `TaskbarCreated` smoke test 不等同于这一项实机通过。
+- [ ] 断网后打开 glove/music picker，192 张本地缩略图正常呈现；任意 Panel 语言下中英文名称、PaintKit、defindex 搜索均有效。
+
 每次完整回归记录日期、CS2 build、MetaMod / CounterStrikeSharp 版本、本项目 commit、测试地图与 Bot 数量、失败项目和复现步骤。需要真实 CS2 进程、WebView2 composition 或视觉判断的结果由用户记录后交回 Agent 复审。

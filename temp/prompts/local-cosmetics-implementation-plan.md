@@ -1,5 +1,7 @@
 # Local Arena Personal — Implementation Plan
 
+> 2026-09-23 follow-up：旧计划的首轮基线与具体方案已完成，不作为本次故障修复的预设答案。本轮从远端 `main` 的 `e21c7db` 重新审计，范围、现场证据及有限修复见 `docs/MAIN-AUDIT-2026-09-23.md`；实机项仍见 `docs/MANUAL-ACCEPTANCE.md`。
+
 ## 0. 任务目标与执行原则
 
 目标：以当前 main 的原始 Local Arena 为长期底座，保留其完整 Panel、Bot、Match、Stats、Local / Preview / Bots / Online 模式和其他现有能力，只完成本轮明确的个人定制与 bug 修复。`docs/PRODUCT-SCOPE.md` 是产品边界；本文件只规定执行顺序、风险和验证。

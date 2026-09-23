@@ -52,6 +52,7 @@
 
 ## 6. 模式、安装和配置协调
 
+- Normal matchmaking：增强 runtime 不加载，PlayerCosmetics OFF；Cosmetics preview：PlayerCosmetics ON、增强 Bot OFF、官方普通 Bot 可用；Enhanced bots：增强 Bot 与 PlayerCosmetics 同时 ON。Match 使用相同的 Enhanced bots 协调，不恢复历史 `enabled` 快照来决定运行模式。
 - 保留原 Local Arena 的 Local / Preview / Bots / Online 模式切换和启动模型。本轮不引入 A/C 实验分支那套每次启动临时修改 `gameinfo.gi`、数秒后自动恢复 clean 的 launch isolation transaction。
 - 不把“用户直接从 Steam 启动必须永远完全 clean”作为本轮新增 invariant；直接启动行为以原 Local Arena 模式管理为准。
 - `FollowCS2ServerGuidelines` 必须在安装、修复和本地饰品模式需要时可靠协调为 `false`，因为 `true` 会阻止本地饰品管线需要的 econ attributes。
@@ -68,6 +69,7 @@
 
 ## 8. 图片资产和中文数据
 
+- 手套 / 音乐盒共 192 张必要缩略图随 Panel 打包，构建检查文件、PNG signature、长度及 SHA256，预算 20 MiB；其他饰品图继续使用远程来源与文字 fallback。
 - 审计并统计 glove、music、knife、weapon catalog 的图片 URL 状态、WebView2 可加载性、安装包和 CSP / origin 影响。
 - picker 不应大面积显示空白图；加载失败必须有可见 fallback。
 - 优先使用可校验的 build-time catalog、有限本地 cache 或必要的本地缩略图，不在没有尺寸统计前把数 GB 素材塞进仓库。
