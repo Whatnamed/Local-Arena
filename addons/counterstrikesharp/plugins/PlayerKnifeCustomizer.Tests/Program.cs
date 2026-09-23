@@ -43,6 +43,19 @@ Require(GiveNamedItemPhaseResolver.Resolve("weapon_knife_karambit", 507) == Cosm
     "GiveNamedItem return inspection must select knife, gun, or conservative combined phases.");
 
 var plannerLoadout = new TeamLoadout();
+// Model repeated replacement with both inventory and active-slot references.
+// A failed native detach must not lead to entity deletion or a dangling slot.
+for (int cycle = 0; cycle < 30; cycle++)
+{
+    bool inventory = true, active = true, destroyed = false;
+    Require(!KnifeInventoryLifecycle.TryRetire(() => { }, () => inventory || active, () => destroyed = true),
+        "Rejected detach must leave the old knife alive.");
+    Require(!destroyed, "No stale inventory handle may be created on failed detach.");
+    Require(!KnifeInventoryLifecycle.TryRetire(() => inventory = false, () => inventory || active, () => destroyed = true),
+        "Clearing MyWeapons alone is insufficient while ActiveWeapon references the entity.");
+    Require(KnifeInventoryLifecycle.TryRetire(() => active = false, () => inventory || active, () => destroyed = true) && destroyed,
+        "Entity retirement may occur only after both inventory and active references are gone.");
+}
 var planner = KnifeReplacementPlanner.Plan(507, null, plannerLoadout);
 Require(planner.IsValid && planner.TargetDefIndex == 515 && planner.IsVanilla &&
         plannerLoadout.KnifePresets.Count == 0,

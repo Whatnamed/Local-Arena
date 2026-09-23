@@ -251,6 +251,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
         RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
+        RegisterListener<Listeners.OnEntitySpawned>(OnKnifeEntitySpawned);
         VirtualFunctions.GiveNamedItemFunc.Hook(OnGiveNamedItemPost, HookMode.Post);
         Logger.LogInformation("[PlayerKnifeCustomizer] Loaded generation-safe pipeline; enabled={Enabled}, signature={Signature}, catalog={Catalog}",
             _config.Enabled, _setAttrByName != null, _skinCatalog.Values.Sum(skins => skins.Count));
@@ -312,6 +313,36 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             LogApplyError("purchased weapon", ex);
         }
         return HookResult.Continue;
+    }
+
+    private void OnKnifeEntitySpawned(CEntityInstance entity)
+    {
+        if (!_config.Enabled || !entity.IsValid || !IsKnifeName(entity.DesignerName)) return;
+        var knife = new CHandle<CBasePlayerWeapon>(entity.EntityHandle.Raw);
+        // Engine retakes can create/equip a knife outside GiveNamedItem. Ownership
+        // is not ready inside OnEntitySpawned; resolve the serial handle later.
+        void ApplyWhenOwned(int attempt)
+        {
+            var weapon = knife.Value;
+            if (weapon is not { IsValid: true }) return;
+            if (_knifeReplacementRequests.Values.Any(request => request.Replacement?.Raw == knife.Raw)) return;
+            var owner = weapon.OwnerEntity.Value;
+            if (owner is { IsValid: true } && owner.DesignerName == "player")
+            {
+                var pawn = new CCSPlayerPawn(owner.Handle);
+                var controller = pawn.Controller.Value;
+                var player = controller is { IsValid: true } ? new CCSPlayerController(controller.Handle) : null;
+                if (CanApplyToPlayer(player) && IsInInventory(pawn, weapon))
+                {
+                    if (!_knifeGiveGuards.Contains(player!.Handle))
+                        ScheduleApplyPipeline(player.Handle, CosmeticApplyPhase.Knife);
+                    return;
+                }
+            }
+            if (attempt < KnifeReplacementRetryDelays.Length)
+                AddTimer(KnifeReplacementRetryDelays[attempt], () => ApplyWhenOwned(attempt + 1), TimerFlags.STOP_ON_MAPCHANGE);
+        }
+        Server.NextFrame(() => ApplyWhenOwned(0));
     }
 
     private static CCSPlayerController? GetPlayerFromItemServices(CCSPlayer_ItemServices itemServices)
@@ -393,6 +424,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private HookResult OnPlayerTeam(EventPlayerTeam @event, GameEventInfo _)
     {
         var player = @event.Userid;
+        if (player is { IsValid: true }) CancelKnifeReplacement(player.Handle);
         if (CanApplyToPlayer(player))
             ScheduleApplyPipeline(player!.Handle, CosmeticApplyPhase.All);
         return HookResult.Continue;
@@ -612,8 +644,11 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         {
             Id = ++_nextKnifeReplacementId,
             PlayerHandle = player.Handle,
-            PawnHandle = pawn.Handle,
-            CurrentHandle = current.Handle,
+            Player = new CHandle<CCSPlayerController>(player.EntityHandle.Raw),
+            Pawn = new CHandle<CCSPlayerPawn>(pawn.EntityHandle.Raw),
+            Current = new CHandle<CBasePlayerWeapon>(current.EntityHandle.Raw),
+            Original = new CHandle<CBasePlayerWeapon>(current.EntityHandle.Raw),
+            OriginalPlan = CaptureKnifeRollbackPlan(current, team),
             TargetDefIndex = plan.TargetDefIndex,
             Plan = plan,
             Operation = operation,
@@ -641,14 +676,11 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
         if (replacement is not { IsValid: true } || replacement.Handle == current.Handle)
         {
-            if (replacement is { IsValid: true } && replacement.Handle != current.Handle)
-                replacement.Remove();
-            _knifeReplacementRequests.Remove(player.Handle);
-            NotifyKnifeFailure(request, "the engine did not return a fresh knife entity");
+            FailKnifeReplacement(request, "the engine did not return a fresh knife entity");
             return false;
         }
 
-        request.ReplacementHandle = replacement.Handle;
+        request.Replacement = new CHandle<CBasePlayerWeapon>(replacement.EntityHandle.Raw);
         ScheduleKnifeReplacementAttempt(request, immediate: true);
         return true;
     }
@@ -677,21 +709,26 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         if (!_knifeReplacementRequests.TryGetValue(playerHandle, out var request) || request.Id != requestId)
             return;
 
-        var player = ResolvePlayer(playerHandle);
+        var player = request.Player.Value;
         var pawn = player?.PlayerPawn.Value;
-        if (player is null || !CanApplyToPlayer(player) || pawn is not { IsValid: true } || pawn.Handle != request.PawnHandle)
+        if (player is null || !CanApplyToPlayer(player) || pawn is not { IsValid: true } || pawn.EntityHandle.Raw != request.Pawn.Raw)
         {
             FailKnifeReplacement(request, "the player or Pawn changed before the replacement was ready");
             return;
         }
 
-        var replacement = new CBasePlayerWeapon(request.ReplacementHandle);
-        if (!replacement.IsValid)
+        var replacement = request.Replacement?.Value;
+        if (replacement is not { IsValid: true })
         {
             FailKnifeReplacement(request, "the fresh knife entity became invalid");
             return;
         }
 
+        if (!IsInInventory(pawn, replacement))
+        {
+            FailKnifeReplacement(request, "the replacement is no longer in this Pawn's inventory");
+            return;
+        }
         var item = replacement.AttributeManager?.Item;
         if (item == null || !HasReadyAttributeLists(item))
         {
@@ -714,7 +751,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             }
 
             player.ExecuteClientCommand("slot3");
-            Server.NextFrame(() => VerifyKnifeReplacementEquipped(request.PlayerHandle, request.Id));
+            AddTimer(0.05f, () => VerifyKnifeReplacementEquipped(request.PlayerHandle, request.Id), TimerFlags.STOP_ON_MAPCHANGE);
         }
         catch (Exception ex)
         {
@@ -725,19 +762,30 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private void VerifyKnifeReplacementEquipped(nint playerHandle, long requestId)
     {
+        try { VerifyKnifeReplacementEquippedCore(playerHandle, requestId); }
+        catch (Exception ex)
+        {
+            if (_knifeReplacementRequests.TryGetValue(playerHandle, out var request) && request.Id == requestId)
+                FailKnifeReplacement(request, ex.Message);
+        }
+    }
+
+    private void VerifyKnifeReplacementEquippedCore(nint playerHandle, long requestId)
+    {
         if (!_knifeReplacementRequests.TryGetValue(playerHandle, out var request) || request.Id != requestId)
             return;
 
-        var player = ResolvePlayer(playerHandle);
+        var player = request.Player.Value;
         var pawn = player?.PlayerPawn.Value;
-        if (player is null || !CanApplyToPlayer(player) || pawn is not { IsValid: true } || pawn.Handle != request.PawnHandle)
+        if (player is null || !CanApplyToPlayer(player) || pawn is not { IsValid: true } || pawn.EntityHandle.Raw != request.Pawn.Raw)
         {
             FailKnifeReplacement(request, "the player or Pawn changed during equip");
             return;
         }
 
         var active = pawn.WeaponServices?.ActiveWeapon.Value;
-        if (active is { IsValid: true } && active.Handle == request.ReplacementHandle &&
+        if (active is { IsValid: true } && active.EntityHandle.Raw == request.Replacement?.Raw &&
+            IsInInventory(pawn, active) &&
             active.AttributeManager?.Item?.ItemDefinitionIndex == request.TargetDefIndex)
         {
             CompleteKnifeReplacement(request, player, active);
@@ -746,12 +794,17 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
         if (request.EquipFallbackIssued)
         {
-            FailKnifeReplacement(request, "the fresh knife could not be equipped");
+            if (++request.EquipChecks < 3)
+            {
+                player.ExecuteClientCommand("slot3");
+                AddTimer(0.12f, () => VerifyKnifeReplacementEquipped(request.PlayerHandle, request.Id), TimerFlags.STOP_ON_MAPCHANGE);
+            }
+            else FailKnifeReplacement(request, "the fresh knife could not be equipped");
             return;
         }
 
-        var current = new CBasePlayerWeapon(request.CurrentHandle);
-        if (!current.IsValid)
+        var current = request.Current.Value;
+        if (current is not { IsValid: true })
         {
             FailKnifeReplacement(request, "the old knife was lost before the fresh knife was equipped");
             return;
@@ -763,7 +816,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         request.EquipFallbackIssued = true;
         pawn.RemovePlayerItem(current);
         player.ExecuteClientCommand("slot3");
-        Server.NextFrame(() => VerifyKnifeReplacementEquipped(request.PlayerHandle, request.Id));
+        AddTimer(0.12f, () => VerifyKnifeReplacementEquipped(request.PlayerHandle, request.Id), TimerFlags.STOP_ON_MAPCHANGE);
     }
 
     private void CompleteKnifeReplacement(
@@ -771,13 +824,25 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         CCSPlayerController player,
         CBasePlayerWeapon replacement)
     {
-        var old = new CBasePlayerWeapon(request.CurrentHandle);
-        if (old.IsValid && old.Handle != replacement.Handle)
-            old.Remove();
+        var old = request.Current.Value;
+        if (old is { IsValid: true } && old.Handle != replacement.Handle &&
+            !RetireKnife(request.Pawn.Value, old))
+        {
+            FailKnifeReplacement(request, "the old knife remains referenced after detach");
+            return;
+        }
+        if (request.Original.Raw != request.Current.Raw &&
+            !RetireKnife(request.Pawn.Value, request.Original.Value))
+        {
+            FailKnifeReplacement(request, "the original knife could not be retired during rollback");
+            return;
+        }
 
         _knifeReplacementRequests.Remove(request.PlayerHandle);
         if (request.NotifyPlayer)
-            player.PrintToChat($"[PlayerCosmetics] Equipped {request.Plan.DisplayName}.");
+            player.PrintToChat(request.RollingBack
+                ? "[PlayerCosmetics] Switch failed; previous knife was recreated and equipped."
+                : $"[PlayerCosmetics] Equipped {request.Plan.DisplayName}.");
     }
 
     private void RetryKnifeReplacement(KnifeReplacementRequest request, string detail)
@@ -793,27 +858,131 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private void FailKnifeReplacement(KnifeReplacementRequest request, string detail)
     {
-        if (_knifeReplacementRequests.Remove(request.PlayerHandle))
+        if (!_knifeReplacementRequests.ContainsKey(request.PlayerHandle)) return;
+        var player = request.Player.Value;
+        var pawn = request.Pawn.Value;
+        var old = request.Current.Value;
+        bool sameLivePawn = CanApplyToPlayer(player) && pawn is { IsValid: true } &&
+            player!.PlayerPawn.Raw == request.Pawn.Raw && player.PawnIsAlive;
+        // Once detached, the old entity cannot be restored by slot3. Recreate
+        // the saved original loadout through GiveNamedItem, then verify it too.
+        if (sameLivePawn && !request.RollingBack &&
+            (old is not { IsValid: true } || !IsInInventory(pawn!, old)))
         {
-            var replacement = request.ReplacementHandle == nint.Zero
-                ? null
-                : new CBasePlayerWeapon(request.ReplacementHandle);
-            if (replacement is { IsValid: true } && !request.EquipFallbackIssued)
-                replacement.Remove();
-            NotifyKnifeFailure(request, detail);
+            LogApplyError(request.Operation, new InvalidOperationException($"{detail}; recreating previous knife"));
+            request.RollingBack = true;
+            request.Plan = request.OriginalPlan;
+            request.TargetDefIndex = request.OriginalPlan.TargetDefIndex;
+            request.Attempt = 0;
+            BeginKnifeRollback(request);
+            return;
         }
+        // If recreation/equip itself fails, retain an owned recovery knife so
+        // the player can select it manually; never claim rollback succeeded.
+        var candidate = request.Replacement?.Value;
+        if (!request.RollingBack || (candidate is { IsValid: true } &&
+            (pawn is not { IsValid: true } || !IsInInventory(pawn, candidate))))
+            RetireKnife(pawn, candidate);
+        if (old is { IsValid: true } && pawn is { IsValid: true } && !IsInInventory(pawn, old))
+            RetireKnife(pawn, old);
+        RetireDetachedOriginal(request, pawn);
+        _knifeReplacementRequests.Remove(request.PlayerHandle);
+        if (sameLivePawn && old is { IsValid: true } && IsInInventory(pawn!, old))
+            player!.ExecuteClientCommand("slot3");
+        NotifyKnifeFailure(request, detail);
+    }
+
+    private void BeginKnifeRollback(KnifeReplacementRequest request)
+    {
+        if (!_knifeReplacementRequests.TryGetValue(request.PlayerHandle, out var live) || live.Id != request.Id) return;
+        var player = request.Player.Value;
+        var pawn = request.Pawn.Value;
+        if (!CanApplyToPlayer(player) || !player!.PawnIsAlive || pawn is not { IsValid: true } ||
+            player.PlayerPawn.Raw != request.Pawn.Raw)
+        {
+            CancelKnifeReplacement(request.PlayerHandle);
+            return;
+        }
+        // Keep the last owned candidate until recovery has actually been created.
+        // Failed rollback creation must not itself take away the player's knife.
+        var previousCandidate = request.Replacement;
+        _knifeGiveGuards.Add(player.Handle);
+        try
+        {
+            var recovered = player.GiveNamedItem<CBasePlayerWeapon>(
+                KnifeShortcutCycle.GetBaseDesignerName(GetCosmeticTeam(player)!.Value));
+            if (recovered is { IsValid: true } && recovered.EntityHandle.Raw != request.Current.Raw &&
+                recovered.EntityHandle.Raw != previousCandidate?.Raw)
+            {
+                if (previousCandidate?.Value is { IsValid: true }) request.Current = previousCandidate;
+                request.Replacement = new CHandle<CBasePlayerWeapon>(recovered.EntityHandle.Raw);
+                request.Attempt = 0;
+                request.EquipFallbackIssued = false;
+                request.EquipChecks = 0;
+                ScheduleKnifeReplacementAttempt(request, immediate: true);
+                return;
+            }
+        }
+        catch (Exception ex) { LogApplyError("knife rollback creation", ex); }
+        finally { _knifeGiveGuards.Remove(player.Handle); }
+        if (request.Attempt < KnifeReplacementRetryDelays.Length)
+        {
+            float delay = KnifeReplacementRetryDelays[request.Attempt++];
+            AddTimer(delay, () => BeginKnifeRollback(request), TimerFlags.STOP_ON_MAPCHANGE);
+        }
+        else FailKnifeReplacement(request, "the engine rejected bounded rollback creation; no recovery was confirmed");
+    }
+
+    private KnifeReplacementPlan CaptureKnifeRollbackPlan(CBasePlayerWeapon weapon, CosmeticTeam team)
+    {
+        var item = weapon.AttributeManager.Item;
+        ushort defIndex = item.ItemDefinitionIndex;
+        var preset = TryGetPreset(defIndex, team, out var configured) ? configured.Clone() : new KnifePreset
+        {
+            Paint = weapon.FallbackPaintKit, Seed = weapon.FallbackSeed, Wear = weapon.FallbackWear,
+            NameTag = item.CustomName, StatTrakEnabled = item.EntityQuality == 9,
+            StatTrakCount = weapon.FallbackStatTrak, SouvenirEnabled = item.EntityQuality == 12,
+        };
+        return new(defIndex, defIndex, KnifeShortcutCycle.GetKnifeDesignerName(defIndex),
+            KnifeShortcutCycle.GetKnifeDisplayName(defIndex), preset, preset.Paint <= 0, true, string.Empty);
+    }
+
+    private static bool IsInInventory(CCSPlayerPawn pawn, CBasePlayerWeapon weapon) =>
+        pawn.WeaponServices?.MyWeapons.Any(handle => handle.Raw == weapon.EntityHandle.Raw) == true;
+
+    private bool RetireKnife(CCSPlayerPawn? pawn, CBasePlayerWeapon? weapon)
+    {
+        if (weapon is not { IsValid: true }) return true;
+        try
+        {
+            var owner = weapon.OwnerEntity.Value;
+            if (owner is { IsValid: true } && (pawn is not { IsValid: true } || owner.EntityHandle.Raw != pawn.EntityHandle.Raw))
+                return false; // Ownership changed; do not delete another player's weapon.
+            return KnifeInventoryLifecycle.TryRetire(
+                () => {
+                    if (pawn is { IsValid: true } && (IsInInventory(pawn, weapon) ||
+                        pawn.WeaponServices?.ActiveWeapon.Raw == weapon.EntityHandle.Raw))
+                        pawn.RemovePlayerItem(weapon);
+                },
+                () => pawn is { IsValid: true } && (IsInInventory(pawn, weapon) ||
+                    pawn.WeaponServices?.ActiveWeapon.Raw == weapon.EntityHandle.Raw),
+                () => weapon.Remove());
+        }
+        catch (Exception ex) { LogApplyError("knife detach/delete", ex); return false; }
     }
 
     private void NotifyKnifeFailure(KnifeReplacementRequest request, string detail)
     {
         if (request.NotifyPlayer)
         {
-            var player = ResolvePlayer(request.PlayerHandle);
+            var player = request.Player.Value;
             if (CanApplyToPlayer(player))
             {
-                string message = request.EquipFallbackIssued
-                    ? "[PlayerCosmetics] Knife switch did not finish; the game rejected the replacement."
-                    : "[PlayerCosmetics] Knife switch failed; the old knife was left in place.";
+                bool retained = request.Pawn.Value is { IsValid: true } pawn &&
+                    request.Original.Value is { IsValid: true } old && IsInInventory(pawn, old);
+                string message = retained
+                    ? "[PlayerCosmetics] Knife switch failed; previous knife is still in your inventory."
+                    : "[PlayerCosmetics] Knife switch/recovery could not be confirmed; check slot3 and the plugin log.";
                 player!.PrintToChat(message);
             }
         }
@@ -823,12 +992,24 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private void CancelKnifeReplacement(nint playerHandle)
     {
         if (!_knifeReplacementRequests.Remove(playerHandle, out var request)) return;
-        var replacement = request.ReplacementHandle == nint.Zero
-            ? null
-            : new CBasePlayerWeapon(request.ReplacementHandle);
-        if (replacement is { IsValid: true } && !request.EquipFallbackIssued)
-            replacement.Remove();
+        var pawn = request.Pawn.Value;
+        // Round-end can cancel while the player is alive and old is detached.
+        // Keep their prepared owned knife, and retire only the detached original.
+        var old = request.Current.Value;
+        bool keepReplacement = pawn is { IsValid: true } &&
+            (old is not { IsValid: true } || !IsInInventory(pawn, old));
+        if (!keepReplacement) RetireKnife(pawn, request.Replacement?.Value);
+        if (old is { IsValid: true } && pawn is { IsValid: true } && !IsInInventory(pawn, old))
+            RetireKnife(pawn, old);
+        RetireDetachedOriginal(request, pawn);
         _knifeGiveGuards.Remove(playerHandle);
+    }
+
+    private void RetireDetachedOriginal(KnifeReplacementRequest request, CCSPlayerPawn? pawn)
+    {
+        if (request.Original.Raw != request.Current.Raw && pawn is { IsValid: true } &&
+            request.Original.Value is { IsValid: true } original && !IsInInventory(pawn, original))
+            RetireKnife(pawn, original);
     }
 
     private void CancelAllKnifeReplacements()
@@ -881,7 +1062,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private bool ApplyVanillaKnife(CBasePlayerWeapon weapon, ushort defIndex)
     {
-        if (_setAttrByName == null || !weapon.IsValid || !KnifeShortcutCycle.IsSupported(defIndex))
+        if (_setAttrByName == null || !weapon.IsValid || (!KnifeShortcutCycle.IsSupported(defIndex) && defIndex is not (42 or 59)))
             return false;
 
         try
@@ -1543,15 +1724,20 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         public required long Id { get; init; }
         public required nint PlayerHandle { get; init; }
-        public required nint PawnHandle { get; init; }
-        public required nint CurrentHandle { get; init; }
-        public required ushort TargetDefIndex { get; init; }
-        public required KnifeReplacementPlan Plan { get; init; }
+        public required CHandle<CCSPlayerController> Player { get; init; }
+        public required CHandle<CCSPlayerPawn> Pawn { get; init; }
+        public required CHandle<CBasePlayerWeapon> Current { get; set; }
+        public required CHandle<CBasePlayerWeapon> Original { get; init; }
+        public required KnifeReplacementPlan OriginalPlan { get; init; }
+        public required ushort TargetDefIndex { get; set; }
+        public required KnifeReplacementPlan Plan { get; set; }
         public required string Operation { get; init; }
         public bool NotifyPlayer { get; init; }
-        public nint ReplacementHandle { get; set; }
+        public CHandle<CBasePlayerWeapon>? Replacement { get; set; }
         public int Attempt { get; set; }
         public bool EquipFallbackIssued { get; set; }
+        public int EquipChecks { get; set; }
+        public bool RollingBack { get; set; }
     }
 }
 
