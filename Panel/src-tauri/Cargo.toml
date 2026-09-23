@@ -35,3 +35,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_System_Threading"] }
+
+[patch.crates-io]
+# Backport only the TaskbarCreated reentrant-lock fix; keep the 0.35.3 API.
+tao = { path = "vendor/tao" }

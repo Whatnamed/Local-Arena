@@ -66,6 +66,8 @@ tmp/
 *.log
 *.tmp
 *.temp
+temp/panel-hang-*/
+temp/capture-panel.ps1
 *.bak
 .env
 .env.*
