@@ -208,6 +208,7 @@ try {
         @{ Path = "addons\counterstrikesharp\plugins\BotAimImprover\BotAimImprover.csproj"; Properties = @("-p:RayTraceApiPath=$rayTraceApi") },
         @{ Path = "addons\counterstrikesharp\plugins\BotBuy\BotBuy.csproj"; Properties = @() },
         @{ Path = "addons\counterstrikesharp\plugins\BotControllerImpl\BotControllerImpl.csproj"; Properties = @() },
+        @{ Path = "addons\counterstrikesharp\plugins\BotState\BotState.csproj"; Properties = @("-p:RayTraceApiPath=$rayTraceApi") },
         @{ Path = "addons\counterstrikesharp\plugins\BotRandomizer\BotRandomizer.csproj"; Properties = @() },
         @{ Path = "addons\counterstrikesharp\plugins\NadeSystem\NadeSystem.csproj"; Properties = @("-p:RayTraceApiPath=$rayTraceApi") },
         @{ Path = "addons\counterstrikesharp\plugins\RoundDamageRecap\RoundDamageRecap.csproj"; Properties = @() },

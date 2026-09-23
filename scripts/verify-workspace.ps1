@@ -111,6 +111,8 @@ else {
         "addons/counterstrikesharp/plugins/BotControllerImpl/ReplayDriver.cs",
         "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImpl.csproj",
         "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImplPlugin.cs",
+        "addons/counterstrikesharp/plugins/BotState/BotState.cs",
+        "addons/counterstrikesharp/plugins/BotState/BotState.csproj",
         "addons/counterstrikesharp/plugins/NadeSystem/NadeSystem.cs",
         "addons/counterstrikesharp/plugins/NadeSystem/NadeSystem.csproj",
         "addons/counterstrikesharp/plugins/RoundDamageRecap/RoundDamageRecap.cs",
@@ -123,6 +125,24 @@ else {
     if ($unexpectedChanges.Count -gt 0) {
         Add-Failure "Upstream enhanced-bot modules were modified: $($unexpectedChanges -join ', ')"
     }
+}
+
+$botStateSource = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotState/BotState.cs") -Raw
+$botStateProject = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotState/BotState.csproj") -Raw
+$botControllerApi = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/shared/BotControllerApi/IBotControllerApi.cs") -Raw
+$botControllerNativeApi = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotControllerImpl/BotController.NativeApi.cs") -Raw
+$buildScript = Get-Content -LiteralPath (Join-Path $repo "scripts/build.ps1") -Raw
+$packageScript = Get-Content -LiteralPath (Join-Path $repo "scripts/package.ps1") -Raw
+if ($botStateSource -match '\bInjectUsercmd\b' -or
+    $botControllerApi -match '\bInjectUsercmd\b' -or
+    $botControllerNativeApi -notmatch 'ExpectedAbiVersion\s*=\s*14' -or
+    $botStateSource -notmatch 'ConVar\.Find\("game_type"\)' -or
+    $botStateSource -notmatch 'ConVar\.Find\("game_mode"\)' -or
+    -not $botStateProject.Contains('<ProjectReference Include="..\..\shared\BotControllerApi\BotControllerApi.csproj">') -or
+    $buildScript -notmatch 'plugins\\BotState\\BotState\.csproj' -or
+    $packageScript -notmatch 'BotState\\bin\\Release\\net10\.0' -or
+    $packageScript -notmatch 'Packaged BotState\.dll does not match the repository build output') {
+    Add-Failure "BotState source, ABI 14 build contract, Deathmatch guard, or package overlay is inconsistent."
 }
 
 $botAiProject = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotAI/BotAI.csproj") -Raw

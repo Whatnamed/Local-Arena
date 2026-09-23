@@ -23,7 +23,7 @@ $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot "dependencies.json
 $cache = Join-Path $repo ".cache\package"
 $stage = Join-Path $cache "stage-build"
 $extract = Join-Path $cache "extract"
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo "artifacts" }
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo "artifacts\main-personal" }
 
 function Get-VerifiedAsset {
     param($Asset)
@@ -238,6 +238,28 @@ if (-not (Test-Path -LiteralPath (Join-Path $botControllerApiBuild "BotControlle
     throw "Expected BotController shared API build output was not produced: $botControllerApiBuild"
 }
 Copy-Tree $botControllerApiBuild (Join-Path $payload "addons\counterstrikesharp\shared\BotControllerApi")
+$botControllerApiBuildDll = Join-Path $botControllerApiBuild "BotControllerApi.dll"
+$botControllerApiPayloadDll = Join-Path $payload "addons\counterstrikesharp\shared\BotControllerApi\BotControllerApi.dll"
+$botControllerApiBuildHash = (Get-FileHash -LiteralPath $botControllerApiBuildDll -Algorithm SHA256).Hash.ToLowerInvariant()
+$botControllerApiPayloadHash = (Get-FileHash -LiteralPath $botControllerApiPayloadDll -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($botControllerApiPayloadHash -ne $botControllerApiBuildHash) {
+    throw "Packaged BotControllerApi.dll does not match the repository ABI contract build."
+}
+
+$botStateBuild = Join-Path $repo "addons\counterstrikesharp\plugins\BotState\bin\Release\net10.0"
+$botStateBuildDll = Join-Path $botStateBuild "BotState.dll"
+if (-not (Test-Path -LiteralPath $botStateBuildDll -PathType Leaf)) {
+    throw "Expected repository BotState build output was not produced: $botStateBuildDll"
+}
+$botStatePluginPayload = Join-Path $payload "addons\counterstrikesharp\plugins\BotState"
+Copy-Tree $botStateBuild $botStatePluginPayload
+$botStatePayloadDll = Join-Path $botStatePluginPayload "BotState.dll"
+$botStateBuildHash = (Get-FileHash -LiteralPath $botStateBuildDll -Algorithm SHA256).Hash.ToLowerInvariant()
+$botStatePayloadHash = (Get-FileHash -LiteralPath $botStatePayloadDll -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($botStatePayloadHash -ne $botStateBuildHash) {
+    throw "Packaged BotState.dll does not match the repository build output."
+}
+
 Copy-Item -LiteralPath (Join-Path $repo "addons\counterstrikesharp\plugins\BotRandomizer\bot_randomizer_options.json") `
     -Destination (Join-Path $payload "addons\counterstrikesharp\plugins\BotRandomizer\bot_randomizer_options.json") -Force
 Copy-Tree $pluginBuild (Join-Path $payload "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer")

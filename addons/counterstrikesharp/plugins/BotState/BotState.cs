@@ -26,7 +26,6 @@ public class BotState : BasePlugin
     private const float RestoreDelay = 1.0f;
     private const int KnifeDefinitionIndex = 9001;
     private const float ReloadInterruptCooldown = 0.75f;
-    private const ulong InspectButtonMask = (ulong)PlayerButtons.Inspect;
 
     private bool _isExpanded = false;
     private ConVar? _smokeConVar;
@@ -839,6 +838,9 @@ public class BotState : BasePlugin
     // Detects elimination while explicitly excluding the current death victim
     private HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
     {
+        if (IsDeathmatch())
+            return HookResult.Continue;
+
         if (_botController == null)
             return HookResult.Continue;
 
@@ -851,30 +853,17 @@ public class BotState : BasePlugin
             victimTeam != CsTeam.CounterTerrorist)
             return HookResult.Continue;
 
-        bool alreadyHandled = _eliminationHandled;
         HandleTeamElimination(victim.Slot, victimTeam);
-
-        // 10% chance the killer Bot inspects its current weapon. Skip when this
-        // exact kill just triggered the elimination switching, since that path
-        // already inspects the knife.
-        if (alreadyHandled || !_eliminationHandled)
-            MaybeInspectOnKill(@event.Attacker);
 
         return HookResult.Continue;
     }
 
-    // Rolls a 10% inspect for the Bot credited with a kill
-    private void MaybeInspectOnKill(CCSPlayerController? attacker)
+    private static bool IsDeathmatch()
     {
-        if (_botController == null ||
-            attacker == null || !attacker.IsValid || !attacker.IsBot ||
-            !attacker.PawnIsAlive || attacker.HasBeenControlledByPlayerThisRound)
-            return;
-
-        if (_random.NextDouble() >= 0.10)
-            return;
-
-        QueueInspectInjection(attacker.Slot);
+        var gameType = ConVar.Find("game_type");
+        var gameMode = ConVar.Find("game_mode");
+        return gameType?.GetPrimitiveValue<int>() == 1
+            && gameMode?.GetPrimitiveValue<int>() == 2;
     }
 
     // Locks every surviving Bot on the winning team to its knife slot
@@ -918,8 +907,6 @@ public class BotState : BasePlugin
                 bot.Slot, KnifeDefinitionIndex);
             bool locked = BotControllerBridge.LockKnife(
                 _botController, bot.Slot);
-            if (switched)
-                QueueInspectInjection(bot.Slot);
             if (locked)
                 _knifeLockedBotSlots.Add(bot.Slot);
 
@@ -930,27 +917,6 @@ public class BotState : BasePlugin
             }
         }
 
-    }
-
-    // Queues a one-command inspect injection after the knife becomes active
-    private void QueueInspectInjection(int slot)
-    {
-        Server.NextFrame(() =>
-        {
-            if (_botController == null) return;
-
-            var player = Utilities.GetPlayerFromSlot(slot);
-            if (player == null || !player.IsValid || !player.IsBot ||
-                !player.PawnIsAlive || player.HasBeenControlledByPlayerThisRound)
-                return;
-
-            if (BotControllerBridge.InjectUsercmd(
-                    _botController, slot, InspectButtonMask) <= 0)
-            {
-                Console.WriteLine(
-                    $"[Smarter-Bot] Inspect injection failed for slot {slot}");
-            }
-        });
     }
 
     // Releases only Slot3 locks successfully applied by this plugin
@@ -987,15 +953,6 @@ public class BotState : BasePlugin
         {
             return ((BotControllerApi.IBotControllerApi)api)
                 .SwitchBotWeapon(slot, defIndex);
-        }
-
-        // Creates an independently cancellable usercmd injection on a Bot
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public static long InjectUsercmd(
-            object api, int slot, ulong buttonMask, int durationMs = 0)
-        {
-            return ((BotControllerApi.IBotControllerApi)api)
-                .InjectUsercmd(slot, buttonMask, durationMs);
         }
 
         // Applies the knife-slot weapon lock to one Bot

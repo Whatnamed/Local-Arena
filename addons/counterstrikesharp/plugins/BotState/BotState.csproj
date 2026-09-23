@@ -4,6 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <RayTraceApiPath Condition="'$(RayTraceApiPath)' == ''">$(MSBuildProjectDirectory)\libs\RayTraceApi.dll</RayTraceApiPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,13 +13,12 @@
 
   <ItemGroup>
     <Reference Include="RayTraceApi">
-      <HintPath>libs\RayTraceApi.dll</HintPath>
+      <HintPath>$(RayTraceApiPath)</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="BotControllerApi">
-      <HintPath>libs\BotControllerApi.dll</HintPath>
+    <ProjectReference Include="..\..\shared\BotControllerApi\BotControllerApi.csproj">
       <Private>false</Private>
-    </Reference>
+    </ProjectReference>
   </ItemGroup>
 
 </Project>
