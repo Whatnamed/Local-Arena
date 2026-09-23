@@ -68,6 +68,10 @@
 
 ### 2026-09-23 main 审计后的定向实机项（尚未通过）
 
+- [ ] 针对 CS2 `1.41.8.2` / build `2000913`，在 Windows Local Arena 环境确认 MetaMod 2.0.0-git1406、CounterStrikeSharp 1.0.371、RayTrace 1.0.16 和 BotHider 0.3.3 的实际加载与运行；构建成功不代表该组合已兼容本次 Source 2 更新。
+- [ ] BotHider 需单独确认 hook 初始化以及 Bot name、agent、weapon skin、SteamID 行为。[上游 Windows issue #35](https://github.com/XBribo/CS2-Bot-Hider/issues/35) 报告更新后这些功能失效并有 `MaintainBotQuota`、`PackEntities`、`HumanTeamRestriction`、`SameMapTeardown` hook 未解析；issue 未给出明确版本，latest v0.4.4 也早于本次更新。
+- [ ] 确认 BotState 在 Deathmatch 中不会因临时 T/CT team number 把存活 Bot 锁到刀具；同时确认 BotController API 14 与随当前 v1.4.3 package payload 的 native DLL 配套加载。
+- [ ] [CounterStrikeSharp upstream PR #1432](https://github.com/roflmuffin/CounterStrikeSharp/pull/1432) 针对 Linux gamedata，明确注明 Windows 未变；仍需确认 Windows Local Arena 中 CounterStrikeSharp、BotAI、PlayerKnifeCustomizer 与 Source 2 新 schema / hooks 的实际行为。
 - [ ] 快捷刀至少连续 5 个完整循环，观察 client 错误、`MyWeapons`/active slot、模型与动画；失败后确认原刀保留或有界重建，不接受仅有成功聊天提示。
 - [ ] 切换过程中死亡、换队、回合结束，确认不操作新 Pawn 或被重用的实体，不留下悬空刀。
 - [ ] 回防第一次选枪、重复选择、死亡重生后的刀均正确；确认新刀事件能覆盖绕过 `GiveNamedItem` 的路径。未重建实体、仅原地重置 econ 的引擎路径仍需现场确认。
