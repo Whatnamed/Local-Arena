@@ -302,10 +302,15 @@ if ($playerCosmetics -notmatch '"sticker slot \{sticker\.Slot\}"' -or
     ([regex]::Matches($playerCosmetics, 'ExecuteClientCommand\("lastinv"\)').Count -ne 2)) {
     Add-Failure "PlayerCosmetics sticker attributes or single-generation re-equip fallback are incomplete."
 }
-if ($playerCosmetics -match "RegisterListener<Listeners\.OnEntitySpawned>" -or
-    $playerCosmetics -match "TryApplyDroppedKnife" -or
-    $playerCosmetics -match "Server\.NextWorldUpdate") {
+if ($playerCosmetics -match "TryApplyDroppedKnife" -or
+    $playerCosmetics -match "Server\.NextWorldUpdate" -or
+    $playerCosmetics -match 'new CBasePlayerWeapon\(request\.(CurrentHandle|ReplacementHandle)\)') {
     Add-Failure "PlayerCosmetics must not retain raw entity pointers across world updates for dropped knives."
+}
+if ($playerCosmetics -notmatch 'new CHandle<CBasePlayerWeapon>\(entity.EntityHandle.Raw\)' -or
+    $playerCosmetics -notmatch 'KnifeInventoryLifecycle.TryRetire' -or
+    $playerCosmetics -notmatch 'BeginKnifeRollback') {
+    Add-Failure "Knife recreation must use serial-aware references and detach/verify/delete with bounded rollback."
 }
 
 $jsonFiles = @(

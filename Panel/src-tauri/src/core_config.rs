@@ -19,6 +19,8 @@ struct OwnershipRecord {
     original_document: Option<Value>,
     #[serde(default)]
     original_guidelines: Option<Value>,
+    #[serde(default)]
+    created_document: Option<Value>,
 }
 
 fn target_key(target: &Path) -> String {
@@ -104,6 +106,7 @@ fn record_for_document(target: &Path, document: &Value) -> Result<OwnershipRecor
         target: target.to_string_lossy().into_owned(),
         original_document: Some(document.clone()),
         original_guidelines: object.get(GUIDELINES_FIELD).cloned(),
+        created_document: None,
     })
 }
 
@@ -113,6 +116,7 @@ fn record_for_missing_document(target: &Path) -> OwnershipRecord {
         target: target.to_string_lossy().into_owned(),
         original_document: None,
         original_guidelines: None,
+        created_document: None,
     }
 }
 
@@ -203,6 +207,12 @@ pub fn ensure_local_mode(state_root: &Path, target: &Path) -> Result<()> {
         ))
     })?;
     object.insert(GUIDELINES_FIELD.to_string(), Value::Bool(false));
+    if let Some(mut record) = read_record(&ownership)? {
+        if record.original_document.is_none() && record.created_document.is_none() {
+            record.created_document = Some(document.clone());
+            write_record(&ownership, &record)?;
+        }
+    }
     write_json(&config, &document)
 }
 
@@ -212,16 +222,18 @@ pub fn snapshot_current(target: &Path) -> Result<Option<Value>> {
         return Ok(None);
     }
     let bytes = fs::read(&config).map_err(AppError::transaction_io)?;
-    Ok(serde_json::from_slice(&bytes).ok())
+    let document: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        AppError::transaction(format!("Cannot restore malformed core.json: {error}"))
+    })?;
+    if !document.is_object() {
+        return Err(AppError::transaction("Cannot restore core.json: expected a JSON object"));
+    }
+    Ok(Some(document))
 }
 
 /// Restore only the field owned by this app. If the original document did not exist, remove the
 /// package-created core.json; otherwise keep unknown fields added after the local-mode change.
-pub fn restore_owned_with_current(
-    state_root: &Path,
-    target: &Path,
-    current_snapshot: Option<Option<Value>>,
-) -> Result<()> {
+pub fn restore_owned(state_root: &Path, target: &Path) -> Result<()> {
     let ownership = ownership_path(state_root, target);
     let Some(record) = read_record(&ownership)? else {
         return Ok(());
@@ -231,13 +243,17 @@ pub fn restore_owned_with_current(
 
     match record.original_document {
         Some(original_document) => {
-            let current = match current_snapshot {
-                Some(value) => value,
-                None => snapshot_current(target)?,
-            };
+            // Read AFTER installer restore. A pre-restore snapshot would undo
+            // restoration of every user field other than the guidelines flag.
+            let current = snapshot_current(target)?;
             match current {
                 Some(mut current) if current.is_object() => {
                     let object = current.as_object_mut().expect("checked above");
+                    if object.get(GUIDELINES_FIELD) != Some(&Value::Bool(false)) {
+                        // Installer restored it, or the user explicitly changed
+                        // it since our write. Neither is owned by this override.
+                        return discard_capture(state_root, target);
+                    }
                     match record.original_guidelines {
                         Some(value) => {
                             object.insert(GUIDELINES_FIELD.to_string(), value);
@@ -252,8 +268,18 @@ pub fn restore_owned_with_current(
             }
         }
         None => {
-            if config.is_file() {
-                fs::remove_file(&config).map_err(AppError::transaction_io)?;
+            if let Some(mut current) = snapshot_current(target)? {
+                if record.created_document.as_ref() == Some(&current) {
+                    fs::remove_file(&config).map_err(AppError::transaction_io)?;
+                } else {
+                    // This file gained user data (or has legacy ownership without
+                    // an exact fingerprint). We own one property, not that data.
+                    let object = current.as_object_mut().expect("validated object");
+                    if object.get(GUIDELINES_FIELD) == Some(&Value::Bool(false)) {
+                        object.remove(GUIDELINES_FIELD);
+                    }
+                    write_json(&config, &current)?;
+                }
             }
         }
     }
@@ -287,7 +313,7 @@ mod tests {
         current["Unknown"]["changed_after_launch"] = Value::Bool(true);
         write_json(&config, &current).unwrap();
 
-        restore_owned_with_current(&state, &target, None).unwrap();
+        restore_owned(&state, &target).unwrap();
         let restored = read_json(&config, "test").unwrap();
         assert_eq!(restored[GUIDELINES_FIELD], Value::Bool(true));
         assert_eq!(restored["Unknown"]["changed_after_launch"], Value::Bool(true));
@@ -307,9 +333,91 @@ mod tests {
         ensure_local_mode(&state, &target).unwrap();
         let current = read_json(&core_path(&target), "test").unwrap();
         assert_eq!(current[GUIDELINES_FIELD], Value::Bool(false));
-        restore_owned_with_current(&state, &target, None).unwrap();
+        restore_owned(&state, &target).unwrap();
         assert!(!core_path(&target).exists());
         assert!(example.is_file());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn installer_roundtrip_restores_user_core_for_both_manifest_policies() {
+        for policy in ["restore", "preserve-config"] {
+            let base = root(&format!("roundtrip-{policy}"));
+            let state = base.join("state");
+            let target = base.join("target");
+            let payload = base.join("payload");
+            let original = serde_json::json!({"FollowCS2ServerGuidelines": true, "UserSetting": {"keep": 17}});
+            let package = br#"{"FollowCS2ServerGuidelines":true,"PackageDefault":1}"#;
+            fs::create_dir_all(core_path(&target).parent().unwrap()).unwrap();
+            fs::create_dir_all(core_path(&payload).parent().unwrap()).unwrap();
+            write_json(&core_path(&target), &original).unwrap();
+            fs::write(core_path(&payload), package).unwrap();
+            let hash: String = Sha256::digest(package).iter().map(|byte| format!("{byte:02x}")).collect();
+            write_json(&payload.join(crate::installer::MANIFEST_FILE), &serde_json::json!({
+                "schema_version": 1, "package_version": "1.4.3.3", "entries": [{
+                    "path": CORE_CONFIG_RELATIVE, "size": package.len(), "sha256": hash,
+                    "component": "runtime", "ownership": "shared", "restore_policy": policy
+                }]
+            })).unwrap();
+            capture_before_install(&state, &target).unwrap();
+            crate::installer::install(&payload, &state, &target, false).unwrap();
+            ensure_local_mode(&state, &target).unwrap();
+            if policy == "preserve-config" {
+                assert_eq!(read_json(&core_path(&target), "test").unwrap()["UserSetting"], original["UserSetting"]);
+            }
+            crate::installer::restore(&payload, &state, &target).unwrap();
+            restore_owned(&state, &target).unwrap();
+            assert_eq!(read_json(&core_path(&target), "test").unwrap(), original);
+            fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    #[test]
+    fn restore_uses_installer_restored_document_not_installed_snapshot() {
+        let base = root("installer-restore");
+        let state = base.join("state");
+        let target = base.join("game/csgo");
+        let config = core_path(&target);
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let original = serde_json::json!({"FollowCS2ServerGuidelines": true, "UserSetting": "original"});
+        write_json(&config, &original).unwrap();
+        capture_before_install(&state, &target).unwrap();
+        write_json(&config, &serde_json::json!({"FollowCS2ServerGuidelines": false, "PackageSetting": 42})).unwrap();
+        // Installer restores its backup before the property owner runs.
+        write_json(&config, &original).unwrap();
+        restore_owned(&state, &target).unwrap();
+        assert_eq!(read_json(&config, "test").unwrap(), original);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn restore_preserves_user_data_added_to_generated_core() {
+        let base = root("generated-user-data");
+        let state = base.join("state");
+        let target = base.join("game/csgo");
+        let example = core_example_path(&target);
+        fs::create_dir_all(example.parent().unwrap()).unwrap();
+        write_json(&example, &serde_json::json!({"FollowCS2ServerGuidelines": true})).unwrap();
+        ensure_local_mode(&state, &target).unwrap();
+        write_json(&core_path(&target), &serde_json::json!({"FollowCS2ServerGuidelines": false, "UserSetting": 42})).unwrap();
+        restore_owned(&state, &target).unwrap();
+        assert_eq!(read_json(&core_path(&target), "test").unwrap(), serde_json::json!({"UserSetting": 42}));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn malformed_restore_preserves_bytes_and_ownership_for_retry() {
+        let base = root("restore-malformed");
+        let state = base.join("state");
+        let target = base.join("game/csgo");
+        let config = core_path(&target);
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        write_json(&config, &serde_json::json!({"UserSetting": 42})).unwrap();
+        ensure_local_mode(&state, &target).unwrap();
+        fs::write(&config, b"not-json").unwrap();
+        assert!(restore_owned(&state, &target).is_err());
+        assert_eq!(fs::read(&config).unwrap(), b"not-json");
+        assert!(ownership_path(&state, &target).is_file());
         fs::remove_dir_all(base).unwrap();
     }
 

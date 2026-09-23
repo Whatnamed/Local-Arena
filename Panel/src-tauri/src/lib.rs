@@ -1190,7 +1190,26 @@ fn match_launch_arguments(record_demo: bool, map: &str) -> Vec<String> {
 }
 
 #[tauri::command]
-fn prepare_and_launch_match(app: AppHandle, csgo: String, input: PrepareMatchInput) -> Result<MatchRequest> {
+async fn prepare_and_launch_match(app: AppHandle, csgo: String, input: PrepareMatchInput) -> Result<MatchRequest> {
+    run_installation_task("Match preparation", move || {
+        let _busy = online_update::OperationGuard::acquire()?;
+        let root = csgo_path(&csgo)?;
+        let saved_config = read_config(&app)?;
+        ensure_target_not_running(&root)?;
+        let saved_cosmetics = snapshot_cosmetics_files(&root)?;
+        let result = prepare_and_launch_match_impl(app.clone(), csgo, input);
+        if let Err(error) = &result {
+            let previous_mode = LaunchMode::parse(saved_config.mode.as_deref()).map_err(AppError::invalid)?;
+            restore_demo_layout(&local_state_root(&app)?, &root, previous_mode)?;
+            restore_cosmetics_files(&saved_cosmetics)?;
+            write_config(&app, &saved_config)?;
+            logging::append(&local_state_root(&app)?, "ERROR", "match.prepare.failed", &error.detail);
+        }
+        result
+    }).await
+}
+
+fn prepare_and_launch_match_impl(app: AppHandle, csgo: String, input: PrepareMatchInput) -> Result<MatchRequest> {
     let root = csgo_path(&csgo)?;
     ensure_target_not_running(&root)?;
     let state = local_state_root(&app)?;
@@ -1206,6 +1225,12 @@ fn prepare_and_launch_match(app: AppHandle, csgo: String, input: PrepareMatchInp
     apply_launch_mode(&root, LaunchMode::Bots).map_err(AppError::invalid)?;
     mode_layout::set_preview(&state, &root, false)?;
     let preparation = (|| -> Result<()> {
+        core_config::ensure_local_mode(&state, &root)?;
+        let mut config = read_config(&app)?;
+        enforce_mode_cosmetics(&root, &mut config, LaunchMode::Bots)?;
+        config.mode = Some("bots".into());
+        config.insecure = true;
+        write_config(&app, &config)?;
         let report = collect_install_checks(&payload, &state, &root, Some(&input.map_id))?;
         ensure_install_checks_pass(&report)?;
         ensure_match_components_pass(&report)
@@ -2781,51 +2806,13 @@ fn set_knife_customizer_enabled(root: &Path, enabled: bool) -> Result<Option<boo
     Ok(None)
 }
 
-fn enter_online_safety(root: &Path, app_config: &mut AppConfig) -> Result<()> {
-    let previous = set_knife_customizer_enabled(root, false)?;
-    if app_config.cosmetics_enabled_before_online.is_none() {
-        app_config.cosmetics_enabled_before_online = previous;
-    }
-    Ok(())
-}
-
-fn leave_online_safety(root: &Path, app_config: &mut AppConfig) -> Result<()> {
-    if let Some(previous) = app_config.cosmetics_enabled_before_online.take() {
-        set_knife_customizer_enabled(root, previous)?;
-    }
-    Ok(())
-}
-
-fn enter_preview_safety(root: &Path, app_config: &mut AppConfig) -> Result<()> {
-    let previous = set_knife_customizer_enabled(root, true)?;
-    if app_config.cosmetics_enabled_before_preview.is_none() {
-        app_config.cosmetics_enabled_before_preview = previous;
-    }
-    Ok(())
-}
-
-fn leave_preview_safety(root: &Path, app_config: &mut AppConfig) -> Result<()> {
-    if let Some(previous) = app_config.cosmetics_enabled_before_preview.take() {
-        set_knife_customizer_enabled(root, previous)?;
-    }
-    Ok(())
-}
-
 fn enforce_mode_cosmetics(root: &Path, app_config: &mut AppConfig, mode: LaunchMode) -> Result<()> {
-    match mode {
-        LaunchMode::Online => {
-            leave_preview_safety(root, app_config)?;
-            enter_online_safety(root, app_config)
-        }
-        LaunchMode::Preview => {
-            leave_online_safety(root, app_config)?;
-            enter_preview_safety(root, app_config)
-        }
-        LaunchMode::Bots => {
-            leave_online_safety(root, app_config)?;
-            leave_preview_safety(root, app_config)
-        }
-    }
+    // The selected mode owns the runtime switch. Per-team presets remain user
+    // data; historic Preview/Online booleans must not disable Enhanced Bots.
+    set_knife_customizer_enabled(root, mode != LaunchMode::Online)?;
+    app_config.cosmetics_enabled_before_online = None;
+    app_config.cosmetics_enabled_before_preview = None;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2891,12 +2878,8 @@ fn get_runtime_snapshot_impl(app: AppHandle) -> Result<RuntimeSnapshot> {
     let running = process.running;
     let payload = payload_root().ok();
     let state = local_state_root(&app).ok();
-    if let Some(state) = &state {
-        let _ = installer::recover_incomplete(state, &root);
-        if !running {
-            let _ = mode_layout::recover(state, &root);
-        }
-    }
+    // Polling is observational. Recovery belongs to explicit installation/mode
+    // operations, not the running -> exited snapshot (which can race a writer).
     let installation = payload
         .as_deref()
         .zip(state.as_deref())
@@ -2960,7 +2943,7 @@ async fn install_payload(app: AppHandle, csgo: String) -> Result<InstallTransact
         ensure_target_not_running(&root)?;
         ensure_steam_app_idle(&root)?;
         let config = read_config(&app)?;
-        let restore_preview = config.mode.as_deref() == Some("preview");
+        let restore_preview = config.mode.as_deref() != Some("bots");
         let captured_core = core_config::capture_before_install(&state, &root)?;
         if let Err(error) = core_config::validate_before_install(&root) {
             if captured_core {
@@ -2975,9 +2958,8 @@ async fn install_payload(app: AppHandle, csgo: String) -> Result<InstallTransact
             write_bot_randomizer_options(&root, &config.bot_items)?;
             Ok(result)
         });
-        if result.is_err() && captured_core {
-            let _ = core_config::discard_capture(&state, &root);
-        }
+        // Keep ownership on failure: install may have committed before a later
+        // config write failed. Retry/restore still needs the original property.
         match &result {
             Ok(value) => logging::append(
                 &state,
@@ -3004,7 +2986,7 @@ async fn repair_payload(app: AppHandle, csgo: String) -> Result<InstallTransacti
         ensure_target_not_running(&root)?;
         ensure_steam_app_idle(&root)?;
         let config = read_config(&app)?;
-        let restore_preview = config.mode.as_deref() == Some("preview");
+        let restore_preview = config.mode.as_deref() != Some("bots");
         let captured_core = core_config::capture_before_install(&state, &root)?;
         if let Err(error) = core_config::validate_before_install(&root) {
             if captured_core {
@@ -3019,9 +3001,7 @@ async fn repair_payload(app: AppHandle, csgo: String) -> Result<InstallTransacti
             write_bot_randomizer_options(&root, &config.bot_items)?;
             Ok(result)
         });
-        if result.is_err() && captured_core {
-            let _ = core_config::discard_capture(&state, &root);
-        }
+        // A post-install failure must retain the ownership record for restore.
         match &result {
             Ok(value) => logging::append(
                 &state,
@@ -3078,14 +3058,21 @@ fn restore_payload_impl(app: &AppHandle, csgo: &str, pristine: bool) -> Result<R
         &format!("{operation}.started"),
         &root.to_string_lossy(),
     );
-    let core_snapshot = core_config::snapshot_current(&root)?;
+    // Validate before mutation, but never use these bytes as the restore base.
+    core_config::snapshot_current(&root)?;
     let result = if pristine {
         installer::restore_pristine(&payload_root()?, &state, &root)
     } else {
         installer::restore(&payload_root()?, &state, &root)
     };
     if result.is_ok() {
-        if let Err(error) = core_config::restore_owned_with_current(&state, &root, Some(core_snapshot)) {
+        let core_restore = if pristine {
+            // Pristine restore deliberately removes the runtime, including core.json.
+            core_config::discard_capture(&state, &root)
+        } else {
+            core_config::restore_owned(&state, &root)
+        };
+        if let Err(error) = core_restore {
             logging::append(
                 &state,
                 "ERROR",
@@ -3619,7 +3606,7 @@ mod tests {
     }
 
     #[test]
-    fn online_safety_restores_the_previous_cosmetic_state() {
+    fn mode_coordination_preserves_presets() {
         let root = test_root();
         let mut config = KnifeCustomizerConfig::default();
         config.enabled = true;
@@ -3641,14 +3628,14 @@ mod tests {
         save_knife_config(&root, &mut config).unwrap();
 
         let mut app_config = AppConfig::default();
-        enter_online_safety(&root, &mut app_config).unwrap();
+        enforce_mode_cosmetics(&root, &mut app_config, LaunchMode::Online).unwrap();
 
         let saved = read_knife_config(&root).unwrap();
         assert!(!saved.enabled);
         assert_eq!(saved.loadouts.ct.knife_presets.len(), 1);
         assert_eq!(saved.loadouts.ct.knife_presets["515"].paint, 568);
         assert_eq!(saved.loadouts.ct.knife_presets["515"].stattrak_count, 99);
-        leave_online_safety(&root, &mut app_config).unwrap();
+        enforce_mode_cosmetics(&root, &mut app_config, LaunchMode::Bots).unwrap();
         let restored = read_knife_config(&root).unwrap();
         assert!(restored.enabled);
         assert!(app_config.cosmetics_enabled_before_online.is_none());
@@ -3656,20 +3643,24 @@ mod tests {
     }
 
     #[test]
-    fn preview_safety_temporarily_enables_and_restores_cosmetics() {
+    fn every_mode_transition_uses_mode_semantics_not_saved_enabled() {
         let root = test_root();
         let mut config = KnifeCustomizerConfig::default();
         config.enabled = false;
         save_knife_config(&root, &mut config).unwrap();
 
         let mut app_config = AppConfig::default();
-        enter_preview_safety(&root, &mut app_config).unwrap();
-        assert!(read_knife_config(&root).unwrap().enabled);
-        assert_eq!(app_config.cosmetics_enabled_before_preview, Some(false));
-
-        leave_preview_safety(&root, &mut app_config).unwrap();
-        assert!(!read_knife_config(&root).unwrap().enabled);
-        assert!(app_config.cosmetics_enabled_before_preview.is_none());
+        for source in [LaunchMode::Bots, LaunchMode::Preview, LaunchMode::Online] {
+            for target in [LaunchMode::Bots, LaunchMode::Preview, LaunchMode::Online] {
+                enforce_mode_cosmetics(&root, &mut app_config, source).unwrap();
+                app_config.cosmetics_enabled_before_online = Some(false);
+                app_config.cosmetics_enabled_before_preview = Some(false);
+                enforce_mode_cosmetics(&root, &mut app_config, target).unwrap();
+                assert_eq!(read_knife_config(&root).unwrap().enabled, target != LaunchMode::Online);
+                assert!(app_config.cosmetics_enabled_before_online.is_none());
+                assert!(app_config.cosmetics_enabled_before_preview.is_none());
+            }
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

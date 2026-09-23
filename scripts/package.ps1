@@ -23,7 +23,7 @@ $releaseTag = "v$displayVersion"
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot "dependencies.json") -Raw | ConvertFrom-Json
 . (Join-Path $PSScriptRoot "VpkTools.ps1")
 $cache = Join-Path $repo ".cache\package"
-$stage = Join-Path $cache "stage"
+$stage = Join-Path $cache "stage-build"
 $extract = Join-Path $cache "extract"
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo "artifacts" }
 
@@ -98,7 +98,12 @@ $botHiderZip = Get-VerifiedAsset $manifest.botHider.windowsAsset
 
 Assert-ChildPath $cache $stage
 Assert-ChildPath $cache $extract
-if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+if (Test-Path -LiteralPath $stage) {
+    if (Get-ChildItem -LiteralPath $stage -Directory -Force -Recurse -Filter '.csbip' | Select-Object -First 1) {
+        throw "Package staging contains live Panel state/backups: $stage. Preserve it before rebuilding."
+    }
+    Remove-Item -LiteralPath $stage -Recurse -Force
+}
 if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
 New-Item -ItemType Directory -Path $stage,$extract -Force | Out-Null
 
@@ -310,6 +315,12 @@ if (Test-Path -LiteralPath $webViewLoader) {
 Copy-Item -LiteralPath (Join-Path $repo "README.md") -Destination (Join-Path $releaseRoot "README.md") -Force
 Copy-Item -LiteralPath (Join-Path $repo "README.zh-CN.md") -Destination (Join-Path $releaseRoot "README.zh-CN.md") -Force
 Copy-Item -LiteralPath (Join-Path $repo "LICENSE") -Destination (Join-Path $releaseRoot "LICENSE") -Force
+$notices = Join-Path $releaseRoot "licenses"
+New-Item -ItemType Directory -Path $notices -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo "Panel/src-tauri/vendor/tao/LICENSE") -Destination (Join-Path $notices "tao-Apache-2.0.txt") -Force
+Copy-Item -LiteralPath (Join-Path $repo "Panel/src-tauri/vendor/tao/LOCAL-PATCH.md") -Destination (Join-Path $notices "tao-local-patch.md") -Force
+Copy-Item -LiteralPath (Join-Path $repo "Panel/public/media/pickers/README.md") -Destination (Join-Path $notices "picker-media.md") -Force
+Copy-Item -LiteralPath (Join-Path $repo "Panel/src/data/bundledPickerMedia.json") -Destination (Join-Path $notices "picker-media-sources.json") -Force
 if ($isPreview) {
     $packageReadme = Join-Path $releaseRoot "README.md"
     $packageReadmeZh = Join-Path $releaseRoot "README.zh-CN.md"
@@ -354,6 +365,7 @@ $manifestEntries = foreach ($topLevel in @("addons", "cfg", "overrides")) {
         else { "runtime" }
         $preserveConfig = $relative -like "*/PlayerKnifeCustomizer/player_*_presets.json" -or
             $relative -in @(
+                "addons/counterstrikesharp/configs/core.json",
                 "addons/counterstrikesharp/plugins/BotRandomizer/bot_randomizer_options.json",
                 "cfg/my_bot_ffa_config.cfg",
                 "cfg/my_bot_normal_config.cfg",
