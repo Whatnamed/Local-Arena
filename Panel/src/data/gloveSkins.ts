@@ -33,4 +33,11 @@ export function gloveSkinName(language: string | null | undefined, skin: GloveSk
   return language === "schinese" ? GLOVE_NAMES_ZH[`${skin.defindex}:${skin.paint}`] ?? skin.name : skin.name;
 }
 
+export function matchesGloveSearch(skin: GloveSkin, query: string): boolean {
+  const text = [skin.model, skin.name, skin.paint, skin.defindex,
+    gloveModelName("english", skin.defindex), gloveModelName("schinese", skin.defindex),
+    gloveModelName("tchinese", skin.defindex), gloveSkinName("schinese", skin)].join(" ").toLowerCase();
+  return query.trim().toLowerCase().split(/\s+/).every((word) => text.includes(word));
+}
+
 export { default } from "./gloveSkins.json";
