@@ -37,6 +37,8 @@ function Setup-BaseTarget {
     "dummy-old-metamod-x64-vdf" | Set-Content (Join-Path $Target "addons\metamod_x64.vdf")
     "dummy-old-css-vdf" | Set-Content (Join-Path $Target "addons\metamod\counterstrikesharp.vdf")
 
+    # Mock older PlayerKnifeCustomizer runtime sidecar
+    "dummy-old-knife-deps-content" | Set-Content (Join-Path $Target "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.deps.json")
     # Mock other plugins/cfgs that MUST NOT be touched by narrow install
     $allOtherPlugins = @(
         "BotAI", "BotAimImprover", "BotBuy", "BotControllerImpl",
@@ -73,6 +75,7 @@ Setup-BaseTarget $c1
 $vdfOriginalHash = (Get-FileHash (Join-Path $c1 "addons\metamod\BotHider.vdf") -Algorithm SHA256).Hash
 $implOriginalHash = (Get-FileHash (Join-Path $c1 "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll") -Algorithm SHA256).Hash
 $knifeOriginalHash = (Get-FileHash (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll") -Algorithm SHA256).Hash
+$knifeDepsOriginalHash = (Get-FileHash (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.deps.json") -Algorithm SHA256).Hash
 $loaderOriginalHash = (Get-FileHash (Join-Path $c1 "addons\metamod_x64.vdf") -Algorithm SHA256).Hash
 
 Write-Host "Installing Mode A..."
@@ -100,6 +103,7 @@ if ((Get-FileHash (Join-Path $c1 "addons\counterstrikesharp\plugins\BotHiderImpl
 if (-not (Test-Path (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"))) { throw "Case 1: PlayerKnifeCustomizer.dll not active" }
 if (Test-Path (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled")) { throw "Case 1: PlayerKnifeCustomizer.dll.csbip-disabled lingering" }
 if ((Get-FileHash (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll") -Algorithm SHA256).Hash -ne $knifeOriginalHash) { throw "Case 1: PlayerKnifeCustomizer.dll hash mismatch" }
+if ((Get-FileHash (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.deps.json") -Algorithm SHA256).Hash -ne $knifeDepsOriginalHash) { throw "Case 1: PlayerKnifeCustomizer.deps.json hash mismatch" }
 
 # Assert loaders restored
 if ((Get-FileHash (Join-Path $c1 "addons\metamod_x64.vdf") -Algorithm SHA256).Hash -ne $loaderOriginalHash) { throw "Case 1: metamod_x64.vdf not restored" }
@@ -280,8 +284,62 @@ if ($userCfgBefore -ne $userCfgAfter) {
 
 Write-Host "Case 6 PASSED: BotAI, RayTrace, and cfg were completely untouched during Install A." -ForegroundColor Green
 
+# -------------------------------------------------------------------
+# Case 7: Mode B PlayerKnifeCustomizer deployment completeness
+# pre-test deps.json = OLD -> Install B -> deps.json = current build -> Restore -> deps.json = OLD
+# DLL + deps come from same Release build
+# -------------------------------------------------------------------
+Write-Host "`n--- Case 7: Mode B PlayerKnifeCustomizer deployment completeness ---"
+$c7 = Join-Path $testBase "case7\game\csgo"
+Setup-BaseTarget $c7
+
+$targetKnifeDll = Join-Path $c7 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"
+$targetKnifeDeps = Join-Path $c7 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.deps.json"
+
+"pre-test-old-knife-dll" | Set-Content $targetKnifeDll
+"pre-test-old-knife-deps" | Set-Content $targetKnifeDeps
+$oldKnifeDllHash = (Get-FileHash $targetKnifeDll -Algorithm SHA256).Hash
+$oldKnifeDepsHash = (Get-FileHash $targetKnifeDeps -Algorithm SHA256).Hash
+
+Write-Host "Installing Mode B on target with old knife DLL and old deps.json..."
+& (Join-Path $PSScriptRoot "install-diagnostic.ps1") -Mode B -Cs2Root $c7
+& (Join-Path $PSScriptRoot "verify-diagnostic-install.ps1") -Mode B -Cs2Root $c7
+if ($LASTEXITCODE -ne 0) { throw "Case 7: Mode B verification failed" }
+
+$bDllHash = (Get-FileHash $targetKnifeDll -Algorithm SHA256).Hash.ToLowerInvariant()
+$bDepsHash = (Get-FileHash $targetKnifeDeps -Algorithm SHA256).Hash.ToLowerInvariant()
+
+$buildDll = Join-Path $repo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\bin\Release\net10.0\PlayerKnifeCustomizer.dll"
+$buildDeps = Join-Path $repo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\bin\Release\net10.0\PlayerKnifeCustomizer.deps.json"
+
+$expectedBuildDllHash = (Get-FileHash $buildDll -Algorithm SHA256).Hash.ToLowerInvariant()
+$expectedBuildDepsHash = (Get-FileHash $buildDeps -Algorithm SHA256).Hash.ToLowerInvariant()
+
+if ($bDllHash -ne $expectedBuildDllHash) {
+    throw "Case 7: Target knife DLL ($bDllHash) does not match current release build ($expectedBuildDllHash)"
+}
+if ($bDepsHash -ne $expectedBuildDepsHash) {
+    throw "Case 7: Target knife deps ($bDepsHash) does not match current release build ($expectedBuildDepsHash)"
+}
+Write-Host "Confirmed: Both PlayerKnifeCustomizer.dll and PlayerKnifeCustomizer.deps.json deployed from current Release build." -ForegroundColor Cyan
+
+Write-Host "Restoring pre-test state..."
+& (Join-Path $PSScriptRoot "restore-normal-install.ps1") -Cs2Root $c7
+
+$restoredDllHash = (Get-FileHash $targetKnifeDll -Algorithm SHA256).Hash
+$restoredDepsHash = (Get-FileHash $targetKnifeDeps -Algorithm SHA256).Hash
+
+if ($restoredDllHash -ne $oldKnifeDllHash) {
+    throw "Case 7: Restored knife DLL hash mismatch!"
+}
+if ($restoredDepsHash -ne $oldKnifeDepsHash) {
+    throw "Case 7: Restored knife deps hash mismatch!"
+}
+
+Write-Host "Case 7 PASSED: PlayerKnifeCustomizer.deps.json cleanly updated in B and exactly restored." -ForegroundColor Green
+
 Write-Host "`n=========================================================="
-Write-Host "ALL 6 DIAGNOSTIC TRANSACTION TEST CASES PASSED SUCCESSFULLY"
+Write-Host "ALL 7 DIAGNOSTIC TRANSACTION TEST CASES PASSED SUCCESSFULLY"
 Write-Host "=========================================================="
 
 Remove-Item -LiteralPath $testBase -Recurse -Force

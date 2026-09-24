@@ -23,6 +23,10 @@ $Global:DiagnosticTargetComponents = @(
     @{ Name = "PlayerKnifeCustomizer.dll"; Active = "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll"; Disabled = "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll.csbip-disabled" }
 )
 
+$Global:DiagnosticSidecars = @(
+    @{ Name = "PlayerKnifeCustomizer.deps.json"; Path = "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.deps.json" }
+)
+
 function Find-Cs2Root {
     param([string]$UserPath)
     if ($UserPath) {
@@ -263,6 +267,38 @@ function Ensure-DiagnosticSnapshot {
             })
         }
 
+        # 4. Back up component sidecars (e.g. PlayerKnifeCustomizer.deps.json)
+        $backedUpSidecars = [Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($sidecar in $Global:DiagnosticSidecars) {
+            $sidecarPath = Join-Path $CsgoRoot ($sidecar.Path.Replace("/", "\"))
+            $sidecarExisted = Test-Path -LiteralPath $sidecarPath
+            $sidecarSha = $null
+            $sidecarSize = $null
+            $sidecarBackup = $null
+
+            if ($sidecarExisted) {
+                $file = Get-Item -LiteralPath $sidecarPath
+                $sidecarSize = $file.Length
+                $sidecarSha = (Get-FileHash -LiteralPath $sidecarPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                $sidecarBackup = "sidecars/$($sidecar.Path)"
+                $dst = Join-Path $tmpDir ($sidecarBackup.Replace("/", "\"))
+                $dstParent = Split-Path -Parent $dst
+                if (-not (Test-Path -LiteralPath $dstParent)) { New-Item -ItemType Directory -Path $dstParent -Force | Out-Null }
+                Copy-Item -LiteralPath $sidecarPath -Destination $dst -Force
+                $dstHash = (Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($sidecarSha -ne $dstHash) { throw "Snapshot hash mismatch for $($sidecar.Path)" }
+            }
+
+            $backedUpSidecars.Add([PSCustomObject]@{
+                name = $sidecar.Name
+                relative_path = $sidecar.Path
+                existed = [bool]$sidecarExisted
+                size = $sidecarSize
+                sha256 = $sidecarSha
+                backup_path = $sidecarBackup
+            })
+        }
+
         $snapshotObj = [ordered]@{
             schema_version = 1
             created_at = (Get-Date -Format "o")
@@ -271,6 +307,7 @@ function Ensure-DiagnosticSnapshot {
             runtime_files = @($backedUpRuntimeFiles)
             loader_files = @($backedUpLoaders)
             component_states = @($backedUpComponents)
+            sidecar_files = @($backedUpSidecars)
         }
 
         $manifestJson = $snapshotObj | ConvertTo-Json -Depth 6
@@ -380,6 +417,23 @@ function Restore-DiagnosticSnapshot {
         }
     }
 
+    # Step 5.1: Restore component sidecars from snapshot
+    if ($manifest.sidecar_files) {
+        foreach ($sidecar in $manifest.sidecar_files) {
+            $targetSidecar = Join-Path $CsgoRoot ($sidecar.relative_path.Replace("/", "\"))
+            if ($sidecar.existed) {
+                $src = Join-Path $snapshotDir ($sidecar.backup_path.Replace("/", "\"))
+                $parent = Split-Path -Parent $targetSidecar
+                if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+                Copy-Item -LiteralPath $src -Destination $targetSidecar -Force
+            } else {
+                if (Test-Path -LiteralPath $targetSidecar) {
+                    Remove-Item -LiteralPath $targetSidecar -Force
+                }
+            }
+        }
+    }
+
     # Step 6: Clean diagnostic markers
     $m1 = Join-Path $CsgoRoot "diagnostic-state.json"
     if (Test-Path -LiteralPath $m1) { Remove-Item -LiteralPath $m1 -Force }
@@ -458,6 +512,22 @@ function Restore-DiagnosticSnapshot {
             $hash = (Get-FileHash -LiteralPath $disabledDst -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($hash -ne $comp.disabled_sha256) {
                 $verifyFailures.Add("Component $($comp.name) disabled hash mismatch: expected $($comp.disabled_sha256), actual $hash")
+            }
+        }
+    }
+
+    # Verify component sidecars
+    if ($manifest.sidecar_files) {
+        foreach ($sidecar in $manifest.sidecar_files) {
+            $targetSidecar = Join-Path $CsgoRoot ($sidecar.relative_path.Replace("/", "\"))
+            $targetExists = Test-Path -LiteralPath $targetSidecar
+            if ($targetExists -ne $sidecar.existed) {
+                $verifyFailures.Add("Sidecar $($sidecar.relative_path) existence mismatch: expected $($sidecar.existed), actual $targetExists")
+            } elseif ($targetExists) {
+                $actualHash = (Get-FileHash -LiteralPath $targetSidecar -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actualHash -ne $sidecar.sha256) {
+                    $verifyFailures.Add("Sidecar $($sidecar.relative_path) hash mismatch: expected $($sidecar.sha256), actual $actualHash")
+                }
             }
         }
     }

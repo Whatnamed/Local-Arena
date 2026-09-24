@@ -70,6 +70,30 @@ if (-not $expectedKnifeCustomizerHash) {
     $expectedKnifeCustomizerHash = "9e8c1f4d83962d5843865fdf1e255aa33bc714551b7c4fac7cc72b1ffa306c3b"
 }
 
+$expectedKnifeDepsHash = $null
+foreach ($cand in $manifestCandidates) {
+    if (Test-Path -LiteralPath $cand) {
+        try {
+            $payloadMan = Get-Content -LiteralPath $cand -Raw | ConvertFrom-Json
+            $entry = $payloadMan.entries | Where-Object { $_.path -eq "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.deps.json" } | Select-Object -First 1
+            if ($entry) {
+                $expectedKnifeDepsHash = $entry.sha256.ToLowerInvariant()
+                break
+            }
+        } catch {}
+    }
+}
+if (-not $expectedKnifeDepsHash) {
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $buildDeps = Join-Path $repoRoot "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\bin\Release\net10.0\PlayerKnifeCustomizer.deps.json"
+    if (Test-Path -LiteralPath $buildDeps) {
+        $expectedKnifeDepsHash = (Get-FileHash -LiteralPath $buildDeps -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+}
+if (-not $expectedKnifeDepsHash) {
+    $expectedKnifeDepsHash = "1754003da8e9b59f0783debc0a4406ffc496da38190e695d0ad1c09b105b4cc0"
+}
+
 $errors = [Collections.Generic.List[string]]::new()
 $checks = [Collections.Generic.List[PSCustomObject]]::new()
 
@@ -285,6 +309,19 @@ if ($Mode -eq "A") {
         }
         if (Test-Path -LiteralPath $knifeDllDisabled) {
             Record-Check "PlayerCosmetics Residue" "WARN" "Leftover PlayerKnifeCustomizer.dll.csbip-disabled present" $true
+        }
+    }
+
+    # Verify Mode B runtime sidecar PlayerKnifeCustomizer.deps.json
+    $targetKnifeDeps = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.deps.json"
+    if (-not (Test-Path -LiteralPath $targetKnifeDeps)) {
+        Record-Check "PlayerCosmetics Sidecar" "FAIL" "PlayerKnifeCustomizer.deps.json is missing in Mode B!" $false
+    } else {
+        $actualDepsHash = (Get-FileHash -LiteralPath $targetKnifeDeps -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualDepsHash -eq $expectedKnifeDepsHash) {
+            Record-Check "PlayerCosmetics Sidecar" "PASS" "PlayerKnifeCustomizer.deps.json is active and matches current build" $true
+        } else {
+            Record-Check "PlayerCosmetics Sidecar" "FAIL" "PlayerKnifeCustomizer.deps.json hash mismatch (not current build): $actualDepsHash" $false
         }
     }
 }

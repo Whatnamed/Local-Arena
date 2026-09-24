@@ -139,13 +139,20 @@ try {
             "disabled" | Set-Content $targetKnifeDisabled -Encoding utf8
         }
     } else {
-        # Mode B: PlayerKnifeCustomizer is ON (deploy current build DLL only, do not touch presets)
+        # Mode B: PlayerKnifeCustomizer is ON (deploy current build DLL and deps.json, do not touch presets)
         if (Test-Path -LiteralPath $targetKnifeDisabled) { Remove-Item -LiteralPath $targetKnifeDisabled -Force }
         $pkgKnifeActive = Join-Path $PackageSource "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"
         if (Test-Path -LiteralPath $pkgKnifeActive) {
             $parent = Split-Path -Parent $targetKnife
             if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
             Copy-Item -LiteralPath $pkgKnifeActive -Destination $targetKnife -Force
+        }
+        $pkgKnifeDeps = Join-Path $PackageSource "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.deps.json"
+        $targetKnifeDeps = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.deps.json"
+        if (Test-Path -LiteralPath $pkgKnifeDeps) {
+            $parent = Split-Path -Parent $targetKnifeDeps
+            if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            Copy-Item -LiteralPath $pkgKnifeDeps -Destination $targetKnifeDeps -Force
         }
     }
 
