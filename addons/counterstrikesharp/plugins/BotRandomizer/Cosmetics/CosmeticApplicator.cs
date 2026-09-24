@@ -133,6 +133,7 @@ internal sealed class CosmeticApplicator
         {
             var itemServices = pawn.ItemServices;
             if (itemServices is null || itemServices.Handle == nint.Zero) return false;
+            _setWearables.Invoke(itemServices.Handle);
             var item = pawn.EconGloves;
             if (item.AttributeList.Handle == nint.Zero || item.NetworkedDynamicAttributes.Handle == nint.Zero)
                 return false;
@@ -148,7 +149,6 @@ internal sealed class CosmeticApplicator
                 return true;
             }
 
-            _setWearables.Invoke(itemServices.Handle);
             item.ItemDefinitionIndex = selection.DefIndex;
             item.AccountID = AccountIdFromSteamId(player.SteamID);
             item.Initialized = true;

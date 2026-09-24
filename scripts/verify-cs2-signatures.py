@@ -1,6 +1,9 @@
 """Read-only signature check against an installed CS2 Windows build.
 
-Usage: python scripts/verify-cs2-signatures.py <CS2 game directory>
+Usage: python scripts/verify-cs2-signatures.py <Counter-Strike Global Offensive/game directory>
+
+Pass the directory containing both csgo/bin/win64/server.dll and
+bin/win64/engine2.dll, not the game/csgo directory used by Local Arena UI.
 """
 
 import json

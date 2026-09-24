@@ -31,9 +31,11 @@ shared-memory layout. The package script verifies the v0.3.3 DLL SHA-256 from
 
 ## Static Windows evidence
 
-`python scripts/verify-cs2-signatures.py <CS2 game directory>` scans installed
-`server.dll` and `engine2.dll` without launching CS2. For local Steam build ID
-`25472966`, all five BotHider hook patterns and all four cosmetic patterns matched
+`python scripts/verify-cs2-signatures.py <Counter-Strike Global Offensive/game directory>`
+scans installed `server.dll` and `engine2.dll` without launching CS2. Pass the
+directory containing both `csgo/bin/win64/server.dll` and
+`bin/win64/engine2.dll`, rather than Local Arena UI's `game/csgo` directory.
+For local Steam build ID `25472966`, all five BotHider hook patterns and all four cosmetic patterns matched
 exactly once. The old CounterStrikeSharp `SetModel` pattern matched zero times.
 Signature matches prove address uniqueness in that file version; they cannot prove
 hook behavior, model visibility, ownership, or inventory replication in a running game.
