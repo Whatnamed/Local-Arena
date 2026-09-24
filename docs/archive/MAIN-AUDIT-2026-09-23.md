@@ -1,5 +1,7 @@
 # Personal main audit — 2026-09-23
 
+> 历史证据，不是 current truth。长期事实见 [`docs/README.md`](../README.md)。
+
 Baseline: `Whatnamed/Local-Arena` remote main and local main both
 `e21c7db140ff16a6e4018636b117db9e83887d0d`; initially clean.
 Only `E:\CS2MOD\main` was used. No experimental implementation or build output

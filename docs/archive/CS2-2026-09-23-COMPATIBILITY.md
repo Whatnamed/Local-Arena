@@ -1,5 +1,7 @@
 # CS2 2026-09-23 Windows runtime compatibility
 
+> 历史证据，不是 current truth。长期事实见 [`docs/README.md`](../README.md)。
+
 This patch targets the installed CS2 build with Steam appmanifest build ID `25472966`.
 It changes only the native compatibility layer. Game behavior remains subject to
 [`MANUAL-ACCEPTANCE.md`](../MANUAL-ACCEPTANCE.md).

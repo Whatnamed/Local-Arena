@@ -1,5 +1,7 @@
 # Upstream v1.4.4 compatibility review
 
+> 历史证据，不是 current truth。长期事实见 [`docs/README.md`](../README.md)。
+
 Review date: 2026-09-23
 
 Local Arena source baseline: `ed0ard/CS2-Bot-Improver` `v1.4.3` / `d1d83982db88fbdb686b2bf13aa8c6f9d65a4604`
