@@ -8,7 +8,7 @@
 Panel/src-tauri/gen/schemas/
 artifacts/
 
-# Repository-local caches and portable toolchains
+# Repository-local caches and package stores
 .cache/
 .local-build.ps1
 .cargo/
