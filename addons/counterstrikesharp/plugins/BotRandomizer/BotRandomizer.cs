@@ -10,6 +10,7 @@ using CounterStrikeSharp.API.Modules.Memory.DynamicFunctions;
 using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Utils;
 using Microsoft.Extensions.Logging;
+using LocalArena.Cosmetics;
 
 namespace BotRandomizer;
 
@@ -101,33 +102,35 @@ public sealed class BotRandomizerPlugin : BasePlugin
         try
         {
             writer = new MemoryFunctionWithReturn<nint, string, float, int>(
-                RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
-                    ? "55 48 89 E5 41 57 41 56 49 89 FE 41 55 41 54 53 48 89 F3 48 83 EC ? F3 0F 11 85"
-                    : "40 53 55 41 56 48 81 EC ? ? ? ? 0F 29 74 24");
+                CosmeticNativeSignatures.AttributeWriter);
         }
         catch (Exception exception)
         {
             Logger.LogError(
                 exception,
-                "[BotRandomizer] SetOrAddAttributeValueByName signature failed; economic cosmetics disabled");
+                "[BotRandomizer] econ attributes unavailable; economic cosmetics disabled");
         }
 
-        _applicator = new CosmeticApplicator(writer, Logger);
+        MemoryFunctionVoid<nint>? setWearables = null;
+        try { setWearables = new MemoryFunctionVoid<nint>(CosmeticNativeSignatures.SetWearables); }
+        catch (Exception exception) { Logger.LogError(exception, "[BotRandomizer] gloves unavailable"); }
+        MemoryFunctionVoid<nint, string>? setModel = null;
+        try { setModel = new MemoryFunctionVoid<nint, string>(CosmeticNativeSignatures.SetModel); }
+        catch (Exception exception) { Logger.LogError(exception, "[BotRandomizer] agent/model unavailable"); }
+        _applicator = new CosmeticApplicator(writer, setWearables, setModel, Logger);
         MemoryFunctionWithReturn<nint, nint>? itemViewConstructor = null;
         if (writer is not null)
         {
             try
             {
                 itemViewConstructor = new MemoryFunctionWithReturn<nint, nint>(
-                    RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
-                        ? "55 48 8D 05 ? ? ? ? 66 0F EF C0 48 89 E5 41 57 45 31 FF"
-                        : "48 89 5C 24 ? 48 89 6C 24 ? 48 89 74 24 ? 57 41 54 41 55 41 56 41 57 48 83 EC ? 48 8B F9 48 8D 05");
+                    CosmeticNativeSignatures.ItemViewConstructor);
             }
             catch (Exception exception)
             {
                 Logger.LogError(
                     exception,
-                    "[BotRandomizer] CEconItemView constructor signature failed; weapon cosmetics disabled");
+                    "[BotRandomizer] item-view unavailable; weapon cosmetics disabled");
             }
         }
         _weaponItemViews = new WeaponItemViewStore(itemViewConstructor, writer, Logger);
@@ -185,6 +188,7 @@ public sealed class BotRandomizerPlugin : BasePlugin
 
             ApplyIdentity(player, pawn, current, CosmeticScope.Agent | CosmeticScope.MusicKit);
             ApplyWearables(player, pawn, current);
+            ScheduleAgentRetry(slot, userId, generation, 0.25f);
             ScheduleWearableRetry(slot, userId, generation, 0.10f);
             ScheduleWearableRetry(slot, userId, generation, 0.25f);
         });
@@ -414,6 +418,16 @@ public sealed class BotRandomizerPlugin : BasePlugin
         }, TimerFlags.STOP_ON_MAPCHANGE);
     }
 
+    private void ScheduleAgentRetry(int slot, int userId, long generation, float delay)
+    {
+        if (!_options.Agents) return;
+        AddTimer(delay, () =>
+        {
+            if (TryResolveCurrentBot(slot, userId, generation, out _, out var pawn, out var state))
+                _applicator?.ApplyAgent(pawn, state.Loadout.AgentModel);
+        }, TimerFlags.STOP_ON_MAPCHANGE);
+    }
+
     private void ScheduleKnifeSync(
         int slot,
         int userId,
@@ -492,6 +506,8 @@ public sealed class BotRandomizerPlugin : BasePlugin
                 return;
 
             ApplyIdentity(currentPlayer, pawn, current, scope);
+            if ((scope & CosmeticScope.Agent) != 0)
+                ScheduleAgentRetry(slot, userId, generation, 0.25f);
             var wearableScope = scope & (CosmeticScope.Knife | CosmeticScope.Gloves);
             if (wearableScope != CosmeticScope.None)
             {

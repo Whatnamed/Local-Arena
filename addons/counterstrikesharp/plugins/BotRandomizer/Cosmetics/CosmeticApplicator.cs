@@ -9,15 +9,21 @@ namespace BotRandomizer;
 internal sealed class CosmeticApplicator
 {
     private readonly MemoryFunctionWithReturn<nint, string, float, int>? _setAttributeByName;
+    private readonly MemoryFunctionVoid<nint>? _setWearables;
+    private readonly MemoryFunctionVoid<nint, string>? _setModel;
     private readonly ILogger _logger;
     private readonly Dictionary<int, AppliedKnifeCosmetic> _appliedKnives = [];
     private readonly Dictionary<int, AppliedGloveCosmetic> _appliedGloves = [];
 
     internal CosmeticApplicator(
         MemoryFunctionWithReturn<nint, string, float, int>? setAttributeByName,
+        MemoryFunctionVoid<nint>? setWearables,
+        MemoryFunctionVoid<nint, string>? setModel,
         ILogger logger)
     {
         _setAttributeByName = setAttributeByName;
+        _setWearables = setWearables;
+        _setModel = setModel;
         _logger = logger;
     }
 
@@ -37,10 +43,10 @@ internal sealed class CosmeticApplicator
 
     internal void ApplyAgent(CCSPlayerPawn pawn, string model)
     {
-        if (!pawn.IsValid)
+        if (!pawn.IsValid || _setModel is null)
             return;
 
-        pawn.SetModel(model);
+        _setModel.Invoke(pawn.Handle, model);
         Utilities.SetStateChanged(pawn, "CBaseEntity", "m_CBodyComponent");
         var color = pawn.Render;
         pawn.Render = Color.FromArgb(255, color.R, color.G, color.B);
@@ -52,7 +58,7 @@ internal sealed class CosmeticApplicator
         CCSPlayerPawn pawn,
         KnifeSelection selection)
     {
-        if (!pawn.IsValid)
+        if (!pawn.IsValid || _setAttributeByName is null)
             return;
 
         try
@@ -70,7 +76,8 @@ internal sealed class CosmeticApplicator
                     continue;
 
                 var item = weapon.AttributeManager?.Item;
-                if (item is null)
+                if (item is null || item.AttributeList.Handle == nint.Zero
+                    || item.NetworkedDynamicAttributes.Handle == nint.Zero)
                     return;
 
                 var fingerprint = KnifeCosmeticFingerprint.From(selection);
@@ -87,21 +94,18 @@ internal sealed class CosmeticApplicator
                 weapon.AcceptInput("ChangeSubclass", value: selection.DefIndex.ToString());
                 item.ItemDefinitionIndex = selection.DefIndex;
                 item.EntityQuality = 3;
-                if (_setAttributeByName is not null)
-                {
-                    item.AttributeList.Attributes.RemoveAll();
-                    item.NetworkedDynamicAttributes.Attributes.RemoveAll();
-                    AssignItemId(item);
-                    weapon.FallbackPaintKit = selection.PaintKit;
-                    weapon.FallbackSeed = 0;
-                    weapon.FallbackWear = selection.Wear;
-                    SetTextureAttributes(
-                        item.NetworkedDynamicAttributes,
-                        item.AttributeList,
-                        selection.PaintKit,
-                        0,
-                        selection.Wear);
-                }
+                item.AttributeList.Attributes.RemoveAll();
+                item.NetworkedDynamicAttributes.Attributes.RemoveAll();
+                AssignItemId(item);
+                weapon.FallbackPaintKit = selection.PaintKit;
+                weapon.FallbackSeed = 0;
+                weapon.FallbackWear = selection.Wear;
+                SetTextureAttributes(
+                    item.NetworkedDynamicAttributes,
+                    item.AttributeList,
+                    selection.PaintKit,
+                    0,
+                    selection.Wear);
                 Utilities.SetStateChanged(weapon, "CEconEntity", "m_AttributeManager");
                 _appliedKnives[player.Slot] = new AppliedKnifeCosmetic(
                     pawn.EntityHandle.Raw,
@@ -122,12 +126,16 @@ internal sealed class CosmeticApplicator
         CCSPlayerPawn pawn,
         GloveSelection selection)
     {
-        if (_setAttributeByName is null || !pawn.IsValid)
+        if (_setAttributeByName is null || _setWearables is null || !pawn.IsValid)
             return false;
 
         try
         {
+            var itemServices = pawn.ItemServices;
+            if (itemServices is null || itemServices.Handle == nint.Zero) return false;
             var item = pawn.EconGloves;
+            if (item.AttributeList.Handle == nint.Zero || item.NetworkedDynamicAttributes.Handle == nint.Zero)
+                return false;
             var fingerprint = GloveCosmeticFingerprint.From(selection);
             if (_appliedGloves.TryGetValue(player.Slot, out var applied)
                 && applied.PawnHandle == pawn.EntityHandle.Raw
@@ -140,6 +148,7 @@ internal sealed class CosmeticApplicator
                 return true;
             }
 
+            _setWearables.Invoke(itemServices.Handle);
             item.ItemDefinitionIndex = selection.DefIndex;
             item.AccountID = AccountIdFromSteamId(player.SteamID);
             item.Initialized = true;
@@ -229,8 +238,9 @@ internal sealed class CosmeticApplicator
 
     private void SetAttribute(CAttributeList attributes, string name, float value)
     {
-        if (_setAttributeByName is not null && attributes.Handle != IntPtr.Zero)
-            _setAttributeByName.Invoke(attributes.Handle, name, value);
+        if (_setAttributeByName is null || attributes.Handle == nint.Zero)
+            throw new InvalidOperationException("econ attribute list unavailable");
+        _setAttributeByName.Invoke(attributes.Handle, name, value);
     }
 
     private static void AssignItemId(CEconItemView item)

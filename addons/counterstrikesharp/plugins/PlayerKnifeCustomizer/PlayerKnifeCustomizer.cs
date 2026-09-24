@@ -11,6 +11,7 @@ using CounterStrikeSharp.API.Modules.Memory.DynamicFunctions;
 using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Utils;
 using Microsoft.Extensions.Logging;
+using LocalArena.Cosmetics;
 
 namespace PlayerKnifeCustomizer;
 
@@ -199,7 +200,9 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private readonly Dictionary<ushort, List<WeaponSkinEntry>> _skinCatalog = new();
     private readonly HashSet<(ushort DefIndex, int Paint)> _legacyPaints = new();
     private KnifeConfig _config = new();
-    private MemoryFunctionVoid<nint, string, float>? _setAttrByName;
+    private MemoryFunctionWithReturn<nint, string, float, int>? _setAttrByName;
+    private MemoryFunctionVoid<nint>? _setWearables;
+    private MemoryFunctionVoid<nint, string>? _setModel;
     private ulong _nextItemId = 0xC5200000;
     private readonly ApplyErrorThrottle _applyErrorThrottle = new(TimeSpan.FromSeconds(30));
     private int _loadedConfigSchema = KnifeConfig.CurrentSchemaVersion;
@@ -231,16 +234,18 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
         try
         {
-            _setAttrByName = new MemoryFunctionVoid<nint, string, float>(
-                RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
-                    ? "55 48 89 E5 41 57 41 56 49 89 FE 41 55 41 54 53 48 89 F3 48 83 EC ? F3 0F 11 85"
-                    : "40 53 55 41 56 48 81 EC 90 00 00 00");
+            _setAttrByName = new MemoryFunctionWithReturn<nint, string, float, int>(
+                CosmeticNativeSignatures.AttributeWriter);
         }
         catch (Exception ex)
         {
-            Logger.LogError("[PlayerKnifeCustomizer] Attribute signature unavailable: {Message}", ex.Message);
+            Logger.LogError("[PlayerKnifeCustomizer] econ attributes unavailable: {Message}", ex.Message);
             _setAttrByName = null;
         }
+        try { _setWearables = new MemoryFunctionVoid<nint>(CosmeticNativeSignatures.SetWearables); }
+        catch (Exception ex) { Logger.LogError("[PlayerKnifeCustomizer] gloves unavailable: {Message}", ex.Message); }
+        try { _setModel = new MemoryFunctionVoid<nint, string>(CosmeticNativeSignatures.SetModel); }
+        catch (Exception ex) { Logger.LogError("[PlayerKnifeCustomizer] agent/model unavailable: {Message}", ex.Message); }
 
         RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
         RegisterEventHandler<EventRoundMvp>(OnRoundMvp, HookMode.Pre);
@@ -496,7 +501,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             return;
 
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Agent,
-            () => TryApplyAgent(readyPawn, readyTeam), "agent pipeline");
+            () => TryApplyAgent(playerHandle, readyPawn, readyTeam), "agent pipeline");
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Knife,
             () => TryApplyDefaultKnife(playerHandle, readyPawn, readyTeam), "knife pipeline");
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Gloves,
@@ -525,7 +530,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         }
     }
 
-    private bool TryApplyAgent(CCSPlayerPawn pawn, CosmeticTeam team)
+    private bool TryApplyAgent(nint playerHandle, CCSPlayerPawn pawn, CosmeticTeam team)
     {
         if (!_config.AgentsEnabled) return true;
         string model = _config.Loadouts.For(team).AgentModel;
@@ -535,9 +540,21 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             LogApplyError($"agent for {team}", new InvalidDataException("Agent model is unavailable in the local catalog"));
             return true;
         }
-        if (!pawn.IsValid) return false;
-        pawn.SetModel(model);
+        if (!pawn.IsValid || _setModel is null) return false;
+        _setModel.Invoke(pawn.Handle, model);
+        Utilities.SetStateChanged(pawn, "CBaseEntity", "m_CBodyComponent");
         Utilities.SetStateChanged(pawn, "CBaseModelEntity", "m_clrRender");
+        nint pawnHandle = pawn.Handle;
+        AddTimer(0.25f, () =>
+        {
+            var player = ResolvePlayer(playerHandle);
+            var currentPawn = player?.PlayerPawn.Value;
+            if (currentPawn is not { IsValid: true } || currentPawn.Handle != pawnHandle
+                || GetCosmeticTeam(player) != team || !CanApplyToPlayer(player)
+                || _setModel is null || !AgentModelPolicy.IsAllowed(team, model, _agentModels)) return;
+            _setModel.Invoke(currentPawn.Handle, model);
+            Utilities.SetStateChanged(currentPawn, "CBaseEntity", "m_CBodyComponent");
+        }, TimerFlags.STOP_ON_MAPCHANGE);
         return true;
     }
 
@@ -1132,20 +1149,27 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         var preset = _config.Loadouts.For(team).Glove;
         if (!preset.Enabled) return true;
-        if (_setAttrByName == null || preset.DefIndex == 0 || preset.Paint <= 0) return false;
+        if (_setAttrByName == null || _setWearables == null || preset.DefIndex == 0 || preset.Paint <= 0) return false;
 
         try
         {
+            var itemServices = pawn.ItemServices;
+            if (itemServices is null || itemServices.Handle == nint.Zero) return false;
+            var player = ResolvePlayer(playerHandle);
+            if (player is null) return false;
+            _setWearables.Invoke(itemServices.Handle);
             var item = pawn.EconGloves;
             if (!HasReadyAttributeLists(item)) return false;
             item.NetworkedDynamicAttributes.Attributes.RemoveAll();
             item.AttributeList.Attributes.RemoveAll();
             item.ItemDefinitionIndex = preset.DefIndex;
+            item.AccountID = unchecked((uint)player.SteamID);
             AssignItemId(item);
 
             SetTextureAttributes(item.NetworkedDynamicAttributes.Handle, preset.Paint, preset.Seed, preset.Wear);
             SetTextureAttributes(item.AttributeList.Handle, preset.Paint, preset.Seed, preset.Wear);
             item.Initialized = true;
+            Utilities.SetStateChanged(pawn, "CCSPlayerPawn", "m_EconGloves");
 
             pawn.AcceptInput("SetBodygroup", value: "first_or_third_person,0");
             nint pawnHandle = pawn.Handle;
@@ -1173,7 +1197,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private void SetTextureAttributes(nint handle, int paint, int seed, float wear)
     {
-        if (handle == nint.Zero) return;
+        if (handle == nint.Zero) throw new InvalidOperationException("econ attribute list unavailable");
         _setAttrByName!.Invoke(handle, "set item texture prefab", paint);
         _setAttrByName.Invoke(handle, "set item texture seed", seed);
         _setAttrByName.Invoke(handle, "set item texture wear", wear);
