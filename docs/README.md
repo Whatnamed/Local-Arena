@@ -23,12 +23,11 @@
 - `archive/Local-Arena-v1.4.3.2-richer-cosmetics-compatibility.md`
 - `archive/ACCEPTANCE-RECORD-2026-09.md`
 
-## Release notes
+## Release / version records
 
-`releases/` 按版本保存已发布构建的说明，同样属于历史记录。
-
-- `releases/Local-Arena-v1.4.3.1.md`
-- `releases/Local-Arena-v1.4.3.3-CS2SS.md`
+`releases/` 按版本组织 release 与 version records。某一版是否真的发布过，以该文档自身的说明为准，
+本索引不作推断：`releases/Local-Arena-v1.4.3.1.md` 是已发布版本的公告，而
+`releases/Local-Arena-v1.4.3.3-CS2SS.md` 只是版本集成与发布准备记录。两者都属于历史记录。
 
 ## 不属于 docs
 

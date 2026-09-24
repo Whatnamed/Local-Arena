@@ -1,6 +1,7 @@
 # Local Arena 1.4.3.3 - CS2SS integration
 
-> 已发布版本的说明记录，不是当前状态。长期事实见 [`docs/README.md`](../README.md)。
+> 版本集成与发布准备的历史记录，**不代表该版本已实际发布**（见下文 Release boundary），也不是当前状态。
+> 长期事实见 [`docs/README.md`](../README.md)。
 
 Local Arena 1.4.3.3 integrates the CS2SS telemetry and statistics work from
 PR #20. The contribution was merged with a normal merge commit so the original
