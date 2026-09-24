@@ -21,7 +21,7 @@ The machine-readable source of truth is `scripts/dependencies.json`.
 - MetaMod 2.0.0-git1406 supplies the engine 26 loader.
 - CounterStrikeSharp v1.0.371 with its bundled .NET runtime replaces the stale v1.4.1 copy.
 - RayTrace v1.0.16 supplies both the native module and CounterStrikeSharp API/implementation.
-- `BotHider-windows-0.3.0.zip` supplies the native BotHider module.
+- `BotHider-windows-0.3.3.zip` supplies the native BotHider module; Local Arena overlays the Windows gamedata values recorded in [the 2026-09-23 compatibility note](CS2-2026-09-23-COMPATIBILITY.md).
 - BotAI includes the tested Windows signature refresh from upstream PR #75 (`3db93ba`).
 - BotAI, BotAimImprover, BotBuy, and NadeSystem are rebuilt from the pinned source tree so post-v1.4.1 fixes are not
   replaced by older release DLLs.
@@ -47,7 +47,7 @@ Weapon images and localized skin names are derived from `Nereziel/cs2-WeaponPain
 English fallback because that source does not provide an Indonesian skin-name table. This fallback affects display
 only; item application uses numeric catalog identifiers.
 
-BotHider is maintained at `XBribo/CS2-Bot-Hider`. The package tracks v0.3.0, which supplies the current Windows
+BotHider is maintained at `XBribo/CS2-Bot-Hider`. The package tracks v0.3.3, which supplies the Windows
 identity synchronization, team-join scope, entity-packing protection, and gamedata-driven
 `CServerSideClient::SetName` target. Packaging verifies the official release archive and native DLL hashes without
 binary patching.

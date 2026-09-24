@@ -68,6 +68,13 @@
 
 ### 2026-09-23 main 审计后的定向实机项（尚未通过）
 
+2026-09-24 compatibility patch 的源码和 Windows binary signature 已静态核对；以下运行中行为仍未实机确认：
+
+- [ ] Enhanced Bots：Human CT/T 刀、手套、枪械 preset，以及拾取已有武器后应用当前阵营 preset；确认无错误材质或贴图。
+- [ ] 快捷切刀按现有顺序至少完整循环 5 圈；型号和皮肤均正确，无 client error、丢刀或残留旧刀。
+- [ ] Retakes：初始刀、选择 loadout 后的刀、手套、枪皮，以及换队/换回合后的重新应用。
+- [ ] Bot：CT/T agent、枪皮、刀、手套、profile/avatar/Steam identity/fake ping；确认名字、行为、music 保持正常，并记录 BotHider hook status。
+
 - [ ] 针对 CS2 `1.41.8.2` / build `2000913`，在 Windows Local Arena 环境确认 MetaMod 2.0.0-git1406、CounterStrikeSharp 1.0.371、RayTrace 1.0.16 和 BotHider 0.3.3 的实际加载与运行；构建成功不代表该组合已兼容本次 Source 2 更新。
 - [ ] BotHider 需单独确认 hook 初始化以及 Bot name、agent、weapon skin、SteamID 行为。[上游 Windows issue #35](https://github.com/XBribo/CS2-Bot-Hider/issues/35) 报告更新后这些功能失效并有 `MaintainBotQuota`、`PackEntities`、`HumanTeamRestriction`、`SameMapTeardown` hook 未解析；issue 未给出明确版本，latest v0.4.4 也早于本次更新。
 - [ ] 确认 BotState 在 Deathmatch 中不会因临时 T/CT team number 把存活 Bot 锁到刀具；同时确认 BotController API 14 与随当前 v1.4.3 package payload 的 native DLL 配套加载。

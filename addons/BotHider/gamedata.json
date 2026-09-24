@@ -11,7 +11,7 @@
   "CCSBotManager::MaintainBotQuota": {
     "signatures": {
       "library": "server",
-      "windows": "40 55 41 56 48 8D 6C 24 ? 48 81 EC ? ? ? ? 4C 8B F1 FF 15",
+      "windows": "40 55 41 57 48 8D 6C 24 ? 48 81 EC ? ? ? ? 4C 8B F9 FF 15",
       "linux": "55 31 F6 48 89 E5 41 57 41 56 49 89 FE 31 FF 41 55 41 54 53 48 83 EC 28"
     },
     "comment": "runs the bot quota pass"
@@ -27,7 +27,7 @@
   "MpHumanTeam_ApplyRestriction": {
     "signatures": {
       "library": "server",
-      "windows": "40 55 48 8D 6C 24 ? 48 81 EC ? ? ? ? BA",
+      "windows": "40 55 57 48 8D 6C 24 ? 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 8D 0D",
       "linux": ""
     },
     "comment": "applies the human team restriction"
@@ -35,7 +35,7 @@
   "CNetworkGameServer::PackEntities": {
     "signatures": {
       "library": "engine2",
-      "windows": "4C 89 4C 24 ? 44 89 44 24 ? 48 89 54 24 ? 48 89 4C 24 ? 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 ? ? ? ? B8 ? ? ? ? E8 ? ? ? ? 48 2B E0 4D 63 F8",
+      "windows": "4C 89 4C 24 ? 44 89 44 24 ? 48 89 54 24 ? 48 89 4C 24 ? 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 ? ? ? ? B8 ? ? ? ? E8 ? ? ? ? 48 2B E0 4C 8B E9",
       "linux": ""
     },
     "comment": "packs network entities for clients"
@@ -91,7 +91,7 @@
   },
   "CNetworkGameServerBase::m_Clients": {
     "offsets": {
-      "windows": 584,
+      "windows": 616,
       "linux": 584
     },
     "comment": "CUtlVector<CServerSideClient*> base offset"

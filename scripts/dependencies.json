@@ -49,6 +49,7 @@
   "botHider": {
     "repository": "https://github.com/XBribo/CS2-Bot-Hider",
     "release": "v0.3.3",
+    "gamedataWindowsSourceCommit": "941e642b35f649b4cf08005c2049e57519cfaefa",
     "windowsAsset": {
       "name": "BotHider-windows-0.3.3.zip",
       "url": "https://github.com/XBribo/CS2-Bot-Hider/releases/download/v0.3.3/BotHider-windows-0.3.3.zip",

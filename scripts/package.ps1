@@ -5,6 +5,7 @@ param(
     [string]$Rustc,
     [string]$RustToolchain,
     [string]$OutputDirectory,
+    [string]$CacheKey,
     [string]$ReleaseVersion = "1.4.3.3",
     [switch]$SkipBuild,
     [switch]$SkipNpmInstall
@@ -21,8 +22,12 @@ $releaseTag = "v$displayVersion"
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot "dependencies.json") -Raw | ConvertFrom-Json
 . (Join-Path $PSScriptRoot "VpkTools.ps1")
 $cache = Join-Path $repo ".cache\package"
-$stage = Join-Path $cache "stage-build"
-$extract = Join-Path $cache "extract"
+if ($CacheKey -and $CacheKey -notmatch '^[A-Za-z0-9-]+$') {
+    throw "CacheKey may contain only letters, digits and hyphens."
+}
+$suffix = if ($CacheKey) { "-$CacheKey" } else { "" }
+$stage = Join-Path $cache "stage-build$suffix"
+$extract = Join-Path $cache "extract$suffix"
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo "artifacts\main-personal" }
 
 function Get-VerifiedAsset {

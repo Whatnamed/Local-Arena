@@ -100,6 +100,8 @@ else {
         "addons/counterstrikesharp/plugins/BotBuy/BotBuy.cs",
         "addons/counterstrikesharp/plugins/BotBuy/BotBuy.csproj",
         "addons/counterstrikesharp/plugins/BotRandomizer/BotRandomizer.cs",
+        "addons/counterstrikesharp/plugins/BotRandomizer/BotRandomizer.csproj",
+        "addons/counterstrikesharp/plugins/BotRandomizer/Cosmetics/CosmeticApplicator.cs",
         "addons/counterstrikesharp/plugins/BotRandomizer/Cosmetics/CosmeticModels.cs",
         "addons/counterstrikesharp/plugins/BotRandomizer/bot_randomizer_options.json",
         "addons/counterstrikesharp/plugins/BotControllerImpl/BotControllerImpl.csproj",
@@ -256,6 +258,7 @@ $requiredSources = @(
     "addons/counterstrikesharp/plugins/BotControllerImpl/BotControllerImplPlugin.cs",
     "addons/counterstrikesharp/plugins/BotRandomizer/bot_randomizer_options.json",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.cs",
+    "addons/counterstrikesharp/shared/CosmeticNativeSignatures.cs",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_weapon_ids.json",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
     "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImplPlugin.cs",
@@ -286,7 +289,7 @@ if ($playerCosmetics -notmatch 'IsBot: false, IsHLTV: false' -or
     $playerCosmetics -notmatch 'DecorationReleaseEnabled = true' -or
     $playerCosmetics -notmatch 'CharmAttributePlanner' -or
     -not $playerCosmetics.Contains('CosmeticApplyPhase.Agent') -or
-    -not $playerCosmetics.Contains('pawn.SetModel(model)') -or
+    -not $playerCosmetics.Contains('_setModel.Invoke(pawn.Handle, model)') -or
     $playerCosmetics -notmatch 'player_cosmetic_catalog.json') {
     Add-Failure "Player cosmetics must remain human-only with catalog-validated sticker, charm, and agent planning."
 }
@@ -480,6 +483,12 @@ if ($botHiderGameData -notmatch '"CServerSideClient::SetName"' -or
     $botHiderGameData -notmatch '"CNetworkGameServer::PackEntities"') {
     Add-Failure "BotHider gamedata no longer contains the v0.3.3 name and identity targets."
 }
+$botHiderData = $botHiderGameData | ConvertFrom-Json
+if ($botHiderData.'CNetworkGameServerBase::m_Clients'.offsets.windows -ne 616 -or
+    $botHiderData.'CCSBotManager::MaintainBotQuota'.signatures.windows -notlike '40 55 41 57*' -or
+    $botHiderData.'CNetworkGameServer::PackEntities'.signatures.windows -notlike '*4C 8B E9') {
+    Add-Failure "BotHider gamedata is missing the Windows 2026-09-23 compatibility targets."
+}
 foreach ($difficulty in @("Low", "Medium", "High")) {
     $profilePath = Join-Path $repo "overrides/$difficulty/botprofile.db"
     $profile = Get-Content -LiteralPath $profilePath -Raw
@@ -606,6 +615,12 @@ if ($PackageRoot) {
     $linuxBotHiderVdf = Join-Path $package "addons/metamod/BotHider.linux.vdf"
     if (Test-Path -LiteralPath $linuxBotHiderVdf) {
         Add-Failure "Windows package contains the Linux BotHider loader."
+    }
+    $packagedBotHiderData = Join-Path $package "addons/BotHider/gamedata.json"
+    if ((Test-Path -LiteralPath $packagedBotHiderData) -and
+        ((Get-FileHash -LiteralPath $packagedBotHiderData -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath (Join-Path $repo "addons/BotHider/gamedata.json") -Algorithm SHA256).Hash)) {
+        Add-Failure "Package BotHider gamedata is not the current source version."
     }
     $packagedGameInfo = @(Get-ChildItem -LiteralPath $package -Recurse -Filter "gameinfo.gi" -File)
     if ($packagedGameInfo.Count -gt 0) {
@@ -756,6 +771,7 @@ if ($PackageRoot) {
         @{ Name = "BotBuy"; Framework = "net8.0" },
         @{ Name = "BotControllerImpl"; Framework = "net10.0" },
         @{ Name = "BotRandomizer"; Framework = "net10.0" },
+        @{ Name = "PlayerKnifeCustomizer"; Framework = "net10.0" },
         @{ Name = "NadeSystem"; Framework = "net10.0" },
         @{ Name = "RoundDamageRecap"; Framework = "net10.0" }
         @{ Name = "PlusMatchCoordinator"; Framework = "net8.0" }
