@@ -69,3 +69,6 @@ temp/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Diagnostic generated artifacts
+scripts/diagnostic-runtime-manifest.json

@@ -11,19 +11,16 @@ $Global:DiagnosticRuntimeTrees = @(
     "addons/counterstrikesharp/source"
 )
 
+$Global:DiagnosticRuntimeLoaders = @(
+    "addons/metamod_x64.vdf",
+    "addons/metamod.vdf",
+    "addons/metamod/counterstrikesharp.vdf"
+)
+
 $Global:DiagnosticTargetComponents = @(
     @{ Name = "BotHider.vdf"; Active = "addons/metamod/BotHider.vdf"; Disabled = "addons/metamod/BotHider.vdf.csbip-disabled" },
     @{ Name = "BotHiderImpl.dll"; Active = "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImpl.dll"; Disabled = "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImpl.dll.csbip-disabled" },
     @{ Name = "PlayerKnifeCustomizer.dll"; Active = "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll"; Disabled = "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll.csbip-disabled" }
-)
-
-$Global:DiagnosticPreservedConfigs = @(
-    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_knife_presets.json",
-    "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_gun_presets.json",
-    "addons/counterstrikesharp/plugins/BotRandomizer/bot_randomizer_options.json",
-    "cfg/my_bot_ffa_config.cfg",
-    "cfg/my_bot_normal_config.cfg",
-    "overrides/botprofile.vpk"
 )
 
 function Find-Cs2Root {
@@ -69,23 +66,41 @@ function Find-Cs2Root {
 
 function New-DiagnosticRuntimeManifest {
     param([string]$StageRoot)
-    $entries = foreach ($tree in $Global:DiagnosticRuntimeTrees) {
+    $entries = [Collections.Generic.List[PSCustomObject]]::new()
+
+    # 1. Runtime-owned trees
+    foreach ($tree in $Global:DiagnosticRuntimeTrees) {
         $fullPath = Join-Path $StageRoot ($tree.Replace("/", "\"))
         if (Test-Path -LiteralPath $fullPath) {
             foreach ($file in Get-ChildItem -LiteralPath $fullPath -File -Recurse) {
                 $rel = [IO.Path]::GetRelativePath($StageRoot, $file.FullName).Replace("\", "/")
-                [ordered]@{
+                $entries.Add([ordered]@{
                     path = $rel
                     size = $file.Length
                     sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-                }
+                })
             }
         }
     }
+
+    # 2. Runtime loader entries
+    foreach ($loader in $Global:DiagnosticRuntimeLoaders) {
+        $loaderPath = Join-Path $StageRoot ($loader.Replace("/", "\"))
+        if (Test-Path -LiteralPath $loaderPath) {
+            $file = Get-Item -LiteralPath $loaderPath
+            $entries.Add([ordered]@{
+                path = $loader
+                size = $file.Length
+                sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            })
+        }
+    }
+
     return [ordered]@{
         schema_version = 1
         generated_at = (Get-Date -Format "o")
         trees = $Global:DiagnosticRuntimeTrees
+        loaders = $Global:DiagnosticRuntimeLoaders
         file_count = $entries.Count
         entries = @($entries | Sort-Object path)
     }
@@ -113,7 +128,7 @@ function Ensure-DiagnosticSnapshot {
         if (-not [string]::Equals($manifestRoot, $currentRoot, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Existing diagnostic snapshot belongs to different root '$($manifest.csgo_root)', expected '$CsgoRoot'. Cannot safely proceed."
         }
-        Write-Host "Reusing existing pre-diagnostic snapshot from $($manifest.created_at) ($($manifest.runtime_files.Count) runtime files, $($manifest.component_states.Count) components). Original state preserved." -ForegroundColor Cyan
+        Write-Host "Reusing existing pre-diagnostic snapshot from $($manifest.created_at) ($($manifest.runtime_files.Count) runtime files, $($manifest.loader_files.Count) loaders, $($manifest.component_states.Count) components). Original state preserved." -ForegroundColor Cyan
         return $manifest
     }
 
@@ -123,11 +138,15 @@ function Ensure-DiagnosticSnapshot {
         Remove-Item -LiteralPath $tmpDir -Recurse -Force
     }
     New-Item -ItemType Directory -Path (Join-Path $tmpDir "runtime") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $tmpDir "loaders") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $tmpDir "components") -Force | Out-Null
 
     $backedUpRuntimeFiles = [Collections.Generic.List[PSCustomObject]]::new()
+    $backedUpLoaders = [Collections.Generic.List[PSCustomObject]]::new()
+    $backedUpComponents = [Collections.Generic.List[PSCustomObject]]::new()
 
     try {
+        # 1. Back up runtime trees
         foreach ($tree in $Global:DiagnosticRuntimeTrees) {
             $treePath = Join-Path $CsgoRoot ($tree.Replace("/", "\"))
             if (Test-Path -LiteralPath $treePath) {
@@ -155,8 +174,41 @@ function Ensure-DiagnosticSnapshot {
             }
         }
 
-        $backedUpComponents = [Collections.Generic.List[PSCustomObject]]::new()
+        # 2. Back up runtime loader entries
+        foreach ($loader in $Global:DiagnosticRuntimeLoaders) {
+            $loaderPath = Join-Path $CsgoRoot ($loader.Replace("/", "\"))
+            $loaderExisted = Test-Path -LiteralPath $loaderPath
+            $loaderSha = $null
+            $loaderSize = $null
+            $loaderBackup = $null
 
+            if ($loaderExisted) {
+                $file = Get-Item -LiteralPath $loaderPath
+                $loaderSize = $file.Length
+                $loaderSha = (Get-FileHash -LiteralPath $loaderPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                $loaderBackup = "loaders/$loader"
+                $backupDst = Join-Path $tmpDir ($loaderBackup.Replace("/", "\"))
+                $dstParent = Split-Path -Parent $backupDst
+                if (-not (Test-Path -LiteralPath $dstParent)) {
+                    New-Item -ItemType Directory -Path $dstParent -Force | Out-Null
+                }
+                Copy-Item -LiteralPath $loaderPath -Destination $backupDst -Force
+                $dstHash = (Get-FileHash -LiteralPath $backupDst -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($loaderSha -ne $dstHash) {
+                    throw "Snapshot hash mismatch for $loader"
+                }
+            }
+
+            $backedUpLoaders.Add([PSCustomObject]@{
+                relative_path = $loader
+                existed = [bool]$loaderExisted
+                backup_path = $loaderBackup
+                size = $loaderSize
+                sha256 = $loaderSha
+            })
+        }
+
+        # 3. Back up target component activation states
         foreach ($comp in $Global:DiagnosticTargetComponents) {
             $activePath = Join-Path $CsgoRoot ($comp.Active.Replace("/", "\"))
             $activeExisted = Test-Path -LiteralPath $activePath
@@ -217,6 +269,7 @@ function Ensure-DiagnosticSnapshot {
             csgo_root = $CsgoRoot
             runtime_trees = $Global:DiagnosticRuntimeTrees
             runtime_files = @($backedUpRuntimeFiles)
+            loader_files = @($backedUpLoaders)
             component_states = @($backedUpComponents)
         }
 
@@ -228,7 +281,7 @@ function Ensure-DiagnosticSnapshot {
             Remove-Item -LiteralPath $snapshotDir -Recurse -Force
         }
         Move-Item -LiteralPath $tmpDir -Destination $snapshotDir -Force
-        Write-Host "Snapshot successfully created: $($backedUpRuntimeFiles.Count) runtime files, $($backedUpComponents.Count) components." -ForegroundColor Green
+        Write-Host "Snapshot successfully created: $($backedUpRuntimeFiles.Count) runtime files, $($backedUpLoaders.Count) loaders, $($backedUpComponents.Count) components." -ForegroundColor Green
         return $snapshotObj
     }
     catch {
@@ -282,7 +335,26 @@ function Restore-DiagnosticSnapshot {
         Copy-Item -LiteralPath $src -Destination $dst -Force
     }
 
-    # Step 3: Remove current active and disabled states for the target components
+    # Step 3: Restore runtime loaders from snapshot
+    if ($manifest.loader_files) {
+        foreach ($loader in $manifest.loader_files) {
+            $targetLoader = Join-Path $CsgoRoot ($loader.relative_path.Replace("/", "\"))
+            if ($loader.existed) {
+                $src = Join-Path $snapshotDir ($loader.backup_path.Replace("/", "\"))
+                $parent = Split-Path -Parent $targetLoader
+                if (-not (Test-Path -LiteralPath $parent)) {
+                    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+                }
+                Copy-Item -LiteralPath $src -Destination $targetLoader -Force
+            } else {
+                if (Test-Path -LiteralPath $targetLoader) {
+                    Remove-Item -LiteralPath $targetLoader -Force
+                }
+            }
+        }
+    }
+
+    # Step 4: Remove current active and disabled states for the target components
     foreach ($comp in $Global:DiagnosticTargetComponents) {
         $activeFull = Join-Path $CsgoRoot ($comp.Active.Replace("/", "\"))
         if (Test-Path -LiteralPath $activeFull) { Remove-Item -LiteralPath $activeFull -Force }
@@ -290,7 +362,7 @@ function Restore-DiagnosticSnapshot {
         if (Test-Path -LiteralPath $disabledFull) { Remove-Item -LiteralPath $disabledFull -Force }
     }
 
-    # Step 4: Restore components exactly according to snapshot
+    # Step 5: Restore components exactly according to snapshot
     foreach ($comp in $manifest.component_states) {
         if ($comp.active_existed) {
             $src = Join-Path $snapshotDir ($comp.active_backup.Replace("/", "\"))
@@ -308,7 +380,7 @@ function Restore-DiagnosticSnapshot {
         }
     }
 
-    # Step 5: Clean diagnostic markers
+    # Step 6: Clean diagnostic markers
     $m1 = Join-Path $CsgoRoot "diagnostic-state.json"
     if (Test-Path -LiteralPath $m1) { Remove-Item -LiteralPath $m1 -Force }
     $m2 = Join-Path $CsgoRoot ".csbip\diagnostic-state.json"
@@ -316,7 +388,7 @@ function Restore-DiagnosticSnapshot {
     $m3 = Join-Path $CsgoRoot "diagnostic-runtime-manifest.json"
     if (Test-Path -LiteralPath $m3) { Remove-Item -LiteralPath $m3 -Force }
 
-    # Step 6: Verify restored state against snapshot
+    # Step 7: Verify restored state against snapshot
     Write-Host "Verifying restored state against snapshot..."
     $verifyFailures = [Collections.Generic.List[string]]::new()
 
@@ -344,6 +416,22 @@ function Restore-DiagnosticSnapshot {
                 $rel = [IO.Path]::GetRelativePath($CsgoRoot, $actual.FullName).Replace("\", "/")
                 if (-not $restoredPaths.Contains($rel)) {
                     $verifyFailures.Add("Unexpected runtime residue in restored tree: $rel")
+                }
+            }
+        }
+    }
+
+    # Verify loaders
+    if ($manifest.loader_files) {
+        foreach ($loader in $manifest.loader_files) {
+            $targetLoader = Join-Path $CsgoRoot ($loader.relative_path.Replace("/", "\"))
+            $targetExists = Test-Path -LiteralPath $targetLoader
+            if ($targetExists -ne $loader.existed) {
+                $verifyFailures.Add("Loader $($loader.relative_path) existence mismatch: expected $($loader.existed), actual $targetExists")
+            } elseif ($targetExists) {
+                $actualHash = (Get-FileHash -LiteralPath $targetLoader -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actualHash -ne $loader.sha256) {
+                    $verifyFailures.Add("Loader $($loader.relative_path) hash mismatch: expected $($loader.sha256), actual $actualHash")
                 }
             }
         }

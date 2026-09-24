@@ -64,13 +64,13 @@ function Update-PayloadManifest {
     $payloadManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $PayloadRoot "plus-payload-manifest.json") -Encoding utf8
 }
 
-# Generate diagnostic runtime manifest covering exact files in runtime trees
+# Generate diagnostic runtime manifest covering exact files in runtime trees and loaders
 Write-Host "Generating diagnostic runtime manifest from base stage..."
 $runtimeManifest = New-DiagnosticRuntimeManifest $stageBase
 $runtimeManifestJson = $runtimeManifest | ConvertTo-Json -Depth 5
-$repoRuntimeManifest = Join-Path $repo "scripts\diagnostic-runtime-manifest.json"
-$runtimeManifestJson | Set-Content -LiteralPath $repoRuntimeManifest -Encoding utf8
-Write-Host "Diagnostic runtime manifest: $($runtimeManifest.file_count) runtime files across $($runtimeManifest.trees.Count) trees."
+$artifactsRuntimeManifest = Join-Path $output "diagnostic-runtime-manifest.json"
+$runtimeManifestJson | Set-Content -LiteralPath $artifactsRuntimeManifest -Encoding utf8
+Write-Host "Diagnostic runtime manifest: $($runtimeManifest.file_count) runtime files and loaders across $($runtimeManifest.trees.Count) trees."
 
 function Copy-DiagnosticTooling {
     param([string]$StageRoot, [string]$Mode)
@@ -82,8 +82,8 @@ function Copy-DiagnosticTooling {
     Copy-Item -LiteralPath (Join-Path $repo "scripts\verify-diagnostic-install.ps1") -Destination (Join-Path $scriptsDir "verify-diagnostic-install.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $repo "scripts\restore-normal-install.ps1") -Destination (Join-Path $scriptsDir "restore-normal-install.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $repo "scripts\dependencies.json") -Destination (Join-Path $scriptsDir "dependencies.json") -Force
-    Copy-Item -LiteralPath $repoRuntimeManifest -Destination (Join-Path $scriptsDir "diagnostic-runtime-manifest.json") -Force
-    Copy-Item -LiteralPath $repoRuntimeManifest -Destination (Join-Path $StageRoot "diagnostic-runtime-manifest.json") -Force
+    Copy-Item -LiteralPath $artifactsRuntimeManifest -Destination (Join-Path $scriptsDir "diagnostic-runtime-manifest.json") -Force
+    Copy-Item -LiteralPath $artifactsRuntimeManifest -Destination (Join-Path $StageRoot "diagnostic-runtime-manifest.json") -Force
 
     @"
 param([string]`$Cs2Root)
@@ -147,6 +147,9 @@ Local Arena Diagnostic Package A: Runtime-Only Baseline
 ===================================================================
 
 Isolation & Transaction Contract:
+- Narrow Mutation Surface: Diagnostic installer only mutates MM1469/CSS375 runtime
+  trees, official loaders, and the 3 target components. It does NOT overwrite
+  other existing plugins, shared libraries, cfgs, or overrides.
 - Clean Runtime Purge: Target runtime trees are purged prior to installation
   to eliminate any stale CSS371 or Metamod residue.
 - Pre-Diagnostic Snapshot: Created automatically at <csgo>/.csbip/diagnostic-snapshot
@@ -177,7 +180,7 @@ Verify after install:
 Manual Test Procedure:
 1. Ensure CS2 is closed before running INSTALL-DIAGNOSTIC-A.ps1.
 2. Run VERIFY-DIAGNOSTIC.ps1 and confirm:
-   - Exact runtime tree verified (431 files match, 0 stale residues)
+   - Exact runtime tree verified (matches manifest with 0 stale residues)
    - MM 1469 active
    - CSS 375 active
    - BotHider OFF
@@ -248,6 +251,9 @@ Local Arena Diagnostic Package B: Human Cosmetics Only
 ===================================================================
 
 Isolation & Transaction Contract:
+- Narrow Mutation Surface: Diagnostic installer only mutates MM1469/CSS375 runtime
+  trees, official loaders, and the 3 target components. It does NOT overwrite
+  other existing plugins, shared libraries, cfgs, or overrides.
 - Clean Runtime Purge: Target runtime trees are purged prior to installation
   to eliminate any stale CSS371 or Metamod residue.
 - Pre-Diagnostic Snapshot: Preserved from Package A (original pre-test state is retained).
@@ -279,7 +285,7 @@ Verify after install:
 Manual Test Procedure:
 1. Ensure CS2 is closed before running INSTALL-DIAGNOSTIC-B.ps1.
 2. Run VERIFY-DIAGNOSTIC.ps1 and confirm:
-   - Exact runtime tree verified (431 files match, 0 stale residues)
+   - Exact runtime tree verified (matches manifest with 0 stale residues)
    - MM 1469 active
    - CSS 375 active
    - BotHider OFF

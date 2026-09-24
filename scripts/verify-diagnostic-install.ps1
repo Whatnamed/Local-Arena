@@ -41,27 +41,29 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
 }
 
 $expectedKnifeCustomizerHash = $null
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$buildDll = Join-Path $repoRoot "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\bin\Release\net10.0\PlayerKnifeCustomizer.dll"
-if (Test-Path -LiteralPath $buildDll) {
-    $expectedKnifeCustomizerHash = (Get-FileHash -LiteralPath $buildDll -Algorithm SHA256).Hash.ToLowerInvariant()
-} else {
-    $manifestCandidates = @(
-        (Join-Path $csgo "plus-payload-manifest.json"),
-        (Join-Path $PSScriptRoot "plus-payload-manifest.json"),
-        (Join-Path (Split-Path -Parent $PSScriptRoot) "artifacts\diagnostic\stage-diagB\plus-payload-manifest.json")
-    )
-    foreach ($cand in $manifestCandidates) {
-        if (Test-Path -LiteralPath $cand) {
-            try {
-                $payloadMan = Get-Content -LiteralPath $cand -Raw | ConvertFrom-Json
-                $entry = $payloadMan.entries | Where-Object { $_.path -like "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll*" } | Select-Object -First 1
-                if ($entry) {
-                    $expectedKnifeCustomizerHash = $entry.sha256.ToLowerInvariant()
-                    break
-                }
-            } catch {}
-        }
+$manifestCandidates = @(
+    (Join-Path (Split-Path -Parent $PSScriptRoot) "artifacts\diagnostic\stage-diagB\plus-payload-manifest.json"),
+    (Join-Path $PSScriptRoot "plus-payload-manifest.json"),
+    (Join-Path $PSScriptRoot "scripts\plus-payload-manifest.json"),
+    (Join-Path $csgo "plus-payload-manifest.json")
+)
+foreach ($cand in $manifestCandidates) {
+    if (Test-Path -LiteralPath $cand) {
+        try {
+            $payloadMan = Get-Content -LiteralPath $cand -Raw | ConvertFrom-Json
+            $entry = $payloadMan.entries | Where-Object { $_.path -like "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll*" } | Select-Object -First 1
+            if ($entry) {
+                $expectedKnifeCustomizerHash = $entry.sha256.ToLowerInvariant()
+                break
+            }
+        } catch {}
+    }
+}
+if (-not $expectedKnifeCustomizerHash) {
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $buildDll = Join-Path $repoRoot "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\bin\Release\net10.0\PlayerKnifeCustomizer.dll"
+    if (Test-Path -LiteralPath $buildDll) {
+        $expectedKnifeCustomizerHash = (Get-FileHash -LiteralPath $buildDll -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 }
 if (-not $expectedKnifeCustomizerHash) {
@@ -89,6 +91,7 @@ $runtimeManifestCandidates = @(
     (Join-Path $csgo ".csbip\diagnostic-runtime-manifest.json"),
     (Join-Path $PSScriptRoot "diagnostic-runtime-manifest.json"),
     (Join-Path $PSScriptRoot "scripts\diagnostic-runtime-manifest.json"),
+    (Join-Path (Split-Path -Parent $PSScriptRoot) "artifacts\diagnostic\diagnostic-runtime-manifest.json"),
     (Join-Path (Split-Path -Parent $PSScriptRoot) "artifacts\diagnostic\stage-diag$Mode\diagnostic-runtime-manifest.json")
 )
 
@@ -104,7 +107,7 @@ if (-not $runtimeManifestPath) {
             $expectedMap[$entry.path] = $entry
         }
 
-        # Enumerate actual files in target runtime-owned trees
+        # Enumerate actual files in target runtime-owned trees and runtime loaders
         $actualMap = [ordered]@{}
         foreach ($tree in $Global:DiagnosticRuntimeTrees) {
             $treePath = Join-Path $csgo ($tree.Replace("/", "\"))
@@ -113,6 +116,12 @@ if (-not $runtimeManifestPath) {
                     $rel = [IO.Path]::GetRelativePath($csgo, $f.FullName).Replace("\", "/")
                     $actualMap[$rel] = $f
                 }
+            }
+        }
+        foreach ($loader in $Global:DiagnosticRuntimeLoaders) {
+            $loaderPath = Join-Path $csgo ($loader.Replace("/", "\"))
+            if (Test-Path -LiteralPath $loaderPath) {
+                $actualMap[$loader] = Get-Item -LiteralPath $loaderPath
             }
         }
 

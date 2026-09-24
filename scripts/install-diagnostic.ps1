@@ -29,7 +29,7 @@ if (-not (Test-Path -LiteralPath $transactionScript)) {
 
 $csgo = Find-Cs2Root $Cs2Root
 Write-Host "Target CS2 game/csgo: $csgo"
-Write-Host "Installing Diagnostic Mode: $Mode"
+Write-Host "Installing Diagnostic Mode: $Mode (Narrow Mutation Surface)"
 
 # Resolve package source directory
 if (-not $PackageSource) {
@@ -50,9 +50,9 @@ Write-Host "Package source: $PackageSource"
 # Step 1: Ensure pre-diagnostic snapshot exists before any changes
 $snapshot = Ensure-DiagnosticSnapshot $csgo
 
-# Step 2: Perform clean diagnostic install with rollback guard
+# Step 2: Perform narrow clean diagnostic install with rollback guard
 try {
-    # 2.1 Clean purge of target runtime trees to eliminate any stale 371 or old MM files
+    # 2.1 Clean purge of target runtime trees
     Write-Host "Purging target runtime trees for clean MM1469 + CSS375 convergence..."
     foreach ($tree in $Global:DiagnosticRuntimeTrees) {
         $treePath = Join-Path $csgo ($tree.Replace("/", "\"))
@@ -61,49 +61,95 @@ try {
         }
     }
 
-    # 2.2 Reconcile component states before copy
+    # 2.2 Copy clean runtime trees from package source
+    Write-Host "Installing clean MM1469 + CSS375 runtime trees..."
+    $runtimeFilesCopied = 0
+    foreach ($tree in $Global:DiagnosticRuntimeTrees) {
+        $srcTree = Join-Path $PackageSource ($tree.Replace("/", "\"))
+        if (Test-Path -LiteralPath $srcTree) {
+            foreach ($file in Get-ChildItem -LiteralPath $srcTree -File -Recurse) {
+                $rel = [IO.Path]::GetRelativePath($PackageSource, $file.FullName)
+                $dstFile = Join-Path $csgo $rel
+                $parent = Split-Path -Parent $dstFile
+                if (-not (Test-Path -LiteralPath $parent)) {
+                    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+                }
+                Copy-Item -LiteralPath $file.FullName -Destination $dstFile -Force
+                $runtimeFilesCopied++
+            }
+        }
+    }
+    Write-Host "Clean runtime trees deployed: $runtimeFilesCopied files."
+
+    # 2.3 Deploy runtime loader entries
+    Write-Host "Deploying official MM/CSS runtime loaders..."
+    foreach ($loader in $Global:DiagnosticRuntimeLoaders) {
+        $srcLoader = Join-Path $PackageSource ($loader.Replace("/", "\"))
+        if (Test-Path -LiteralPath $srcLoader) {
+            $dstLoader = Join-Path $csgo ($loader.Replace("/", "\"))
+            $parent = Split-Path -Parent $dstLoader
+            if (-not (Test-Path -LiteralPath $parent)) {
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            }
+            Copy-Item -LiteralPath $srcLoader -Destination $dstLoader -Force
+        }
+    }
+
+    # 2.4 Reconcile component states (narrow mutation: only touch target entry files)
     Write-Host "Reconciling component entry states..."
     $targetVdf = Join-Path $csgo "addons\metamod\BotHider.vdf"
+    $targetVdfDisabled = Join-Path $csgo "addons\metamod\BotHider.vdf.csbip-disabled"
     $targetImpl = Join-Path $csgo "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll"
+    $targetImplDisabled = Join-Path $csgo "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll.csbip-disabled"
     $targetKnife = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"
     $targetKnifeDisabled = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled"
 
+    # In both modes, BotHider native and BotHiderImpl are disabled
     if (Test-Path -LiteralPath $targetVdf) { Remove-Item -LiteralPath $targetVdf -Force }
+    $pkgVdfDisabled = Join-Path $PackageSource "addons\metamod\BotHider.vdf.csbip-disabled"
+    if (Test-Path -LiteralPath $pkgVdfDisabled) {
+        Copy-Item -LiteralPath $pkgVdfDisabled -Destination $targetVdfDisabled -Force
+    } elseif (-not (Test-Path -LiteralPath $targetVdfDisabled)) {
+        "disabled" | Set-Content $targetVdfDisabled -Encoding utf8
+    }
+
     if (Test-Path -LiteralPath $targetImpl) { Remove-Item -LiteralPath $targetImpl -Force }
+    $pkgImplDisabled = Join-Path $PackageSource "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll.csbip-disabled"
+    if (Test-Path -LiteralPath $pkgImplDisabled) {
+        $parent = Split-Path -Parent $targetImplDisabled
+        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        Copy-Item -LiteralPath $pkgImplDisabled -Destination $targetImplDisabled -Force
+    } elseif (-not (Test-Path -LiteralPath $targetImplDisabled)) {
+        $parent = Split-Path -Parent $targetImplDisabled
+        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        "disabled" | Set-Content $targetImplDisabled -Encoding utf8
+    }
 
     if ($Mode -eq "A") {
+        # Mode A: PlayerKnifeCustomizer is OFF
         if (Test-Path -LiteralPath $targetKnife) { Remove-Item -LiteralPath $targetKnife -Force }
+        $pkgKnifeDisabled = Join-Path $PackageSource "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled"
+        if (Test-Path -LiteralPath $pkgKnifeDisabled) {
+            $parent = Split-Path -Parent $targetKnifeDisabled
+            if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            Copy-Item -LiteralPath $pkgKnifeDisabled -Destination $targetKnifeDisabled -Force
+        } elseif (-not (Test-Path -LiteralPath $targetKnifeDisabled)) {
+            $parent = Split-Path -Parent $targetKnifeDisabled
+            if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            "disabled" | Set-Content $targetKnifeDisabled -Encoding utf8
+        }
     } else {
+        # Mode B: PlayerKnifeCustomizer is ON (deploy current build DLL only, do not touch presets)
         if (Test-Path -LiteralPath $targetKnifeDisabled) { Remove-Item -LiteralPath $targetKnifeDisabled -Force }
-    }
-
-    # 2.3 Copy diagnostic payload to target
-    Write-Host "Copying diagnostic package payload to target..."
-    $topLevels = @("addons", "cfg", "overrides")
-    $copiedFiles = 0
-    $preservedFiles = 0
-
-    foreach ($topLevel in $topLevels) {
-        $sourceTop = Join-Path $PackageSource $topLevel
-        if (-not (Test-Path -LiteralPath $sourceTop)) { continue }
-        foreach ($file in Get-ChildItem -LiteralPath $sourceTop -File -Recurse) {
-            $rel = [IO.Path]::GetRelativePath($PackageSource, $file.FullName).Replace("\", "/")
-            $targetFile = Join-Path $csgo ($rel.Replace("/", "\"))
-            if ($rel -in $Global:DiagnosticPreservedConfigs -and (Test-Path -LiteralPath $targetFile)) {
-                $preservedFiles++
-                continue
-            }
-            $targetDir = Split-Path -Parent $targetFile
-            if (-not (Test-Path -LiteralPath $targetDir)) {
-                New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-            }
-            Copy-Item -LiteralPath $file.FullName -Destination $targetFile -Force
-            $copiedFiles++
+        $pkgKnifeActive = Join-Path $PackageSource "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"
+        if (Test-Path -LiteralPath $pkgKnifeActive) {
+            $parent = Split-Path -Parent $targetKnife
+            if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            Copy-Item -LiteralPath $pkgKnifeActive -Destination $targetKnife -Force
         }
     }
-    Write-Host "Payload copied: $copiedFiles files updated, $preservedFiles preserved user config files."
 
-    # 2.4 Copy runtime manifest into target for post-install verification
+    # 2.5 Deploy runtime manifest for verification
     $runtimeManifestSrc = Join-Path $PackageSource "diagnostic-runtime-manifest.json"
     if (-not (Test-Path -LiteralPath $runtimeManifestSrc)) {
         $runtimeManifestSrc = Join-Path $PackageSource "scripts\diagnostic-runtime-manifest.json"
@@ -114,17 +160,6 @@ try {
         if (Test-Path -LiteralPath $csbipDir) {
             Copy-Item -LiteralPath $runtimeManifestSrc -Destination (Join-Path $csbipDir "diagnostic-runtime-manifest.json") -Force
         }
-    }
-
-    # 2.5 Enforce final active/disabled guarantees on target
-    if ($Mode -eq "A") {
-        if (Test-Path -LiteralPath $targetVdf) { Remove-Item -LiteralPath $targetVdf -Force }
-        if (Test-Path -LiteralPath $targetImpl) { Remove-Item -LiteralPath $targetImpl -Force }
-        if (Test-Path -LiteralPath $targetKnife) { Remove-Item -LiteralPath $targetKnife -Force }
-    } else {
-        if (Test-Path -LiteralPath $targetVdf) { Remove-Item -LiteralPath $targetVdf -Force }
-        if (Test-Path -LiteralPath $targetImpl) { Remove-Item -LiteralPath $targetImpl -Force }
-        if (Test-Path -LiteralPath $targetKnifeDisabled) { Remove-Item -LiteralPath $targetKnifeDisabled -Force }
     }
 
     # 2.6 Write diagnostic state marker

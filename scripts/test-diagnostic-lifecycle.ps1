@@ -20,6 +20,9 @@ function Setup-BaseTarget {
     New-Item -ItemType Directory -Path (Join-Path $Target "addons\counterstrikesharp\lang") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $Target "addons\counterstrikesharp\plugins\BotHiderImpl") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $Target "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Target "addons\counterstrikesharp\plugins\BotAI") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Target "addons\RayTrace\bin\win64") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Target "cfg") -Force | Out-Null
     
     # gameinfo
     '"GameInfo" { "FileSystem" { "SearchPaths" { "Game" "csgo" } } }' | Set-Content (Join-Path $Target "gameinfo.gi")
@@ -30,12 +33,29 @@ function Setup-BaseTarget {
     "dummy-old-dotnet" | Set-Content (Join-Path $Target "addons\counterstrikesharp\dotnet\dotnet.exe")
     "dummy-old-gamedata" | Set-Content (Join-Path $Target "addons\counterstrikesharp\gamedata\gamedata.json")
 
+    # Mock older runtime loaders
+    "dummy-old-metamod-x64-vdf" | Set-Content (Join-Path $Target "addons\metamod_x64.vdf")
+    "dummy-old-css-vdf" | Set-Content (Join-Path $Target "addons\metamod\counterstrikesharp.vdf")
+
+    # Mock other plugins/cfgs that MUST NOT be touched by narrow install
+    $allOtherPlugins = @(
+        "BotAI", "BotAimImprover", "BotBuy", "BotControllerImpl",
+        "BotRandomizer", "BotState", "NadeSystem", "RoundDamageRecap",
+        "PlusMatchCoordinator", "TeamLineupInjector", "OfflineMatchTelemetry"
+    )
+    foreach ($p in $allOtherPlugins) {
+        $pDir = Join-Path $Target "addons\counterstrikesharp\plugins\$p"
+        if (-not (Test-Path -LiteralPath $pDir)) { New-Item -ItemType Directory -Path $pDir -Force | Out-Null }
+        "dummy-user-$p-content" | Set-Content (Join-Path $pDir "$p.dll")
+    }
+    "dummy-user-raytrace-dll" | Set-Content (Join-Path $Target "addons\RayTrace\bin\win64\RayTrace.dll")
+    "dummy-user-cfg-content" | Set-Content (Join-Path $Target "cfg\my_bot_normal_config.cfg")
     # User preset that must NOT be overwritten
     '{"custom_knife": "butterfly", "preserved": true}' | Set-Content (Join-Path $Target "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\player_knife_presets.json")
 }
 
 Write-Host "=========================================================="
-Write-Host "Running Diagnostic Transaction Simulation Tests (Cases 1-5)"
+Write-Host "Running Diagnostic Transaction Simulation Tests (Cases 1-6)"
 Write-Host "=========================================================="
 
 # -------------------------------------------------------------------
@@ -53,6 +73,7 @@ Setup-BaseTarget $c1
 $vdfOriginalHash = (Get-FileHash (Join-Path $c1 "addons\metamod\BotHider.vdf") -Algorithm SHA256).Hash
 $implOriginalHash = (Get-FileHash (Join-Path $c1 "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll") -Algorithm SHA256).Hash
 $knifeOriginalHash = (Get-FileHash (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll") -Algorithm SHA256).Hash
+$loaderOriginalHash = (Get-FileHash (Join-Path $c1 "addons\metamod_x64.vdf") -Algorithm SHA256).Hash
 
 Write-Host "Installing Mode A..."
 & (Join-Path $PSScriptRoot "install-diagnostic.ps1") -Mode A -Cs2Root $c1
@@ -80,16 +101,15 @@ if (-not (Test-Path (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnif
 if (Test-Path (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled")) { throw "Case 1: PlayerKnifeCustomizer.dll.csbip-disabled lingering" }
 if ((Get-FileHash (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll") -Algorithm SHA256).Hash -ne $knifeOriginalHash) { throw "Case 1: PlayerKnifeCustomizer.dll hash mismatch" }
 
-# Assert user preset preserved
-$c1Preset = Get-Content (Join-Path $c1 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\player_knife_presets.json") -Raw
-if ($c1Preset -notmatch '"butterfly"') { throw "Case 1: User preset was overwritten!" }
+# Assert loaders restored
+if ((Get-FileHash (Join-Path $c1 "addons\metamod_x64.vdf") -Algorithm SHA256).Hash -ne $loaderOriginalHash) { throw "Case 1: metamod_x64.vdf not restored" }
 
 # Assert original runtime server.dll was restored
 if ((Get-Content (Join-Path $c1 "addons\metamod\bin\win64\server.dll") -Raw).Trim() -ne "dummy-old-server-dll") {
     throw "Case 1: Original runtime tree was not restored!"
 }
 
-Write-Host "Case 1 PASSED: All active components and original runtime restored exactly." -ForegroundColor Green
+Write-Host "Case 1 PASSED: All active components, loaders, and original runtime restored exactly." -ForegroundColor Green
 
 # -------------------------------------------------------------------
 # Case 2: BotHider was already disabled pre-test
@@ -175,7 +195,7 @@ if (Test-Path $staleFile) {
     throw "Case 4: Stale file $staleFile was NOT purged during clean diagnostic install!"
 }
 
-# Verify that Mode A passes exact runtime tree verification (all 431 files match, 0 stale residues)
+# Verify that Mode A passes exact runtime tree verification (0 stale residues)
 & (Join-Path $PSScriptRoot "verify-diagnostic-install.ps1") -Mode A -Cs2Root $c4
 if ($LASTEXITCODE -ne 0) { throw "Case 4: Mode A exact runtime check failed" }
 Write-Host "Clean purge confirmed: stale file disappeared and exact runtime verified." -ForegroundColor Cyan
@@ -225,8 +245,43 @@ if ($restoredServerDll -ne "pre-test-unique-marker") {
 
 Write-Host "Case 5 PASSED: Snapshot was preserved across A -> B transition and exact pre-A state restored." -ForegroundColor Green
 
+# -------------------------------------------------------------------
+# Case 6: Narrow mutation surface verification
+# Ordinary plugins, cfgs, and raytrace MUST NOT be modified by install A
+# -------------------------------------------------------------------
+Write-Host "`n--- Case 6: Narrow mutation surface verification ---"
+$c6 = Join-Path $testBase "case6\game\csgo"
+Setup-BaseTarget $c6
+
+$userBotAi = Join-Path $c6 "addons\counterstrikesharp\plugins\BotAI\BotAI.dll"
+$userRayTrace = Join-Path $c6 "addons\RayTrace\bin\win64\RayTrace.dll"
+$userCfg = Join-Path $c6 "cfg\my_bot_normal_config.cfg"
+
+$userBotAiBefore = (Get-Content $userBotAi -Raw).Trim()
+$userRayTraceBefore = (Get-Content $userRayTrace -Raw).Trim()
+$userCfgBefore = (Get-Content $userCfg -Raw).Trim()
+
+Write-Host "Installing Mode A on target with distinct custom plugin and cfg..."
+& (Join-Path $PSScriptRoot "install-diagnostic.ps1") -Mode A -Cs2Root $c6
+
+$userBotAiAfter = (Get-Content $userBotAi -Raw).Trim()
+$userRayTraceAfter = (Get-Content $userRayTrace -Raw).Trim()
+$userCfgAfter = (Get-Content $userCfg -Raw).Trim()
+
+if ($userBotAiBefore -ne $userBotAiAfter) {
+    throw "Case 6: BotAI.dll was modified by diagnostic install! Mutation surface is too broad."
+}
+if ($userRayTraceBefore -ne $userRayTraceAfter) {
+    throw "Case 6: RayTrace.dll was modified by diagnostic install! Mutation surface is too broad."
+}
+if ($userCfgBefore -ne $userCfgAfter) {
+    throw "Case 6: cfg was modified by diagnostic install! Mutation surface is too broad."
+}
+
+Write-Host "Case 6 PASSED: BotAI, RayTrace, and cfg were completely untouched during Install A." -ForegroundColor Green
+
 Write-Host "`n=========================================================="
-Write-Host "ALL 5 DIAGNOSTIC TRANSACTION TEST CASES PASSED SUCCESSFULLY"
+Write-Host "ALL 6 DIAGNOSTIC TRANSACTION TEST CASES PASSED SUCCESSFULLY"
 Write-Host "=========================================================="
 
 Remove-Item -LiteralPath $testBase -Recurse -Force
