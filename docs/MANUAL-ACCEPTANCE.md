@@ -70,6 +70,13 @@
 
 2026-09-24 compatibility patch 的源码和 Windows binary signature 已静态核对；以下运行中行为仍未实机确认：
 
+本轮 Human PlayerCosmetics runtime 修复后的首轮验收：
+
+- [ ] CT 与 T 各选一款手套，分别经历出生、死亡重生和一次换队；确认无默认/自定义手套重叠、裸手或持续闪烁。
+- [ ] 检查 CT M4A4 PaintKit `632`、CT/T P250 PaintKit `258`，并以 AK/AWP 作对照；观察第一人称、丢弃模型、重新装备和重生后的材质。若仍异常，记录插件日志中的 defindex、paint、legacy_model、quality、item_id。
+- [ ] 从 Karambit 开始，按 `\\` 走完 Karambit → Butterfly → M9 → Bayonet → Skeleton → Falchion 一圈；成功后至少五圈，核对模型、动画、HUD、active slot 和无地面残留。再跨死亡重生及换队各试一次。
+- [ ] 任一切刀失败时，记录日志中的 `detach`、`give`、`ownership`、`econ readiness`、`preset` 或 `equip verification` 阶段，并确认旧刀仍在或原刀已重建且装备；不把“已发出切刀命令”当作成功。
+
 - [ ] Enhanced Bots：Human CT/T 刀、手套、枪械 preset，以及拾取已有武器后应用当前阵营 preset；确认无错误材质或贴图。
 - [ ] 快捷切刀按现有顺序至少完整循环 5 圈；型号和皮肤均正确，无 client error、丢刀或残留旧刀。
 - [ ] Retakes：初始刀、选择 loadout 后的刀、手套、枪皮，以及换队/换回合后的重新应用。

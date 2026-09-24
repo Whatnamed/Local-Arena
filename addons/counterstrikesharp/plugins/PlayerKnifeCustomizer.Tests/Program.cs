@@ -1,4 +1,5 @@
 using PlayerKnifeCustomizer;
+using System.Text.Json;
 
 static KnifePreset Preset(int paint, int count = 0) => new()
 {
@@ -12,6 +13,25 @@ static KnifePreset Preset(int paint, int count = 0) => new()
 static void Require(bool condition, string message)
 {
     if (!condition) throw new InvalidOperationException(message);
+}
+Require(HumanEconPolicy.Quality(HumanItemKind.Gun, false, false) == 4 &&
+        HumanEconPolicy.Quality(HumanItemKind.Knife, false, false) == 3 &&
+        HumanEconPolicy.Quality(HumanItemKind.Glove, false, false) == 3 &&
+        HumanEconPolicy.Quality(HumanItemKind.Gun, true, false) == 9 &&
+        HumanEconPolicy.Quality(HumanItemKind.Gun, false, true) == 12,
+    "Human item kinds must keep distinct normal, StatTrak and Souvenir qualities.");
+Require(HumanEconPolicy.AccountId(76_561_197_960_265_728UL + 12345) == 12345,
+    "Custom item account identity must use the low Steam account ID.");
+using (var catalog = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "weapon_skins.json"))))
+{
+    foreach (var (defIndex, paint) in new[] { (16, 632), (36, 258) })
+    {
+        var entry = catalog.RootElement.EnumerateArray().FirstOrDefault(item =>
+            item.GetProperty("weapon_defindex").GetInt32() == defIndex &&
+            item.GetProperty("paint").GetInt32() == paint);
+        Require(entry.ValueKind == JsonValueKind.Object && entry.GetProperty("legacy_model").GetBoolean(),
+            $"Configured defindex {defIndex} paint {paint} must resolve legacy_model from the shared catalog.");
+    }
 }
 // Test the weapon preset resolver
 var config = new KnifeConfig();
@@ -48,6 +68,14 @@ var plannerLoadout = new TeamLoadout();
 for (int cycle = 0; cycle < 30; cycle++)
 {
     bool inventory = true, active = true, destroyed = false;
+    bool gaveFresh = false;
+    Require(!KnifeInventoryLifecycle.TryDetach(() => inventory = false, () => inventory || active) && !gaveFresh,
+        "A fresh knife must not be given while ActiveWeapon still references the old knife.");
+    Require(KnifeInventoryLifecycle.TryDetach(() => active = false, () => inventory || active),
+        "The old knife slot must be fully free before giving a replacement.");
+    gaveFresh = true;
+    Require(gaveFresh && !destroyed, "Slot release must keep the original entity for rollback.");
+    inventory = active = true;
     Require(!KnifeInventoryLifecycle.TryRetire(() => { }, () => inventory || active, () => destroyed = true),
         "Rejected detach must leave the old knife alive.");
     Require(!destroyed, "No stale inventory handle may be created on failed detach.");
