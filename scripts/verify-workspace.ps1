@@ -786,8 +786,10 @@ if ($PackageRoot) {
     }
 
     $pinnedRuntimeFiles = @(
-        @{ Relative = "addons/metamod/bin/win64/server.dll"; Hash = $manifest.metamod.windowsLoaderSha256; Label = "Metamod" },
-        @{ Relative = "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll"; Hash = $manifest.counterStrikeSharp.windowsCoreSha256; Label = "CounterStrikeSharp" },
+        @{ Relative = "addons/metamod/bin/win64/server.dll"; Hash = $manifest.metamod.windowsLoaderSha256; Label = "Metamod loader" },
+        @{ Relative = "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll"; Hash = $manifest.counterStrikeSharp.windowsCoreSha256; Label = "CounterStrikeSharp core" },
+        @{ Relative = "addons/counterstrikesharp/gamedata/gamedata.json"; Hash = $manifest.counterStrikeSharp.windowsGamedataSha256; Label = "CounterStrikeSharp gamedata" },
+        @{ Relative = "addons/counterstrikesharp/dotnet/dotnet.exe"; Hash = $manifest.counterStrikeSharp.windowsDotnetHostSha256; Label = "CounterStrikeSharp dotnet host" },
         @{ Relative = "addons/RayTrace/bin/win64/RayTrace.dll"; Hash = $manifest.rayTrace.windowsDllSha256; Label = "RayTrace native" },
         @{ Relative = "addons/counterstrikesharp/plugins/RayTraceImpl/RayTraceImpl.dll"; Hash = $manifest.rayTrace.cssImplSha256; Label = "RayTrace CSS" }
     )

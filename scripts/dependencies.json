@@ -28,7 +28,9 @@
       "url": "https://github.com/roflmuffin/CounterStrikeSharp/releases/download/v1.0.375/counterstrikesharp-with-runtime-windows-1.0.375.zip",
       "sha256": "1e21a4d0ea8abf27b6dabdcc66b1bbaeafab37b7b593da752489c1becd0c41e5"
     },
-    "windowsCoreSha256": "69334463860eed462993502b667ac4bec626ef0dc38c3977c792415c37bee1dd"
+    "windowsCoreSha256": "69334463860eed462993502b667ac4bec626ef0dc38c3977c792415c37bee1dd",
+    "windowsGamedataSha256": "7d9bff7aaff8e9edb1ada4ca508fa4e2ad7b12e16ed00ee1b84dd0cb9a3e4ac5",
+    "windowsDotnetHostSha256": "37c8f27cf35c5c59d942f7513496c3be68ba3018ed1b2220a31f5e5035df07ba"
   },
   "rayTrace": {
     "repository": "https://github.com/FUNPLAY-pro-CS2/Ray-Trace",

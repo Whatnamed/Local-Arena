@@ -61,41 +61,119 @@ function Update-PayloadManifest {
     $payloadManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $PayloadRoot "plus-payload-manifest.json") -Encoding utf8
 }
 
+function Copy-DiagnosticTooling {
+    param([string]$StageRoot, [string]$Mode)
+    
+    $scriptsDir = Join-Path $StageRoot "scripts"
+    New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo "scripts\install-diagnostic.ps1") -Destination (Join-Path $scriptsDir "install-diagnostic.ps1") -Force
+    Copy-Item -LiteralPath (Join-Path $repo "scripts\verify-diagnostic-install.ps1") -Destination (Join-Path $scriptsDir "verify-diagnostic-install.ps1") -Force
+    Copy-Item -LiteralPath (Join-Path $repo "scripts\restore-normal-install.ps1") -Destination (Join-Path $scriptsDir "restore-normal-install.ps1") -Force
+    Copy-Item -LiteralPath (Join-Path $repo "scripts\dependencies.json") -Destination (Join-Path $scriptsDir "dependencies.json") -Force
+
+    @"
+param([string]`$Cs2Root)
+& (Join-Path `$PSScriptRoot "scripts\install-diagnostic.ps1") -Mode $Mode -Cs2Root `$Cs2Root -PackageSource `$PSScriptRoot
+"@ | Set-Content -LiteralPath (Join-Path $StageRoot "INSTALL-DIAGNOSTIC-$Mode.ps1") -Encoding utf8
+
+    @"
+param([string]`$Cs2Root, [string]`$Mode = "$Mode")
+& (Join-Path `$PSScriptRoot "scripts\verify-diagnostic-install.ps1") -Mode `$Mode -Cs2Root `$Cs2Root
+"@ | Set-Content -LiteralPath (Join-Path $StageRoot "VERIFY-DIAGNOSTIC.ps1") -Encoding utf8
+
+    @"
+param([string]`$Cs2Root)
+& (Join-Path `$PSScriptRoot "scripts\restore-normal-install.ps1") -Cs2Root `$Cs2Root
+"@ | Set-Content -LiteralPath (Join-Path $StageRoot "RESTORE-NORMAL.ps1") -Encoding utf8
+}
+
 # --- Package A: Runtime only (BotHider OFF, PlayerCosmetics OFF) ---
+Write-Host "Preparing Diagnostic Package A (Runtime Only)..."
 $stageA = Join-Path $output "stage-diagA"
 if (Test-Path -LiteralPath $stageA) { Remove-Item -LiteralPath $stageA -Recurse -Force }
 New-Item -ItemType Directory -Path $stageA -Force | Out-Null
 Copy-Item -Path (Join-Path $stageBase "*") -Destination $stageA -Recurse -Force
 
-# BotHider OFF
-Remove-Item -LiteralPath (Join-Path $stageA "addons\metamod\BotHider.vdf") -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath (Join-Path $stageA "addons\BotHider") -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath (Join-Path $stageA "addons\counterstrikesharp\plugins\BotHiderImpl") -Recurse -Force -ErrorAction SilentlyContinue
+# BotHider OFF via .csbip-disabled rename
+$botHiderVdfA = Join-Path $stageA "addons\metamod\BotHider.vdf"
+$botHiderVdfDisabledA = Join-Path $stageA "addons\metamod\BotHider.vdf.csbip-disabled"
+if (Test-Path -LiteralPath $botHiderVdfA) {
+    Move-Item -LiteralPath $botHiderVdfA -Destination $botHiderVdfDisabledA -Force
+}
 
-# PlayerCosmetics OFF
-Remove-Item -LiteralPath (Join-Path $stageA "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer") -Recurse -Force -ErrorAction SilentlyContinue
+$botHiderImplA = Join-Path $stageA "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll"
+$botHiderImplDisabledA = Join-Path $stageA "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll.csbip-disabled"
+if (Test-Path -LiteralPath $botHiderImplA) {
+    Move-Item -LiteralPath $botHiderImplA -Destination $botHiderImplDisabledA -Force
+}
+
+# PlayerCosmetics OFF via .csbip-disabled rename
+$knifeDllA = Join-Path $stageA "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"
+$knifeDllDisabledA = Join-Path $stageA "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled"
+if (Test-Path -LiteralPath $knifeDllA) {
+    Move-Item -LiteralPath $knifeDllA -Destination $knifeDllDisabledA -Force
+}
+
+# Diagnostic state marker
+$markerA = [ordered]@{
+    mode = "A"
+    metamod = "2.0.0-git1469"
+    counterstrikesharp = "1.0.375"
+    bot_hider_native = $false
+    bot_hider_impl = $false
+    player_cosmetics = $false
+}
+$markerA | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stageA "diagnostic-state.json") -Encoding utf8
+
+Copy-DiagnosticTooling $stageA "A"
 
 @"
 ===================================================================
-Local Arena Diagnostic Package A: Runtime Only Baseline
+Local Arena Diagnostic Package A: Runtime-Only Baseline
 ===================================================================
-Components:
-- Metamod:Source: 2.0.0-git1469
-- CounterStrikeSharp: v1.0.375
-- BotHider native: OFF (disabled)
-- BotHiderImpl: OFF (disabled)
-- PlayerCosmetics: OFF (disabled)
-- BotAI / BotRandomizer / NadeSystem / MatchCoordinator: ON
 
-Test Steps:
-1. Extract into game directory (or install via Panel).
-2. Launch CS2 in Offline with Enhanced Bots mode.
-3. Wait 10 seconds.
-4. Press 1 (primary), 2 (secondary), 3 (knife).
-5. Switch weapons repeatedly and verify if CopyExistingEntity crash occurs.
+Isolation Contract:
+- Metamod:Source: 2.0.0-git1469 (ACTIVE)
+- CounterStrikeSharp: v1.0.375 (ACTIVE)
+- BotHider native: OFF (disabled via BotHider.vdf.csbip-disabled)
+- BotHiderImpl: OFF (disabled via BotHiderImpl.dll.csbip-disabled)
+- PlayerCosmetics: OFF (disabled via PlayerKnifeCustomizer.dll.csbip-disabled)
+- BotAI / BotRandomizer / NadeSystem / MatchCoordinator / RayTrace: ON (ACTIVE)
 
-Expected Outcome:
-If this package does NOT crash, the new MM 1469 + CSS 375 runtime baseline is healthy.
+Background & Root-Cause Status:
+- Proven: CounterStrikeSharp 371 signature CEntityInstance_AcceptInput has 0 matches
+  in CS2 1.41.8.2 server.dll, while CSS 375 matches uniquely.
+- Strong correlation: All failing cosmetic surfaces (knife ChangeSubclass, glove
+  bodygroup, legacy-model gun bodygroup) rely on AcceptInput.
+- Not yet proven: The exact internal entity replication mechanism of the CopyExistingEntity
+  client crash. This A/B diagnostic isolates runtime vs cosmetics to converge on root cause.
+
+Installation:
+DO NOT use Panel to install or launch this diagnostic build. Panel mode switching
+automatically re-enables disabled components in Enhanced Bots mode.
+Instead, run:
+  pwsh .\INSTALL-DIAGNOSTIC-A.ps1 -Cs2Root "<path-to-game/csgo>"
+Verify after install:
+  pwsh .\VERIFY-DIAGNOSTIC.ps1 -Cs2Root "<path-to-game/csgo>"
+
+Manual Test Procedure:
+1. Ensure CS2 is closed before running INSTALL-DIAGNOSTIC-A.ps1.
+2. Run VERIFY-DIAGNOSTIC.ps1 and confirm:
+   - MM 1469 active
+   - CSS 375 active
+   - BotHider OFF
+   - BotHiderImpl OFF
+   - PlayerCosmetics OFF
+3. Launch CS2 (directly or via Steam with -insecure).
+4. Start an Offline match with Enhanced Bots.
+5. Stand still for 10 seconds after spawn.
+6. Press 1 -> 2 -> 3 normally.
+7. Switch back and forth between weapons several times.
+8. Observe whether CopyExistingEntity client crash occurs.
+
+Decision Gate:
+- If Package A crashes: STOP. The crash is in the base runtime / bot components, not cosmetics. Do not test B.
+- If Package A does NOT crash: Proceed to Package B.
 "@ | Set-Content -LiteralPath (Join-Path $stageA "DIAGNOSTIC-MODE-A.txt") -Encoding utf8
 
 Update-PayloadManifest $stageA "1.4.3.3-diagA"
@@ -105,44 +183,99 @@ Compress-Archive -Path (Join-Path $stageA "*") -DestinationPath $zipA -Compressi
 Write-Host "Diagnostic Package A ready: $zipA"
 
 # --- Package B: Cosmetics Only (BotHider OFF, PlayerCosmetics ON) ---
+Write-Host "Preparing Diagnostic Package B (Human Cosmetics Only)..."
 $stageB = Join-Path $output "stage-diagB"
 if (Test-Path -LiteralPath $stageB) { Remove-Item -LiteralPath $stageB -Recurse -Force }
 New-Item -ItemType Directory -Path $stageB -Force | Out-Null
 Copy-Item -Path (Join-Path $stageBase "*") -Destination $stageB -Recurse -Force
 
-# BotHider OFF
-Remove-Item -LiteralPath (Join-Path $stageB "addons\metamod\BotHider.vdf") -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath (Join-Path $stageB "addons\BotHider") -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath (Join-Path $stageB "addons\counterstrikesharp\plugins\BotHiderImpl") -Recurse -Force -ErrorAction SilentlyContinue
+# BotHider OFF via .csbip-disabled rename
+$botHiderVdfB = Join-Path $stageB "addons\metamod\BotHider.vdf"
+$botHiderVdfDisabledB = Join-Path $stageB "addons\metamod\BotHider.vdf.csbip-disabled"
+if (Test-Path -LiteralPath $botHiderVdfB) {
+    Move-Item -LiteralPath $botHiderVdfB -Destination $botHiderVdfDisabledB -Force
+}
 
-# PlayerCosmetics ON (uses non-destructive knife path and CSS 375 compiled DLL)
+$botHiderImplB = Join-Path $stageB "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll"
+$botHiderImplDisabledB = Join-Path $stageB "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll.csbip-disabled"
+if (Test-Path -LiteralPath $botHiderImplB) {
+    Move-Item -LiteralPath $botHiderImplB -Destination $botHiderImplDisabledB -Force
+}
+
+# PlayerCosmetics ON (ensure active DLL is present, remove any .csbip-disabled residue)
+$knifeDllDisabledB = Join-Path $stageB "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled"
+if (Test-Path -LiteralPath $knifeDllDisabledB) {
+    Remove-Item -LiteralPath $knifeDllDisabledB -Force
+}
+
+# Diagnostic state marker
+$markerB = [ordered]@{
+    mode = "B"
+    metamod = "2.0.0-git1469"
+    counterstrikesharp = "1.0.375"
+    bot_hider_native = $false
+    bot_hider_impl = $false
+    player_cosmetics = $true
+}
+$markerB | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stageB "diagnostic-state.json") -Encoding utf8
+
+Copy-DiagnosticTooling $stageB "B"
 
 @"
 ===================================================================
 Local Arena Diagnostic Package B: Human Cosmetics Only
 ===================================================================
-Components:
-- Metamod:Source: 2.0.0-git1469
-- CounterStrikeSharp: v1.0.375
-- BotHider native: OFF (disabled)
-- BotHiderImpl: OFF (disabled)
-- PlayerCosmetics: ON (non-destructive knife path, CSS 375 AcceptInput)
-- BotAI / BotRandomizer / NadeSystem / MatchCoordinator: ON
 
-Test Steps:
-1. Extract into game directory (or install via Panel).
-2. Launch CS2 in Offline with Enhanced Bots mode.
-3. Wait 10 seconds after spawn.
-4. Press 3 to switch to knife. Inspect default custom knife model.
-5. Use quick knife cycle (if bound) or switch between 1/2/3.
-6. Check Gloves.
-7. Test M4A4 paint 632 (Desolate Space, legacy model).
-8. Test P250 paint 258 (Supernova, legacy model).
-9. Test control AK-47 / AWP skins.
+Isolation Contract:
+- Metamod:Source: 2.0.0-git1469 (ACTIVE)
+- CounterStrikeSharp: v1.0.375 (ACTIVE)
+- BotHider native: OFF (disabled via BotHider.vdf.csbip-disabled)
+- BotHiderImpl: OFF (disabled via BotHiderImpl.dll.csbip-disabled)
+- PlayerCosmetics: ON (ACTIVE, built from commit 8cddb93+d27c050 on CSS 375)
+- BotAI / BotRandomizer / NadeSystem / MatchCoordinator / RayTrace: ON (ACTIVE)
 
-Expected Outcome:
-If Package A is stable and Package B functions correctly without crashes,
-the AcceptInput / ChangeSubclass fix has resolved the missing client entity issue.
+Background & Root-Cause Status:
+- Proven: CounterStrikeSharp 371 signature CEntityInstance_AcceptInput has 0 matches
+  in CS2 1.41.8.2 server.dll, while CSS 375 matches uniquely.
+- Strong correlation: All failing cosmetic surfaces (knife ChangeSubclass, glove
+  bodygroup, legacy-model gun bodygroup) rely on AcceptInput.
+- Not yet proven: The exact internal entity replication mechanism of the CopyExistingEntity
+  client crash.
+
+Prerequisite:
+Test Package B ONLY after Package A has passed without crashes!
+
+Installation:
+DO NOT use Panel to install or launch this diagnostic build.
+Run:
+  pwsh .\INSTALL-DIAGNOSTIC-B.ps1 -Cs2Root "<path-to-game/csgo>"
+Verify after install:
+  pwsh .\VERIFY-DIAGNOSTIC.ps1 -Cs2Root "<path-to-game/csgo>"
+
+Manual Test Procedure:
+1. Ensure CS2 is closed before running INSTALL-DIAGNOSTIC-B.ps1.
+2. Run VERIFY-DIAGNOSTIC.ps1 and confirm:
+   - MM 1469 active
+   - CSS 375 active
+   - BotHider OFF
+   - BotHiderImpl OFF
+   - PlayerCosmetics ON (verified against current build hash)
+3. Launch CS2.
+4. Start an Offline match with Enhanced Bots.
+5. Wait 10 seconds after spawn.
+6. Press 3 to switch to knife. Inspect default custom knife model.
+7. Press the quick knife cycle key once.
+8. Wait 2 seconds.
+9. Press quick knife cycle key a second time.
+10. Check gloves.
+11. Test M4A4 paint 632 (Desolate Space, legacy_model=true).
+12. Test P250 paint 258 (Supernova, legacy_model=true).
+13. Test AK-47 / AWP skins as control.
+14. Observe whether CopyExistingEntity client crash occurs.
+
+Post-Test:
+To restore normal Local Arena state when testing is complete:
+  pwsh .\RESTORE-NORMAL.ps1 -Cs2Root "<path-to-game/csgo>"
 "@ | Set-Content -LiteralPath (Join-Path $stageB "DIAGNOSTIC-MODE-B.txt") -Encoding utf8
 
 Update-PayloadManifest $stageB "1.4.3.3-diagB"

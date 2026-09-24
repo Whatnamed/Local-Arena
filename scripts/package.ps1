@@ -167,10 +167,21 @@ $staleMetamodBin = Join-Path $payload "addons\metamod\bin"
 if (Test-Path -LiteralPath $staleMetamodBin) { Remove-Item -LiteralPath $staleMetamodBin -Recurse -Force }
 $staleCss = Join-Path $payload "addons\counterstrikesharp"
 if (Test-Path -LiteralPath $staleCss) {
-    Remove-Item -LiteralPath (Join-Path $staleCss "bin") -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $staleCss "api") -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $staleCss "gamedata") -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $staleCss "source") -Recurse -Force -ErrorAction SilentlyContinue
+    # Distinguish runtime-owned directories from plugin/shared/config directories.
+    # Official CounterStrikeSharp distribution owns api, bin, dotnet, gamedata, lang, source.
+    # Plugins and shared libraries are repository/plugin owned, and configs are user/system managed.
+    $cssArchiveRoot = Join-Path $counterStrikeSharpExtract "addons\counterstrikesharp"
+    $cssReservedDirs = @("plugins", "shared", "configs")
+    $cssRuntimeDirs = @(Get-ChildItem -LiteralPath $cssArchiveRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notin $cssReservedDirs } |
+        ForEach-Object { $_.Name })
+    $cssRuntimeDirs = @($cssRuntimeDirs + @("api", "bin", "dotnet", "gamedata", "lang", "source") | Select-Object -Unique)
+    foreach ($runtimeDir in $cssRuntimeDirs) {
+        $targetRuntimeDir = Join-Path $staleCss $runtimeDir
+        if (Test-Path -LiteralPath $targetRuntimeDir) {
+            Remove-Item -LiteralPath $targetRuntimeDir -Recurse -Force
+        }
+    }
 }
 
 $metamodAddons = Join-Path $metamodExtract "addons"
@@ -180,6 +191,21 @@ Copy-Tree $metamodAddons (Join-Path $payload "addons")
 $counterStrikeSharpAddons = Join-Path $counterStrikeSharpExtract "addons"
 if (-not (Test-Path -LiteralPath $counterStrikeSharpAddons)) { throw "CounterStrikeSharp archive has no addons payload." }
 Copy-Tree $counterStrikeSharpAddons (Join-Path $payload "addons")
+$cssCoreDll = Join-Path $payload "addons\counterstrikesharp\bin\win64\counterstrikesharp.dll"
+$cssCoreHash = (Get-FileHash -LiteralPath $cssCoreDll -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($cssCoreHash -ne $manifest.counterStrikeSharp.windowsCoreSha256.ToLowerInvariant()) {
+    throw "Packaged CounterStrikeSharp core DLL does not match the pinned release: $cssCoreHash"
+}
+$cssGamedata = Join-Path $payload "addons\counterstrikesharp\gamedata\gamedata.json"
+$cssGamedataHash = (Get-FileHash -LiteralPath $cssGamedata -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($cssGamedataHash -ne $manifest.counterStrikeSharp.windowsGamedataSha256.ToLowerInvariant()) {
+    throw "Packaged CounterStrikeSharp gamedata does not match the pinned release: $cssGamedataHash"
+}
+$cssDotnet = Join-Path $payload "addons\counterstrikesharp\dotnet\dotnet.exe"
+$cssDotnetHash = (Get-FileHash -LiteralPath $cssDotnet -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($cssDotnetHash -ne $manifest.counterStrikeSharp.windowsDotnetHostSha256.ToLowerInvariant()) {
+    throw "Packaged CounterStrikeSharp dotnet host does not match the pinned release: $cssDotnetHash"
+}
 
 $rayTraceCssRoot = Get-ChildItem -LiteralPath $rayTraceCssExtract -Directory -Recurse |
     Where-Object { Test-Path (Join-Path $_.FullName "counterstrikesharp\plugins\RayTraceImpl") } |
