@@ -10,6 +10,9 @@ if (-not (Test-Path -LiteralPath $stageBase)) {
     throw "Base stage build not found at $stageBase. Run scripts/package.ps1 first."
 }
 
+# Load DiagnosticTransaction helpers
+. (Join-Path $PSScriptRoot "DiagnosticTransaction.ps1")
+
 $output = Join-Path $repo $OutputDirectory
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 
@@ -61,15 +64,26 @@ function Update-PayloadManifest {
     $payloadManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $PayloadRoot "plus-payload-manifest.json") -Encoding utf8
 }
 
+# Generate diagnostic runtime manifest covering exact files in runtime trees
+Write-Host "Generating diagnostic runtime manifest from base stage..."
+$runtimeManifest = New-DiagnosticRuntimeManifest $stageBase
+$runtimeManifestJson = $runtimeManifest | ConvertTo-Json -Depth 5
+$repoRuntimeManifest = Join-Path $repo "scripts\diagnostic-runtime-manifest.json"
+$runtimeManifestJson | Set-Content -LiteralPath $repoRuntimeManifest -Encoding utf8
+Write-Host "Diagnostic runtime manifest: $($runtimeManifest.file_count) runtime files across $($runtimeManifest.trees.Count) trees."
+
 function Copy-DiagnosticTooling {
     param([string]$StageRoot, [string]$Mode)
     
     $scriptsDir = Join-Path $StageRoot "scripts"
     New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo "scripts\DiagnosticTransaction.ps1") -Destination (Join-Path $scriptsDir "DiagnosticTransaction.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $repo "scripts\install-diagnostic.ps1") -Destination (Join-Path $scriptsDir "install-diagnostic.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $repo "scripts\verify-diagnostic-install.ps1") -Destination (Join-Path $scriptsDir "verify-diagnostic-install.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $repo "scripts\restore-normal-install.ps1") -Destination (Join-Path $scriptsDir "restore-normal-install.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $repo "scripts\dependencies.json") -Destination (Join-Path $scriptsDir "dependencies.json") -Force
+    Copy-Item -LiteralPath $repoRuntimeManifest -Destination (Join-Path $scriptsDir "diagnostic-runtime-manifest.json") -Force
+    Copy-Item -LiteralPath $repoRuntimeManifest -Destination (Join-Path $StageRoot "diagnostic-runtime-manifest.json") -Force
 
     @"
 param([string]`$Cs2Root)
@@ -132,7 +146,11 @@ Copy-DiagnosticTooling $stageA "A"
 Local Arena Diagnostic Package A: Runtime-Only Baseline
 ===================================================================
 
-Isolation Contract:
+Isolation & Transaction Contract:
+- Clean Runtime Purge: Target runtime trees are purged prior to installation
+  to eliminate any stale CSS371 or Metamod residue.
+- Pre-Diagnostic Snapshot: Created automatically at <csgo>/.csbip/diagnostic-snapshot
+  before files are modified. Reversible via RESTORE-NORMAL.ps1.
 - Metamod:Source: 2.0.0-git1469 (ACTIVE)
 - CounterStrikeSharp: v1.0.375 (ACTIVE)
 - BotHider native: OFF (disabled via BotHider.vdf.csbip-disabled)
@@ -159,6 +177,7 @@ Verify after install:
 Manual Test Procedure:
 1. Ensure CS2 is closed before running INSTALL-DIAGNOSTIC-A.ps1.
 2. Run VERIFY-DIAGNOSTIC.ps1 and confirm:
+   - Exact runtime tree verified (431 files match, 0 stale residues)
    - MM 1469 active
    - CSS 375 active
    - BotHider OFF
@@ -174,6 +193,8 @@ Manual Test Procedure:
 Decision Gate:
 - If Package A crashes: STOP. The crash is in the base runtime / bot components, not cosmetics. Do not test B.
 - If Package A does NOT crash: Proceed to Package B.
+- To abort or restore original pre-test state at any time:
+  pwsh .\RESTORE-NORMAL.ps1 -Cs2Root "<path-to-game/csgo>"
 "@ | Set-Content -LiteralPath (Join-Path $stageA "DIAGNOSTIC-MODE-A.txt") -Encoding utf8
 
 Update-PayloadManifest $stageA "1.4.3.3-diagA"
@@ -226,7 +247,10 @@ Copy-DiagnosticTooling $stageB "B"
 Local Arena Diagnostic Package B: Human Cosmetics Only
 ===================================================================
 
-Isolation Contract:
+Isolation & Transaction Contract:
+- Clean Runtime Purge: Target runtime trees are purged prior to installation
+  to eliminate any stale CSS371 or Metamod residue.
+- Pre-Diagnostic Snapshot: Preserved from Package A (original pre-test state is retained).
 - Metamod:Source: 2.0.0-git1469 (ACTIVE)
 - CounterStrikeSharp: v1.0.375 (ACTIVE)
 - BotHider native: OFF (disabled via BotHider.vdf.csbip-disabled)
@@ -255,6 +279,7 @@ Verify after install:
 Manual Test Procedure:
 1. Ensure CS2 is closed before running INSTALL-DIAGNOSTIC-B.ps1.
 2. Run VERIFY-DIAGNOSTIC.ps1 and confirm:
+   - Exact runtime tree verified (431 files match, 0 stale residues)
    - MM 1469 active
    - CSS 375 active
    - BotHider OFF
@@ -274,7 +299,7 @@ Manual Test Procedure:
 14. Observe whether CopyExistingEntity client crash occurs.
 
 Post-Test:
-To restore normal Local Arena state when testing is complete:
+To restore exact pre-diagnostic environment when testing is complete:
   pwsh .\RESTORE-NORMAL.ps1 -Cs2Root "<path-to-game/csgo>"
 "@ | Set-Content -LiteralPath (Join-Path $stageB "DIAGNOSTIC-MODE-B.txt") -Encoding utf8
 

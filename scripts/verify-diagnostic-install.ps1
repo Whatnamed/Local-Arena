@@ -7,46 +7,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Find-Cs2Root {
-    param([string]$UserPath)
-    if ($UserPath) {
-        $candidate = (Resolve-Path -LiteralPath $UserPath -ErrorAction Stop).Path
-        if (Test-Path -LiteralPath (Join-Path $candidate "gameinfo.gi")) { return $candidate }
-        $sub = Join-Path $candidate "game\csgo"
-        if (Test-Path -LiteralPath (Join-Path $sub "gameinfo.gi")) { return $sub }
-        throw "Specified path is not a CS2 directory (gameinfo.gi missing): $UserPath"
+# Resolve DiagnosticTransaction helpers
+$transactionScript = Join-Path $PSScriptRoot "DiagnosticTransaction.ps1"
+if (-not (Test-Path -LiteralPath $transactionScript)) {
+    if (Test-Path -LiteralPath (Join-Path $PSScriptRoot "scripts\DiagnosticTransaction.ps1")) {
+        $transactionScript = Join-Path $PSScriptRoot "scripts\DiagnosticTransaction.ps1"
+    } else {
+        throw "Could not locate DiagnosticTransaction.ps1"
     }
-    $panelConfigs = @(
-        (Join-Path $HOME ".csbip\config\panel.json"),
-        (Join-Path $env:APPDATA "cs2bi\config\panel.json")
-    )
-    foreach ($cfg in $panelConfigs) {
-        if (Test-Path -LiteralPath $cfg) {
-            try {
-                $json = Get-Content -LiteralPath $cfg -Raw | ConvertFrom-Json
-                if ($json.csgo_path -and (Test-Path -LiteralPath (Join-Path $json.csgo_path "gameinfo.gi"))) {
-                    return $json.csgo_path
-                }
-            } catch {}
-        }
-    }
-    $steamPath = (Get-ItemProperty -Path "HKCU:\Software\Valve\Steam" -Name "SteamPath" -ErrorAction SilentlyContinue).SteamPath
-    if ($steamPath) {
-        $stdCsgo = Join-Path $steamPath "steamapps\common\Counter-Strike Global Offensive\game\csgo"
-        if (Test-Path -LiteralPath (Join-Path $stdCsgo "gameinfo.gi")) { return $stdCsgo }
-        $libFolders = Join-Path $steamPath "steamapps\libraryfolders.vdf"
-        if (Test-Path -LiteralPath $libFolders) {
-            $content = Get-Content -LiteralPath $libFolders -Raw
-            $matches = [regex]::Matches($content, '"path"\s+"([^"]+)"')
-            foreach ($m in $matches) {
-                $libPath = $m.Groups[1].Value.Replace("\\", "\")
-                $cand = Join-Path $libPath "steamapps\common\Counter-Strike Global Offensive\game\csgo"
-                if (Test-Path -LiteralPath (Join-Path $cand "gameinfo.gi")) { return $cand }
-            }
-        }
-    }
-    throw "Could not locate CS2 game/csgo directory automatically. Pass -Cs2Root <path to game/csgo>."
 }
+. $transactionScript
 
 $csgo = Find-Cs2Root $Cs2Root
 Write-Host "Target game/csgo: $csgo"
@@ -55,19 +25,48 @@ Write-Host "--------------------------------------------------------"
 
 $manifestPath = Join-Path $PSScriptRoot "dependencies.json"
 if (-not (Test-Path -LiteralPath $manifestPath)) {
+    $manifestPath = Join-Path $PSScriptRoot "scripts\dependencies.json"
+}
+if (-not (Test-Path -LiteralPath $manifestPath)) {
     $expectedMetamodLoader = "c57f348a49561e614768f20af8545998cab5ab7f8e4f913906c8889d34e40cfc"
     $expectedCssCore = "69334463860eed462993502b667ac4bec626ef0dc38c3977c792415c37bee1dd"
     $expectedCssGamedata = "7d9bff7aaff8e9edb1ada4ca508fa4e2ad7b12e16ed00ee1b84dd0cb9a3e4ac5"
     $expectedCssDotnetHost = "37c8f27cf35c5c59d942f7513496c3be68ba3018ed1b2220a31f5e5035df07ba"
 } else {
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    $expectedMetamodLoader = $manifest.metamod.windowsLoaderSha256.ToLowerInvariant()
-    $expectedCssCore = $manifest.counterStrikeSharp.windowsCoreSha256.ToLowerInvariant()
-    $expectedCssGamedata = $manifest.counterStrikeSharp.windowsGamedataSha256.ToLowerInvariant()
-    $expectedCssDotnetHost = $manifest.counterStrikeSharp.windowsDotnetHostSha256.ToLowerInvariant()
+    $depManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $expectedMetamodLoader = $depManifest.metamod.windowsLoaderSha256.ToLowerInvariant()
+    $expectedCssCore = $depManifest.counterStrikeSharp.windowsCoreSha256.ToLowerInvariant()
+    $expectedCssGamedata = $depManifest.counterStrikeSharp.windowsGamedataSha256.ToLowerInvariant()
+    $expectedCssDotnetHost = $depManifest.counterStrikeSharp.windowsDotnetHostSha256.ToLowerInvariant()
 }
 
-$expectedKnifeCustomizerHash = "7e44ddf9b7d27767888813a55d4d93034f31d5a76e277e83ebd6dc0a47ad6e28"
+$expectedKnifeCustomizerHash = $null
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$buildDll = Join-Path $repoRoot "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\bin\Release\net10.0\PlayerKnifeCustomizer.dll"
+if (Test-Path -LiteralPath $buildDll) {
+    $expectedKnifeCustomizerHash = (Get-FileHash -LiteralPath $buildDll -Algorithm SHA256).Hash.ToLowerInvariant()
+} else {
+    $manifestCandidates = @(
+        (Join-Path $csgo "plus-payload-manifest.json"),
+        (Join-Path $PSScriptRoot "plus-payload-manifest.json"),
+        (Join-Path (Split-Path -Parent $PSScriptRoot) "artifacts\diagnostic\stage-diagB\plus-payload-manifest.json")
+    )
+    foreach ($cand in $manifestCandidates) {
+        if (Test-Path -LiteralPath $cand) {
+            try {
+                $payloadMan = Get-Content -LiteralPath $cand -Raw | ConvertFrom-Json
+                $entry = $payloadMan.entries | Where-Object { $_.path -like "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll*" } | Select-Object -First 1
+                if ($entry) {
+                    $expectedKnifeCustomizerHash = $entry.sha256.ToLowerInvariant()
+                    break
+                }
+            } catch {}
+        }
+    }
+}
+if (-not $expectedKnifeCustomizerHash) {
+    $expectedKnifeCustomizerHash = "9e8c1f4d83962d5843865fdf1e255aa33bc714551b7c4fac7cc72b1ffa306c3b"
+}
 
 $errors = [Collections.Generic.List[string]]::new()
 $checks = [Collections.Generic.List[PSCustomObject]]::new()
@@ -84,7 +83,85 @@ function Record-Check {
     }
 }
 
-# 1. Diagnostic state marker
+# 1. Exact runtime tree verification against diagnostic-runtime-manifest.json
+$runtimeManifestCandidates = @(
+    (Join-Path $csgo "diagnostic-runtime-manifest.json"),
+    (Join-Path $csgo ".csbip\diagnostic-runtime-manifest.json"),
+    (Join-Path $PSScriptRoot "diagnostic-runtime-manifest.json"),
+    (Join-Path $PSScriptRoot "scripts\diagnostic-runtime-manifest.json"),
+    (Join-Path (Split-Path -Parent $PSScriptRoot) "artifacts\diagnostic\stage-diag$Mode\diagnostic-runtime-manifest.json")
+)
+
+$runtimeManifestPath = $runtimeManifestCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+
+if (-not $runtimeManifestPath) {
+    Record-Check "Runtime Manifest" "FAIL" "diagnostic-runtime-manifest.json not found" $false
+} else {
+    try {
+        $runtimeManifest = Get-Content -LiteralPath $runtimeManifestPath -Raw | ConvertFrom-Json
+        $expectedMap = [ordered]@{}
+        foreach ($entry in $runtimeManifest.entries) {
+            $expectedMap[$entry.path] = $entry
+        }
+
+        # Enumerate actual files in target runtime-owned trees
+        $actualMap = [ordered]@{}
+        foreach ($tree in $Global:DiagnosticRuntimeTrees) {
+            $treePath = Join-Path $csgo ($tree.Replace("/", "\"))
+            if (Test-Path -LiteralPath $treePath) {
+                foreach ($f in Get-ChildItem -LiteralPath $treePath -File -Recurse) {
+                    $rel = [IO.Path]::GetRelativePath($csgo, $f.FullName).Replace("\", "/")
+                    $actualMap[$rel] = $f
+                }
+            }
+        }
+
+        $missingFiles = [Collections.Generic.List[string]]::new()
+        $unexpectedFiles = [Collections.Generic.List[string]]::new()
+        $corruptFiles = [Collections.Generic.List[string]]::new()
+
+        foreach ($path in $expectedMap.Keys) {
+            if (-not $actualMap.Contains($path)) {
+                $missingFiles.Add($path)
+            } else {
+                $actualFile = $actualMap[$path]
+                $exp = $expectedMap[$path]
+                if ($actualFile.Length -ne $exp.size) {
+                    $corruptFiles.Add("$path (size mismatch: expected $($exp.size), actual $($actualFile.Length))")
+                } else {
+                    $actualHash = (Get-FileHash -LiteralPath $actualFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                    if ($actualHash -ne $exp.sha256) {
+                        $corruptFiles.Add("$path (hash mismatch: expected $($exp.sha256), actual $actualHash)")
+                    }
+                }
+            }
+        }
+
+        foreach ($path in $actualMap.Keys) {
+            if (-not $expectedMap.Contains($path)) {
+                $unexpectedFiles.Add($path)
+            }
+        }
+
+        if ($missingFiles.Count -eq 0 -and $unexpectedFiles.Count -eq 0 -and $corruptFiles.Count -eq 0) {
+            Record-Check "Exact Runtime Tree" "PASS" "All $($expectedMap.Count) runtime files matched exact MM1469+CSS375 manifest with 0 stale residues" $true
+        } else {
+            $errDetail = "Missing: $($missingFiles.Count), Unexpected: $($unexpectedFiles.Count), Corrupted: $($corruptFiles.Count)"
+            if ($unexpectedFiles.Count -gt 0) {
+                $errDetail += " [Stale residues: $($unexpectedFiles[0..([Math]::Min(2, $unexpectedFiles.Count - 1))] -join ', ')]"
+            }
+            if ($missingFiles.Count -gt 0) {
+                $errDetail += " [Missing: $($missingFiles[0..([Math]::Min(2, $missingFiles.Count - 1))] -join ', ')]"
+            }
+            Record-Check "Exact Runtime Tree" "FAIL" $errDetail $false
+        }
+    }
+    catch {
+        Record-Check "Runtime Manifest" "FAIL" "Failed to verify runtime manifest: $($_.Exception.Message)" $false
+    }
+}
+
+# 2. Diagnostic state marker
 $markerPath = Join-Path $csgo "diagnostic-state.json"
 if (-not (Test-Path -LiteralPath $markerPath)) {
     $markerPath = Join-Path $csgo ".csbip\diagnostic-state.json"
@@ -104,7 +181,7 @@ if (Test-Path -LiteralPath $markerPath) {
     Record-Check "Diagnostic Marker" "WARN" "diagnostic-state.json not found on target" $true
 }
 
-# 2. Metamod runtime
+# 3. Representative runtime summaries
 $mmLoader = Join-Path $csgo "addons\metamod\bin\win64\server.dll"
 if (Test-Path -LiteralPath $mmLoader) {
     $actualHash = (Get-FileHash -LiteralPath $mmLoader -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -117,7 +194,6 @@ if (Test-Path -LiteralPath $mmLoader) {
     Record-Check "Metamod 1469 Loader" "FAIL" "server.dll missing" $false
 }
 
-# 3. CSS runtime core
 $cssCore = Join-Path $csgo "addons\counterstrikesharp\bin\win64\counterstrikesharp.dll"
 if (Test-Path -LiteralPath $cssCore) {
     $actualHash = (Get-FileHash -LiteralPath $cssCore -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -130,7 +206,6 @@ if (Test-Path -LiteralPath $cssCore) {
     Record-Check "CSS 375 Core" "FAIL" "counterstrikesharp.dll missing" $false
 }
 
-# 4. CSS gamedata
 $cssGamedata = Join-Path $csgo "addons\counterstrikesharp\gamedata\gamedata.json"
 if (Test-Path -LiteralPath $cssGamedata) {
     $actualHash = (Get-FileHash -LiteralPath $cssGamedata -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -143,7 +218,6 @@ if (Test-Path -LiteralPath $cssGamedata) {
     Record-Check "CSS 375 Gamedata" "FAIL" "gamedata.json missing" $false
 }
 
-# 5. CSS dotnet host
 $cssDotnet = Join-Path $csgo "addons\counterstrikesharp\dotnet\dotnet.exe"
 if (Test-Path -LiteralPath $cssDotnet) {
     $actualHash = (Get-FileHash -LiteralPath $cssDotnet -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -156,7 +230,7 @@ if (Test-Path -LiteralPath $cssDotnet) {
     Record-Check "CSS 375 .NET Host" "FAIL" "dotnet.exe missing" $false
 }
 
-# 6. BotHider native isolation
+# 4. BotHider native isolation
 $botHiderVdf = Join-Path $csgo "addons\metamod\BotHider.vdf"
 $botHiderVdfDisabled = Join-Path $csgo "addons\metamod\BotHider.vdf.csbip-disabled"
 if (Test-Path -LiteralPath $botHiderVdf) {
@@ -167,7 +241,7 @@ if (Test-Path -LiteralPath $botHiderVdf) {
     Record-Check "BotHider native" "PASS" "BotHider.vdf is not present" $true
 }
 
-# 7. BotHiderImpl isolation
+# 5. BotHiderImpl isolation
 $botHiderImplDll = Join-Path $csgo "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll"
 $botHiderImplDllDisabled = Join-Path $csgo "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll.csbip-disabled"
 if (Test-Path -LiteralPath $botHiderImplDll) {
@@ -178,7 +252,7 @@ if (Test-Path -LiteralPath $botHiderImplDll) {
     Record-Check "BotHiderImpl" "PASS" "BotHiderImpl.dll is not present" $true
 }
 
-# 8. PlayerKnifeCustomizer (PlayerCosmetics) isolation
+# 6. PlayerKnifeCustomizer (PlayerCosmetics) isolation
 $knifeDll = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"
 $knifeDllDisabled = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled"
 
@@ -206,7 +280,7 @@ if ($Mode -eq "A") {
     }
 }
 
-# 9. Other standard Enhanced Bots components
+# 7. Other standard Enhanced Bots components
 $otherPlugins = @(
     "BotAI", "BotAimImprover", "BotBuy", "BotControllerImpl",
     "BotRandomizer", "BotState", "NadeSystem", "RoundDamageRecap",
