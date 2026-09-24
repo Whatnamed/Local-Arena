@@ -1,5 +1,43 @@
+# Line-ending policy, deliberately narrow.
+#
+# Only Plus-owned text is pinned to LF in the index, so a clone's stored content no longer depends
+# on each machine's core.autocrlf. Upstream-synced trees (addons/, cfg/, overrides/, Commands.txt)
+# are intentionally left unlisted: their blobs keep their current endings so a future upstream
+# merge does not turn into a whitespace-only diff.
+#
+# overrides/**/*.db is a text KeyValues-style profile despite the extension, so it is NOT marked
+# binary; marking it would change what a checkout hands to the plugins.
+
+/*.md text eol=lf
+/docs/**/*.md text eol=lf
+/scripts/**.ps1 text eol=lf
+/scripts/**.mjs text eol=lf
+/scripts/**.py text eol=lf
+/scripts/dependencies.json text eol=lf
+/Panel/**/*.json text eol=lf
+/Panel/**/*.ts text eol=lf
+/Panel/**/*.tsx text eol=lf
+/Panel/**/*.css text eol=lf
+/Panel/**/*.html text eol=lf
+/Panel/**/*.rs text eol=lf
+/Panel/**/*.toml text eol=lf
+/Panel/**/*.yml text eol=lf
+/.editorconfig text eol=lf
+/.gitattributes text eol=lf
+/.gitignore text eol=lf
+/.github/**.yml text eol=lf
+/.local-build.example.ps1 text eol=lf
+
+# Generated data catalogs must stay byte-stable across platforms.
 Panel/src/data/stickerCatalog.json text eol=lf
 Panel/src/data/stickerCatalog.source.json text eol=lf
 Panel/src/data/stickerWeaponIds.json text eol=lf
 addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_ids.json text eol=lf
 addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/sticker_weapon_ids.json text eol=lf
+
+# Media.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary

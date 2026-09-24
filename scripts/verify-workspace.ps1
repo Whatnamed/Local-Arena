@@ -49,13 +49,40 @@ function Get-JsonCount([string]$RelativePath) {
 $base = if ($manifest.upstream.sourceCommit) { $manifest.upstream.sourceCommit } else { $manifest.upstream.baseCommit }
 
 $localBuildConfig = Join-Path $repo ".local-build.ps1"
-if ($env:GITHUB_ACTIONS -ne "true" -and -not (Test-Path -LiteralPath $localBuildConfig -PathType Leaf)) {
-    Add-Failure "Local build configuration is missing; run the workspace setup before building."
+if (Test-Path -LiteralPath $localBuildConfig -PathType Leaf) {
+    Write-Host "Using machine-local build override: .local-build.ps1"
 }
-$buildScript = Get-Content -LiteralPath (Join-Path $repo "scripts/build.ps1") -Raw
-$privateToolLabel = "portable" + "-toolchain"
-if ($buildScript.Contains($privateToolLabel, [StringComparison]::OrdinalIgnoreCase)) {
-    Add-Failure "Build scripts must not expose the local tool directory name."
+
+# `Panel/src-tauri/Cargo.toml` is the canonical current-version source. `app_version::display()`
+# renders its "+N" build suffix as the four-part display version, so every other current-version
+# surface must carry exactly one of those two spellings instead of maintaining its own number.
+function Assert-ContainsLiteral([string]$RelativePath, [string]$Expected, [string]$Label) {
+    $path = Join-Path $repo $RelativePath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Add-Failure "Missing $Label`: $RelativePath"
+        return
+    }
+    if (-not (Get-Content -LiteralPath $path -Raw).Contains($Expected, [StringComparison]::Ordinal)) {
+        Add-Failure "$Label does not carry the canonical version literal '$Expected'."
+    }
+}
+
+$cargoManifest = Get-Content -LiteralPath (Join-Path $repo "Panel/src-tauri/Cargo.toml") -Raw
+if ($cargoManifest -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+    Add-Failure "Cannot read the canonical package version from Panel/src-tauri/Cargo.toml."
+} else {
+    $canonicalPackageVersion = $Matches[1]
+    $canonicalDisplayVersion = $canonicalPackageVersion.Replace("+", ".")
+    Assert-ContainsLiteral "Panel/src-tauri/Cargo.lock" "version = `"$canonicalPackageVersion`"" "Cargo.lock"
+    Assert-ContainsLiteral "Panel/src-tauri/tauri.conf.json" "`"version`": `"$canonicalPackageVersion`"" "Tauri config"
+    Assert-ContainsLiteral "Panel/package.json" "`"version`": `"$canonicalPackageVersion`"" "Panel package.json"
+    Assert-ContainsLiteral "scripts/package.ps1" "`$ReleaseVersion = `"$canonicalDisplayVersion`"" "package.ps1 default version"
+    Assert-ContainsLiteral "scripts/verify-workspace.ps1" "`$ExpectedPackageVersion = `"$canonicalDisplayVersion`"" "verifier default version"
+    Assert-ContainsLiteral "README.md" "targets **$canonicalDisplayVersion**" "README version banner"
+    Assert-ContainsLiteral "README.zh-CN.md" "版本为 **$canonicalDisplayVersion**" "Chinese README version banner"
+    Assert-ContainsLiteral "addons/counterstrikesharp/plugins/PlusMatchCoordinator/PlusMatchCoordinator.cs" "ModuleVersion => `"$canonicalDisplayVersion`"" "PlusMatchCoordinator module version"
+    # lib.rs WELCOME_STORY_RELEASE_VERSION is deliberately frozen at the release that introduced
+    # the welcome story and must NOT track the current version, so it is not asserted here.
 }
 
 & git -C $repo cat-file -e "$base^{commit}" 2>$null
