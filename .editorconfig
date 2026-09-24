@@ -24,3 +24,18 @@ trim_trailing_whitespace = false
 [*.toml]
 indent_style = space
 indent_size = 4
+
+# Upstream-synced trees and the vendored command list. `.gitattributes` deliberately leaves these
+# unnormalized, so editors must not rewrite their existing endings, trailing whitespace or encoding
+# either: many `addons/**` files carry a UTF-8 BOM and several upstream sources use CRLF, so a single
+# real edit would otherwise turn into a whole-file diff against upstream.
+[addons/**,cfg/**,overrides/**,Commands.txt]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+
+# Vendored third-party source stays byte-identical to what was imported. Its files are already LF
+# (so `end_of_line` is harmless) but 53 of them contain trailing whitespace, which a save would strip.
+[Panel/src-tauri/vendor/**]
+trim_trailing_whitespace = unset
