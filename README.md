@@ -6,25 +6,25 @@
 
 <br/>
 
-<a href="https://github.com/numakkiyu/Local-Arena/releases"><img alt="Release" src="https://img.shields.io/github/v/release/numakkiyu/Local-Arena?display_name=tag&sort=semver"></a>
+<a href="https://github.com/Whatnamed/Local-Arena"><img alt="Fork" src="https://img.shields.io/badge/personal%20fork-Local%20Arena-informational"></a>
 <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D4">
-<a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/numakkiyu/Local-Arena"></a>
+<a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Whatnamed/Local-Arena"></a>
 
 <br/>
 <br/>
 
-[Download a published build](https://github.com/numakkiyu/Local-Arena/releases) · [Report an issue](https://github.com/numakkiyu/Local-Arena/issues) · [Brand and independence](#brand-renaming-and-project-independence) · [Source attribution](#upstream-source-and-attribution)
+[Build from source](CONTRIBUTING.md) · [Upstream project](https://github.com/numakkiyu/Local-Arena) · [Brand and independence](#brand-renaming-and-project-independence) · [Source attribution](#upstream-source-and-attribution)
 
 </div>
 
 > [!IMPORTANT]
-> Local Arena is an independently developed and maintained Windows toolkit for local CS2 matches, player cosmetics, demos, diagnostics, and managed installation
+> This repository is a **personal fork** of [Local Arena](https://github.com/numakkiyu/Local-Arena), an independently developed Windows toolkit for local CS2 matches, player cosmetics, demos, diagnostics, and managed installation
+>
+> This fork publishes no GitHub Releases and has issue tracking disabled. Build and package it from source as described in [CONTRIBUTING.md](CONTRIBUTING.md); official Local Arena builds remain available from [numakkiyu/Local-Arena](https://github.com/numakkiyu/Local-Arena/releases)
 >
 > Local Arena is not affiliated with, endorsed by, or maintained by [ed0ard/CS2-Bot-Improver](https://github.com/ed0ard/CS2-Bot-Improver) or its maintainers. The upstream project does not provide support for Local Arena
 >
-> For any Local Arena build, Panel, installation, matching, cosmetics, diagnostics, crash, or update problem, [open an issue in this repository](https://github.com/numakkiyu/Local-Arena/issues). Do not submit Local Arena reports to the upstream project
->
-> Selected enhanced-bot components remain derived from upstream AGPL-3.0 code. Their origin and authorship remain credited below, while development, releases, issue tracking, and user support are managed independently by Local Arena
+> Selected enhanced-bot components remain derived from upstream AGPL-3.0 code. Their origin and authorship remain credited below, while development and maintenance of this fork are handled by its own maintainer
 >
 > Existing installations retain the portable executable name, `.csbip` state directory, icon, and Panel appearance so installation records, backups, presets, and match history remain compatible
 
@@ -48,7 +48,7 @@ Update codename: **Richer Cosmetics**
 
 Following an explicit request from the upstream project author for clear brand separation, and to further clarify project ownership and maintenance responsibilities, this project will be formally renamed from **CS2BotImproverPlus** to **Local Arena** beginning with the next version
 
-**Local Arena** is independently developed, released, and maintained. It is not affiliated with, authorized by, jointly maintained with, officially partnered with, or supported by **CS2-Bot-Improver** or its author. The project only uses, modifies, and redistributes selected open-source code under the [AGPL-3.0](https://github.com/numakkiyu/Local-Arena/blob/main/LICENSE) license, while continuing to preserve all required source attribution, authorship notices, and license declarations
+**Local Arena** is independently developed, released, and maintained. It is not affiliated with, authorized by, jointly maintained with, officially partnered with, or supported by **CS2-Bot-Improver** or its author. The project only uses, modifies, and redistributes selected open-source code under the [AGPL-3.0](LICENSE) license, while continuing to preserve all required source attribution, authorship notices, and license declarations
 
 Beginning with the next version, Local Arena will adopt a new UI design language and brand logo. To preserve user data, update, installation, and legacy-version compatibility, some older releases, historical interfaces, filenames, and compatibility identifiers may continue to display the former brand name during the transition
 

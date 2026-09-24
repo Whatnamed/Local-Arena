@@ -1,6 +1,6 @@
 # Local Arena v1.4.3.1 正式版更新公告
 
-![Local Arena v1.4.3.1 更新公告](https://raw.githubusercontent.com/numakkiyu/Local-Arena/v1.4.3.1/docs/releases/assets/local-arena-v1.4.3.1-update.png)
+![Local Arena v1.4.3.1 更新公告](assets/local-arena-v1.4.3.1-update.png)
 
 本次更新以 `v1.4.2.5` 为稳定基线，完整合并上游 `v1.4.3` 人机更新，并完成 Local Arena 品牌、面板、个性化、离线匹配、饰品和安装更新链路的整合
 

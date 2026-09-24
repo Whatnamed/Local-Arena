@@ -1,60 +1,71 @@
 # Upstream Policy
 
-## Base
+本文件描述 upstream 的 ownership、同步政策和打包装配方式。它**不**保存精确版本号。
 
-- Project: `ed0ard/CS2-Bot-Improver`
-- Packaged runtime base: `v1.4.1`
-- Synced upstream source version: `1.4.2`
-- Synced upstream commit: `43c455c6f85bbb6ffe80f137a5e911cfe0c903f2`
-- Plus release line: `1.4.2.1`
+## Canonical pins
 
-The repository stores source and configuration deltas. Upstream has marked its Panel and source tree as 1.4.2 but has
-not published a v1.4.2 release archive. The Windows package script therefore obtains the last official v1.4.1 layout,
-then overlays the synced 1.4.2 sources, BotHider v0.3.0 data, pinned engine-compatible runtimes, and current Plus builds
-instead of committing generated or third-party binaries.
+Runtime dependency 的唯一 machine-readable source of truth 是 `scripts/dependencies.json`。
+每个条目记录 repository、release、下载 asset 名称 / URL 和 SHA-256。
 
-## Pinned Runtime Inputs
+消费者：
 
-The machine-readable source of truth is `scripts/dependencies.json`.
+- `scripts/build.ps1` — 读取 manifest 驱动本地构建。
+- `scripts/package.ps1` — 按 manifest 下载并校验每个 archive 和关键 native DLL。
+- `scripts/verify-workspace.ps1` — 校验 manifest 自身结构与 pin 的可用性。
 
-- `CS2BotImprover.zip` supplies the official Windows runtime layout.
-- MetaMod 2.0.0-git1406 supplies the engine 26 loader.
-- CounterStrikeSharp v1.0.371 with its bundled .NET runtime replaces the stale v1.4.1 copy.
-- RayTrace v1.0.16 supplies both the native module and CounterStrikeSharp API/implementation.
-- `BotHider-windows-0.3.3.zip` supplies the native BotHider module; Local Arena overlays the Windows gamedata values recorded in [the 2026-09-23 compatibility note](CS2-2026-09-23-COMPATIBILITY.md).
-- BotAI includes the tested Windows signature refresh from upstream PR #75 (`3db93ba`).
-- BotAI, BotAimImprover, BotBuy, and NadeSystem are rebuilt from the pinned source tree so post-v1.4.1 fixes are not
-  replaced by older release DLLs.
-- BotAimImprover and NadeSystem receive `RayTraceApi.dll` from the verified v1.0.16 archive through an explicit
-  MSBuild property; clean builds do not depend on an ignored `libs` file left on the developer machine.
-- Plus-built `BotHiderImpl`, `BotHiderApi`, and `PlayerKnifeCustomizer` assemblies overlay their upstream locations.
-- The Plus Panel replaces the upstream Panel executable while retaining the same standalone workflow.
+任何文档、脚本或 workflow 需要引用 runtime 版本时，应指向 `scripts/dependencies.json`，
+不要再复制一份版本字符串。过期的手工副本比缺失说明更有害。
 
-Every downloaded archive and each critical runtime DLL is SHA-256 verified before packaging.
+## Ownership
 
-## Synchronizing
+- 主基底：`numakkiyu/Local-Arena` — 本仓库是它的个人 fork，开发只发生在 `Whatnamed/Local-Arena`。
+- 参考上游：`ed0ard/CS2-Bot-Improver` — AGPL-3.0 组件来源，可做审计后的兼容性同步。
+- 不直接修改 upstream，不修改 `numakkiyu` 或 `ed0ard` 的远端。
+- 保留适用的 AGPL-3.0 许可证、版权、来源与 attribution；裁剪功能或重新打包时不得删除应保留的许可证与署名。
 
-1. Fetch `upstream/main` and inspect release notes, issues, and relevant PRs.
-2. Rebase or merge in an isolated branch.
-3. Preserve Plus-only modules and Panel routes.
-4. Reconcile I18N by keeping the entire new upstream key/dictionary set, then reapply Plus keys and translations.
-5. Refresh catalogs only from a traceable source and verify locale and entry counts.
-6. Build all three targets and create a disposable package before updating the pinned manifest.
+## 打包装配模型
+
+Windows package 不提交生成的或第三方的二进制。`scripts/package.ps1` 按以下顺序装配：
+
+1. 下载 manifest 中 pinned 的上游 Windows release archive，作为官方 runtime 布局基线。
+2. Overlay pinned 的 MetaMod loader、CounterStrikeSharp（含其捆绑 .NET runtime）和 RayTrace 的 native module 与 CSS API / implementation。
+3. Overlay pinned 的 BotHider native module。
+4. 从 pinned source tree 重新构建 Plus 自有的模块（包括 BotAI、BotAimImprover、BotBuy、NadeSystem），使较新的源码修复不会被旧 release DLL 覆盖。
+5. Overlay Plus 构建的 `BotHiderImpl`、`BotHiderApi`、`PlayerKnifeCustomizer` 程序集，并用 Plus Panel 替换上游 Panel 可执行文件，保持同样的 standalone workflow。
+6. 每个下载的 archive 和每个关键 runtime DLL 在打包前做 SHA-256 校验；布局与文件集合由 `scripts/verify-workspace.ps1` 断言。
+
+## 同步政策
+
+1. Fetch upstream，审查 release notes、issues 和相关 PR。
+2. 在隔离分支中 rebase 或 merge，不在主分支直接同步。
+3. 保留 Plus-only 模块和 Panel 路由。
+4. I18N 调和：保留完整的新一版 upstream key / dictionary，再重新套用 Plus key 与翻译。
+5. Catalog 只从可追溯来源刷新，并校验 locale 与条目数量。
+6. 构建全部目标并生成一次性 package，确认无误后才更新 `scripts/dependencies.json` 的 pin 和哈希。
+7. 对 CS2 / MetaMod / CounterStrikeSharp / signature / native API 的兼容性结论必须有当前证据（实际解析结果、构建产物或官方变更说明），不能仅由版本号推断。
+
+## Provenance 记录
+
+以下内容是"某段代码来自哪里"的历史事实，不是当前 pin，不随 manifest 更新：
+
+- BotAI 的 Windows signature 刷新来自上游 PR #75（`3db93ba`）。
+- Cosmetic / native binding 的逐条来源与本地用法见
+  [docs/archive/CS2-2026-09-23-COMPATIBILITY.md](archive/CS2-2026-09-23-COMPATIBILITY.md)。
+- BotHider Windows gamedata 的 overlay 来源同一份记录，`scripts/dependencies.json` 的 `botHider.gamedataWindowsSourceCommit` 保存对应 commit。
+- v1.4.4 upstream 的审查结论与「保持既有 pin」的决定见
+  [docs/archive/UPSTREAM-v1.4.4-REVIEW.md](archive/UPSTREAM-v1.4.4-REVIEW.md)。
 
 ## Third-Party Data
 
-Weapon images and localized skin names are derived from `Nereziel/cs2-WeaponPaints`. Indonesian currently uses the
-English fallback because that source does not provide an Indonesian skin-name table. This fallback affects display
-only; item application uses numeric catalog identifiers.
+Weapon images 和 localized skin names 来自 `Nereziel/cs2-WeaponPaints`。Indonesian 目前没有该来源的
+skin-name 表，因此使用英文 fallback；这仅影响显示，物品应用始终使用数值 catalog 标识。
 
-BotHider is maintained at `XBribo/CS2-Bot-Hider`. The package tracks v0.3.3, which supplies the Windows
-identity synchronization, team-join scope, entity-packing protection, and gamedata-driven
-`CServerSideClient::SetName` target. Packaging verifies the official release archive and native DLL hashes without
-binary patching.
+BotHider 由 `XBribo/CS2-Bot-Hider` 维护，package 使用 `scripts/dependencies.json` 中 pinned 的 release。
+打包校验官方 release archive 与 native DLL 哈希，不做 binary patching。
 
-`BotHiderImpl` supplements native name publication only for slots reported by BotHider as managed bots, through
-`CBasePlayerController.m_iszPlayerName`, and forces the Plus `bot_info.json` name source before bots are created. It
-does not write names for human-player slots. Steam IDs, avatars, cards,
-crosshair codes, ping, scoreboard flair, bot disguise, respawn behavior, and every upstream enhanced-bot module stay
-on their existing paths. The repository can verify this isolation and the package layout automatically, but the final
-host-local scoreboard result still requires an in-game Enhanced Bots practice match.
+`BotHiderImpl` 只对 BotHider 报告为受管 Bot 的 slot 补充 native name publication，通过
+`CBasePlayerController.m_iszPlayerName`，并在 Bot 创建前强制使用 Plus 的 `bot_info.json` 名称来源。
+它不写入人类玩家 slot 的名称。Steam ID、头像、卡片、crosshair code、ping、scoreboard flair、
+bot disguise、respawn 行为以及所有 upstream enhanced-bot module 都保持原有路径。
+仓库可以自动校验这一隔离性和 package 布局，但最终的 host-local scoreboard 结果仍需游戏内
+Enhanced Bots 练习局确认，见 `docs/MANUAL-ACCEPTANCE.md`。

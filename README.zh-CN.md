@@ -6,25 +6,25 @@
 
 <br/>
 
-<a href="https://github.com/numakkiyu/Local-Arena/releases"><img alt="发行版本" src="https://img.shields.io/github/v/release/numakkiyu/Local-Arena?display_name=tag&sort=semver"></a>
+<a href="https://github.com/Whatnamed/Local-Arena"><img alt="个人 fork" src="https://img.shields.io/badge/personal%20fork-Local%20Arena-informational"></a>
 <img alt="支持平台" src="https://img.shields.io/badge/platform-Windows-0078D4">
-<a href="LICENSE"><img alt="许可证" src="https://img.shields.io/github/license/numakkiyu/Local-Arena"></a>
+<a href="LICENSE"><img alt="许可证" src="https://img.shields.io/github/license/Whatnamed/Local-Arena"></a>
 
 <br/>
 <br/>
 
-[下载已发布版本](https://github.com/numakkiyu/Local-Arena/releases) · [提交问题反馈](https://github.com/numakkiyu/Local-Arena/issues) · [品牌与独立性说明](#品牌更名与项目关系说明) · [代码来源与署名](#上游代码来源与署名)
+[从源码构建](CONTRIBUTING.md) · [上游项目](https://github.com/numakkiyu/Local-Arena) · [品牌与独立性说明](#品牌更名与项目关系说明) · [代码来源与署名](#上游代码来源与署名)
 
 </div>
 
 > [!IMPORTANT]
-> Local Arena 是独立开发和维护的 Windows 工具，用于本地 CS2 对局、玩家饰品、Demo、诊断和受管安装
+> 本仓库是 [Local Arena](https://github.com/numakkiyu/Local-Arena) 的**个人 fork**；Local Arena 是独立开发的 Windows 工具，用于本地 CS2 对局、玩家饰品、Demo、诊断和受管安装
+>
+> 本 fork 不发布 GitHub Release，也已关闭 Issue 追踪，请按 [CONTRIBUTING.md](CONTRIBUTING.md) 从源码构建和打包；官方 Local Arena 构建仍可在 [numakkiyu/Local-Arena](https://github.com/numakkiyu/Local-Arena/releases) 获取
 >
 > Local Arena 与 [ed0ard/CS2-Bot-Improver](https://github.com/ed0ard/CS2-Bot-Improver) 及其维护者互不隶属，不代表上游官方，也不由上游维护者提供支持
 >
-> Local Arena 的构建、面板、安装、匹配、饰品、诊断、闪退或更新问题，请统一在[本仓库 Issues](https://github.com/numakkiyu/Local-Arena/issues) 提交，不要向上游项目反馈 Local Arena 的问题
->
-> 部分增强人机组件仍基于上游 AGPL-3.0 代码，其来源和作者署名会继续保留；Local Arena 的开发、发布、问题追踪和用户支持均由本仓库独立负责
+> 部分增强人机组件仍基于上游 AGPL-3.0 代码，其来源和作者署名会继续保留；本 fork 的开发与维护由本仓库维护者独立负责
 >
 > 现有安装会继续保留便携式可执行文件名、`.csbip` 数据目录、图标和面板外观，以保证安装记录、备份、预设和比赛记录不丢失
 
@@ -48,7 +48,7 @@
 
 应上游项目作者提出的明确品牌分离要求，同时为进一步厘清项目的品牌归属与维护边界，本项目将自下一版本起由 **CS2BotImproverPlus** 正式更名为 **Local Arena**
 
-**Local Arena** 是独立开发、独立发布并独立维护的项目，与 **CS2-Bot-Improver** 及其作者不存在隶属、授权、联合维护、官方合作或技术支持关系。本项目仅依据 [AGPL-3.0](https://github.com/numakkiyu/Local-Arena/blob/main/LICENSE) 开源许可证引用、修改和再分发部分开源代码，并将持续完整保留相关代码来源、作者署名及许可证声明
+**Local Arena** 是独立开发、独立发布并独立维护的项目，与 **CS2-Bot-Improver** 及其作者不存在隶属、授权、联合维护、官方合作或技术支持关系。本项目仅依据 [AGPL-3.0](LICENSE) 开源许可证引用、修改和再分发部分开源代码，并将持续完整保留相关代码来源、作者署名及许可证声明
 
 自下一版本起，Local Arena 将启用全新的 UI 设计语言与品牌 Logo。为保障现有用户的数据、更新、安装和历史版本兼容性，部分旧版本、历史界面、文件名称及兼容性标识在过渡期间仍可能显示原品牌名称
 

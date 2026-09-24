@@ -10,16 +10,10 @@ artifacts/
 
 # Repository-local caches and portable toolchains
 .cache/
-/*-toolchain/
 .local-build.ps1
 .cargo/
 .rustup/
 .nuget/
-.xwin/
-toolchain/
-toolchains/
-xwin/
-llvm/
 *.nupkg
 *.snupkg
 
@@ -37,8 +31,7 @@ llvm/
 .windsurf/
 **/.windsurf/
 .aider*
-AGENTS.md
-**/AGENTS.md
+# AGENTS.md is a tracked repository instruction file, not assistant-local state.
 CLAUDE.md
 **/CLAUDE.md
 GEMINI.md
@@ -66,8 +59,7 @@ tmp/
 *.log
 *.tmp
 *.temp
-temp/panel-hang-*/
-temp/capture-panel.ps1
+temp/
 *.bak
 .env
 .env.*

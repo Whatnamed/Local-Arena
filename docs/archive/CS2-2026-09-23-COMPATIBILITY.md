@@ -2,7 +2,7 @@
 
 This patch targets the installed CS2 build with Steam appmanifest build ID `25472966`.
 It changes only the native compatibility layer. Game behavior remains subject to
-[`MANUAL-ACCEPTANCE.md`](MANUAL-ACCEPTANCE.md).
+[`MANUAL-ACCEPTANCE.md`](../MANUAL-ACCEPTANCE.md).
 
 ## Native sources and ownership
 

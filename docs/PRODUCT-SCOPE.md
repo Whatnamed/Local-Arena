@@ -1,18 +1,21 @@
 # Local Arena Personal — Product Scope
 
+本文件是产品定位、模式、行为和边界的 canonical source，只描述长期事实。
+过日期、绑定某个 CS2 build 或某轮执行的证据放在 `docs/archive/`，发布记录放在 `docs/releases/`；分类见 `docs/README.md`。
+
 ## 1. 产品定位
 
 本项目是基于 Local Arena 的个人 fork。长期底座保留原 Local Arena 的完整能力，包括 Panel、Bot、Local / Preview / Bots / Online 模式、比赛、统计以及现有的饰品功能。
 
-本轮工作的重点是少量明确有价值的个人定制和 bug 修复，而不是把仓库重新裁剪成 Cosmetics-only 产品。现有功能只有在本轮改动直接影响它们时才调整；没有理由删除或隐藏 Bot、Match、Stats 等原有能力。
+工作方向是有明确价值的个人定制和 bug 修复，而不是把仓库重新裁剪成 Cosmetics-only 产品。现有功能只在改动直接影响它们时才调整；没有理由删除或隐藏 Bot、Match、Stats 等原有能力。
 
-产品仍然面向 Windows 本地 CS2 使用。简体中文保持一等 UI 语言，原 Local Arena 的模式切换和启动模型继续作为行为基线。
+产品面向 Windows 本地 CS2 使用。简体中文保持一等 UI 语言，原 Local Arena 的模式切换和启动模型继续作为行为基线。
 
 ## 2. 保留的原有能力
 
 - 保留原 Local Arena 的 Panel、Bot、Match、Stats、Local / Preview / Bots / Online 模式和相关 UI。
 - 保留枪械、刀具、手套、音乐盒以及其他现有饰品入口和配置持久化。
-- 保留原有安装、修复、恢复和诊断流程；只在明确的本轮 bug 或 ownership 范围内做最小修改。
+- 保留原有安装、修复、恢复和诊断流程，对其只做与当前 bug 或 ownership 范围相关的最小修改。
 - 保留 AGPL-3.0、来源说明和适用的 upstream attribution。
 - 不引入大规模 UI redesign，不为了饰品功能裁剪 Bot runtime。
 
@@ -53,50 +56,39 @@
 ## 6. 模式、安装和配置协调
 
 - Normal matchmaking：增强 runtime 不加载，PlayerCosmetics OFF；Cosmetics preview：PlayerCosmetics ON、增强 Bot OFF、官方普通 Bot 可用；Enhanced bots：增强 Bot 与 PlayerCosmetics 同时 ON。Match 使用相同的 Enhanced bots 协调，不恢复历史 `enabled` 快照来决定运行模式。
-- 保留原 Local Arena 的 Local / Preview / Bots / Online 模式切换和启动模型。本轮不引入 A/C 实验分支那套每次启动临时修改 `gameinfo.gi`、数秒后自动恢复 clean 的 launch isolation transaction。
-- 不把“用户直接从 Steam 启动必须永远完全 clean”作为本轮新增 invariant；直接启动行为以原 Local Arena 模式管理为准。
+- 保留原 Local Arena 的 Local / Preview / Bots / Online 模式切换和启动模型。不引入“每次启动临时修改 `gameinfo.gi`、数秒后自动恢复 clean”的 launch isolation transaction。
+- 直接启动 CS2 的行为以原 Local Arena 的模式管理为准，不额外承诺 Steam 直启时项目 runtime 永远完全未加载。
 - `FollowCS2ServerGuidelines` 必须在安装、修复和本地饰品模式需要时可靠协调为 `false`，因为 `true` 会阻止本地饰品管线需要的 econ attributes。
 - 只管理 `core.json` 的该 property，保留未知字段；记录原值并在 restore / uninstall 时按 ownership 恢复。
 - `core.json` 不存在时可从当前安装的 `core.example.json` 派生；malformed、权限错误或无法安全写入时 fail closed，并显示清晰错误。
 - 不覆盖未知第三方文件、用户个人 cfg / autoexec / bind。
 
-## 7. Panel 生命周期现场与恢复
+## 7. Panel 生命周期
 
-- 如果本机残留旧 Panel 进程，先区分现场证据和 main 当前源码，再决定是否需要修复。
-- 调查包括进程树、HWND、visible / minimized / focused、窗口位置、cloaked、owner / parent、WebView2 / DWM 可观测状态、single-instance callback 及恢复调用结果。
-- 不在没有证据时重复增加 `set_focus()`。如果证据指向 transparent WebView2 / frameless composition，优先做最小的 `transparent: false` 或明确的 Win32/Tauri restore + redraw/reposition 验证。
+- Panel 窗口恢复问题先区分本机现场证据与当前源码，再决定是否修复；不在缺少证据时叠加 `set_focus()` 之类的补偿调用。
 - 不为解决单一恢复问题无必要增加系统托盘。
+
+某一时期残留进程、HWND / WebView2 composition 的具体调查过程和结论属于历史证据，见 `docs/archive/MAIN-AUDIT-2026-09-23.md`。
 
 ## 8. 图片资产和中文数据
 
-- 手套 / 音乐盒共 192 张必要缩略图随 Panel 打包，构建检查文件、PNG signature、长度及 SHA256，预算 20 MiB；其他饰品图继续使用远程来源与文字 fallback。
-- 审计并统计 glove、music、knife、weapon catalog 的图片 URL 状态、WebView2 可加载性、安装包和 CSP / origin 影响。
+- 手套和音乐盒 picker 的必要缩略图随 Panel 离线打包；构建校验文件集合、PNG signature、长度和 SHA256。新增本地图必须进入同一校验，不引入未校验的批量素材。
+- 其他饰品图继续使用远程来源与文字 fallback。
 - picker 不应大面积显示空白图；加载失败必须有可见 fallback。
 - 优先使用可校验的 build-time catalog、有限本地 cache 或必要的本地缩略图，不在没有尺寸统计前把数 GB 素材塞进仓库。
 - glove catalog 的每个可选条目都应有可靠的 Simplified Chinese display name。优先使用 CS2 / Steam 官方 localization 数据；没有官方条目时使用明确 fallback，不凭空手工翻译整批数据。
-- 至少对 gloves 和 music 建立完整性检查，避免大量 404 或英文退化悄悄进入 build。
+- 至少对 gloves 和 music 建立完整性检查，避免大量 404 或英文退化悄悄进入 build。当前资源清单与预算由 `scripts/check-cosmetic-media.mjs` 和构建检查决定，不在本文档重复具体数量。
 
 ## 9. Updater 和 fork 边界
 
 - 这是独立个人 fork。上游 Git 同步可以审查后进行，但应用内 updater 不得把 `numakkiyu/Local-Arena` 的 release 当作本项目更新并覆盖个人 fork。
 - UI 不显示实际上会安装官方 Local Arena payload 的“更新”操作。
-- 可以保留只读的依赖检查、版本查看或兼容性信息；本轮不构建 unsigned 的个人自动更新通道。
+- 可以保留只读的依赖检查、版本查看或兼容性信息；不构建个人自动更新通道，也不为个人 fork 建立 GitHub signed release / update pipeline。
 
 ## 10. 明确不做的事情
 
 - 不删除 BotAI、BotRandomizer、BotAim、Match、Stats 或其他原 Local Arena 能力。
-- 不整体搬入 A/C 的 hidden Bots mode、临时 launch isolation、gun provenance 或生命周期架构。
+- 不引入实验分支的 hidden Bots mode、临时 launch isolation、gun provenance 或生命周期架构。
 - 不修改原生 HUD、Buy Wheel，不添加游戏内 Overlay 或常驻 UI。
 - 不新增永久高频轮询，不启动 CS2 做自动验收。
-- 不执行与本轮目标无关的重构、依赖升级、格式化或跨 worktree 清理。
-
-## 11. 完成标准
-
-- 更新后的文档、代码和测试都以完整 Local Arena personal fork 为边界。
-- Panel 能可靠协调 `FollowCS2ServerGuidelines`，回防 / 重新发装备路径覆盖刀 phase，快捷刀替换失败安全且有界。
-- pickup 语义符合本节 3.1，不引入 provenance subsystem。
-- glove / music picker 有完整性检查和可见图片 fallback；手套中文覆盖率有数据证据。
-- updater 不再有覆盖官方上游 payload 的安装路径。
-- Bot、Match、Stats 和原有模式仍在当前源码及最终 package 中保留。
-- 完成源码审计、相关单元测试、Panel TypeScript build、Rust/.NET build、workspace verification、main 专属 package 和 package 内容审计。
-- 所有需要真实 CS2、WebView2 现场或用户视觉判断的项目明确留在 `docs/MANUAL-ACCEPTANCE.md`，不由 coding agent 冒充通过。
+- 不执行与当前目标无关的重构、依赖升级、格式化或跨 worktree 清理。
