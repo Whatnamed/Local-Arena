@@ -357,10 +357,16 @@ if ($playerCosmetics -match "TryApplyDroppedKnife" -or
     $playerCosmetics -match 'new CBasePlayerWeapon\(request\.(CurrentHandle|ReplacementHandle)\)') {
     Add-Failure "PlayerCosmetics must not retain raw entity pointers across world updates for dropped knives."
 }
+$knifeRefreshGate = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/KnifeRefreshGate.cs") -Raw
 if ($playerCosmetics -notmatch 'new CHandle<CBasePlayerWeapon>\(entity.EntityHandle.Raw\)' -or
-    $playerCosmetics -notmatch 'KnifeInventoryLifecycle.TryRetire' -or
-    $playerCosmetics -notmatch 'BeginKnifeRollback') {
-    Add-Failure "Knife recreation must use serial-aware references and detach/verify/delete with bounded rollback."
+    $playerCosmetics -notmatch 'TryStartKnifeOperation\(playerHandle, generation\)' -or
+    $playerCosmetics -notmatch 'ApplyExistingKnife\(' -or
+    $playerCosmetics -notmatch 'TryStartGloveOperation\(playerHandle, generation\)' -or
+    $knifeRefreshGate -notmatch 'previous.Busy \|\| now < previous.NextAllowed' -or
+    $playerCosmetics -match 'RemovePlayerItem\(' -or
+    $playerCosmetics -match 'GiveNamedItem<' -or
+    $playerCosmetics -match 'weapon\.Remove\(\)') {
+    Add-Failure "Human knife apply must mutate the owned entity once per generation without detach/give/remove."
 }
 
 $jsonFiles = @(
@@ -394,8 +400,11 @@ foreach ($relative in $jsonFiles) {
 
 $catalogA = Join-Path $repo "Panel/src/data/weaponSkins.json"
 $catalogB = Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/weapon_skins.json"
-if ((Get-FileHash -LiteralPath $catalogA -Algorithm SHA256).Hash -ne
-    (Get-FileHash -LiteralPath $catalogB -Algorithm SHA256).Hash) {
+# Git may check out the plugin JSON with CRLF while the Panel JSON has eol=lf.
+# Compare the same JSON text without platform-specific newline bytes.
+$catalogAText = (Get-Content -LiteralPath $catalogA -Raw).Replace("`r`n", "`n")
+$catalogBText = (Get-Content -LiteralPath $catalogB -Raw).Replace("`r`n", "`n")
+if ($catalogAText -cne $catalogBText) {
     Add-Failure "Panel and plugin weapon catalogs are not identical."
 }
 

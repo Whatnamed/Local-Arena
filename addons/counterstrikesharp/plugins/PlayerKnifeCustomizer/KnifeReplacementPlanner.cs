@@ -29,7 +29,7 @@ public static class KnifeReplacementPlanner
         if (!KnifeShortcutCycle.IsSupported(targetDefIndex))
             return Invalid(currentDefIndex, "The target knife definition is unavailable.");
 
-        // The planner must be side-effect free. In particular, a failed GiveNamedItem
+        // The planner must be side-effect free. In particular, a failed existing-entity mutation
         // must not create a phantom preset that changes the next cycle.
         KnifePreset preset = loadout.KnifePresets.TryGetValue(targetDefIndex, out var configured)
             ? configured.Clone()

@@ -63,31 +63,48 @@ Require(GiveNamedItemPhaseResolver.Resolve("weapon_knife_karambit", 507) == Cosm
     "GiveNamedItem return inspection must select knife, gun, or conservative combined phases.");
 
 var plannerLoadout = new TeamLoadout();
-// Model repeated replacement with both inventory and active-slot references.
-// A failed native detach must not lead to entity deletion or a dangling slot.
-for (int cycle = 0; cycle < 30; cycle++)
-{
-    bool inventory = true, active = true, destroyed = false;
-    bool gaveFresh = false;
-    Require(!KnifeInventoryLifecycle.TryDetach(() => inventory = false, () => inventory || active) && !gaveFresh,
-        "A fresh knife must not be given while ActiveWeapon still references the old knife.");
-    Require(KnifeInventoryLifecycle.TryDetach(() => active = false, () => inventory || active),
-        "The old knife slot must be fully free before giving a replacement.");
-    gaveFresh = true;
-    Require(gaveFresh && !destroyed, "Slot release must keep the original entity for rollback.");
-    inventory = active = true;
-    Require(!KnifeInventoryLifecycle.TryRetire(() => { }, () => inventory || active, () => destroyed = true),
-        "Rejected detach must leave the old knife alive.");
-    Require(!destroyed, "No stale inventory handle may be created on failed detach.");
-    Require(!KnifeInventoryLifecycle.TryRetire(() => inventory = false, () => inventory || active, () => destroyed = true),
-        "Clearing MyWeapons alone is insufficient while ActiveWeapon references the entity.");
-    Require(KnifeInventoryLifecycle.TryRetire(() => active = false, () => inventory || active, () => destroyed = true) && destroyed,
-        "Entity retirement may occur only after both inventory and active references are gone.");
-}
+// A failed or pending refresh cannot allow overlapping shortcut commands.
+var refreshGate = new KnifeRefreshGate();
+var instant = DateTimeOffset.UtcNow;
+Require(refreshGate.TryBegin(player: (nint)0x1000, pawn: 42, team: (int)CosmeticTeam.Ct,
+        now: instant, out long firstRefresh) &&
+        !refreshGate.TryBegin((nint)0x1000, 42, (int)CosmeticTeam.Ct,
+            instant.AddMilliseconds(1), out _),
+    "Rapid shortcut presses must not overlap a knife refresh.");
+Require(refreshGate.IsCurrent((nint)0x1000, 42, (int)CosmeticTeam.Ct, firstRefresh) &&
+        !refreshGate.IsCurrent((nint)0x1000, 43, (int)CosmeticTeam.Ct, firstRefresh),
+    "The refresh request must be bound to its Pawn and team.");
+refreshGate.Complete((nint)0x1000, firstRefresh);
+Require(!refreshGate.TryBegin((nint)0x1000, 42, (int)CosmeticTeam.Ct,
+        instant.AddMilliseconds(200), out _),
+    "Completing a refresh must retain its short debounce.");
+Require(refreshGate.TryBegin((nint)0x1000, 42, (int)CosmeticTeam.Ct,
+        instant.AddMilliseconds(400), out long secondRefresh) &&
+        !refreshGate.IsCurrent((nint)0x1000, 42, (int)CosmeticTeam.Ct, firstRefresh),
+    "A later shortcut may start once, and old callbacks must stay stale.");
+refreshGate.Cancel((nint)0x1000);
+Require(!refreshGate.IsCurrent((nint)0x1000, 42, (int)CosmeticTeam.Ct, secondRefresh),
+    "Death, team change or disconnect must cancel an in-flight refresh.");
+
+string knifeSource = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+    "..", "..", "..", "..", "PlayerKnifeCustomizer", "PlayerKnifeCustomizer.cs")));
+int mutationStart = knifeSource.IndexOf("private KnifeApplyOutcome ApplyExistingKnife(", StringComparison.Ordinal);
+int mutationEnd = knifeSource.IndexOf("private static string? FindSafeNonKnifeSlot(", mutationStart, StringComparison.Ordinal);
+Require(mutationStart >= 0 && mutationEnd > mutationStart, "The existing-entity knife path must be present.");
+string mutation = knifeSource[mutationStart..mutationEnd];
+Require(!knifeSource.Contains("RemovePlayerItem(", StringComparison.Ordinal) &&
+        !knifeSource.Contains("GiveNamedItem<", StringComparison.Ordinal) &&
+        !knifeSource.Contains("weapon.Remove()", StringComparison.Ordinal),
+    "Human cosmetic apply must not detach, give or destroy a knife entity.");
+Require(mutation.Split("ExecuteClientCommand(", StringSplitOptions.None).Length - 1 == 2 &&
+        mutation.Contains("ExecuteClientCommand(safeSlot)", StringComparison.Ordinal) &&
+        mutation.Contains("ExecuteClientCommand(\"slot3\")", StringComparison.Ordinal),
+    "One knife update may issue at most one safe-slot command and one slot3 command.");
+
 var planner = KnifeReplacementPlanner.Plan(507, null, plannerLoadout);
 Require(planner.IsValid && planner.TargetDefIndex == 515 && planner.IsVanilla &&
         plannerLoadout.KnifePresets.Count == 0,
-    "A vanilla quick-knife plan must not create a preset before replacement succeeds.");
+    "A vanilla quick-knife plan must not create a preset before mutation succeeds.");
 plannerLoadout.KnifePresets[515] = Preset(568);
 var configuredPlan = KnifeReplacementPlanner.Plan(507, null, plannerLoadout);
 Require(configuredPlan.IsValid && !configuredPlan.IsVanilla && configuredPlan.Preset.Paint == 568 &&
@@ -232,15 +249,21 @@ var tracker = new ApplyGenerationTracker();
 nint playerHandle = (nint)0x1000;
 
 long initialSpawn = tracker.Begin(playerHandle, CosmeticApplyPhase.All);
+Require(tracker.TryStartGloveOperation(playerHandle, initialSpawn) &&
+        !tracker.TryStartGloveOperation(playerHandle, initialSpawn),
+    "Scheduled apply retries must not queue duplicate glove NextFrame writes.");
 long firstGive = tracker.Begin(playerHandle, CosmeticApplyPhase.Guns);
+Require(!tracker.CompleteGloveOperation(playerHandle, initialSpawn) &&
+        tracker.TryStartGloveOperation(playerHandle, firstGive) &&
+        tracker.CompleteGloveOperation(playerHandle, firstGive),
+    "A new generation must carry an unfinished glove phase and reject the stale callback.");
 Require(!tracker.IsCurrent(playerHandle, initialSpawn),
     "A GiveNamedItem event must invalidate callbacks from the previous generation.");
 Require(tracker.IsPending(playerHandle, firstGive, CosmeticApplyPhase.Knife) &&
-        tracker.IsPending(playerHandle, firstGive, CosmeticApplyPhase.Gloves) &&
         tracker.IsPending(playerHandle, firstGive, CosmeticApplyPhase.Guns) &&
         tracker.IsPending(playerHandle, firstGive, CosmeticApplyPhase.Music) &&
         tracker.IsPending(playerHandle, firstGive, CosmeticApplyPhase.Agent),
-    "A GiveNamedItem event must carry every unfinished spawn phase, including agents, into the new generation.");
+    "A GiveNamedItem event must carry unfinished spawn phases into the new generation.");
 
 Require(tracker.Complete(playerHandle, firstGive, CosmeticApplyPhase.Music),
     "The current generation must complete a phase before a pickup storm.");
@@ -250,10 +273,9 @@ for (int i = 0; i < 100; i++)
 Require(!tracker.IsPending(playerHandle, pickupStorm, CosmeticApplyPhase.Music),
     "A completed phase must not be reintroduced by later gun-only events.");
 Require(tracker.IsPending(playerHandle, pickupStorm, CosmeticApplyPhase.Knife) &&
-        tracker.IsPending(playerHandle, pickupStorm, CosmeticApplyPhase.Gloves) &&
         tracker.IsPending(playerHandle, pickupStorm, CosmeticApplyPhase.Guns) &&
         tracker.IsPending(playerHandle, pickupStorm, CosmeticApplyPhase.Agent),
-    "A GiveNamedItem storm must preserve unfinished knife, glove, gun, and agent phases.");
+    "A GiveNamedItem storm must preserve unfinished knife, gun, and agent phases.");
 Require(tracker.MarkRetryExhausted(playerHandle, pickupStorm),
     "The final bounded attempt must record unfinished phases once.");
 Require(!tracker.MarkRetryExhausted(playerHandle, pickupStorm) && tracker.RetryExhaustions == 1,
@@ -276,10 +298,14 @@ for (int i = 0; i < 1000; i++)
     long spawn = tracker.Begin(playerHandle, CosmeticApplyPhase.All);
     Require(tracker.TryBindContext(playerHandle, spawn, firstPawn, (int)CosmeticTeam.Ct),
         "The current spawn generation must bind its initial pawn and team.");
+    Require(tracker.TryStartKnifeOperation(playerHandle, spawn) &&
+            !tracker.TryStartKnifeOperation(playerHandle, spawn),
+        "One apply generation may start exactly one knife mutation.");
     Require(tracker.Complete(playerHandle, spawn, CosmeticApplyPhase.Knife),
-        "The first knife write must complete the knife phase.");
-    Require(!tracker.IsPending(playerHandle, spawn, CosmeticApplyPhase.Knife),
-        "A completed phase must not be written again by a later retry.");
+        "Success or failure must terminate the knife phase.");
+    Require(!tracker.IsPending(playerHandle, spawn, CosmeticApplyPhase.Knife) &&
+            !tracker.TryStartKnifeOperation(playerHandle, spawn),
+        "Scheduled 0.25/0.50/0.90 retries must not restart a failed knife operation.");
 
     long teamChange = tracker.Begin(playerHandle, CosmeticApplyPhase.All);
     Require(!tracker.IsCurrent(playerHandle, spawn),
@@ -337,4 +363,4 @@ var resumed = throttle.Check("gun", now.AddSeconds(31));
 Require(resumed.ShouldLog && resumed.Suppressed == 1,
     "The next error record must report how many duplicate errors were suppressed.");
 
-Console.WriteLine("PlayerKnifeCustomizer resolver, lifecycle, and log-throttle tests passed.");
+Console.WriteLine("PlayerKnifeCustomizer resolver, knife safety, and log-throttle tests passed.");
