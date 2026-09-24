@@ -1,12 +1,11 @@
 use crate::{AppError, Result, app_storage, app_version, atomic_fs, installer, logging, update_core};
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
 
 pub const MANIFEST_URL: &str =
     "https://github.com/numakkiyu/Local-Arena/releases/latest/download/latest.json";
@@ -15,7 +14,6 @@ const SIGNATURE_URL: &str =
 const UPDATE_PUBLIC_KEY: &str = "RbIjlfASpYVu740SsmQMLuLO7ExxiDBYTdnYThfqU/4=";
 const CACHE_SECONDS: u64 = 6 * 60 * 60;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 static RUNTIME: OnceLock<Mutex<RuntimeState>> = OnceLock::new();
@@ -329,13 +327,6 @@ pub fn record_check_error(error: &AppError) {
     }
 }
 
-fn set_progress(app: &AppHandle, value: UpdateProgress) {
-    if let Ok(mut state) = runtime().lock() {
-        state.progress = Some(value.clone());
-    }
-    let _ = app.emit("update-progress", value);
-}
-
 pub(crate) struct OperationGuard;
 impl OperationGuard {
     pub(crate) fn acquire() -> Result<Self> {
@@ -360,157 +351,6 @@ impl Drop for OperationGuard {
             state.progress = None;
         }
     }
-}
-
-fn selected_component(name: &str) -> Result<update_core::RemoteComponent> {
-    let Some((manifest, _)) = cached_manifest(true)? else {
-        return Err(AppError::update("Check for updates before installing"));
-    };
-    Ok(match name {
-        "panel" => manifest.components.panel,
-        "plugin" => manifest.components.plugin,
-        _ => return Err(AppError::update("Unknown update component")),
-    })
-}
-
-fn download_component(
-    app: &AppHandle,
-    name: &str,
-) -> Result<(update_core::RemoteComponent, PathBuf)> {
-    let component = selected_component(name)?;
-    if update_core::DisplayVersion::parse(app_version::display()).map_err(AppError::update)?
-        < update_core::DisplayVersion::parse(&component.min_panel_version)
-            .map_err(AppError::update)?
-    {
-        return Err(AppError::update(
-            "Update the Panel before installing this plugin version",
-        ));
-    }
-    let directory = update_root()?.join("downloads").join(&component.version);
-    fs::create_dir_all(&directory).map_err(AppError::transaction_io)?;
-    let archive = directory.join(format!("{name}.zip"));
-    if archive.is_file()
-        && update_core::verify_component_file(&archive, component.size, &component.sha256).is_ok()
-    {
-        return Ok((component, archive));
-    }
-    let temporary = archive.with_extension("zip.download");
-    let result = (|| -> Result<()> {
-        update_core::validate_https_github_url(&component.url).map_err(AppError::update)?;
-        let mut response = client(DOWNLOAD_TIMEOUT)?
-            .get(&component.url)
-            .send()
-            .map_err(|error| {
-                AppError::update(format!(
-                    "Cannot download {name} update from GitHub: {error}"
-                ))
-            })?;
-        if !response.status().is_success() {
-            return Err(AppError::update(format!(
-                "GitHub update download failed with HTTP {}",
-                response.status()
-            )));
-        }
-        update_core::validate_https_github_url(response.url().as_str())
-            .map_err(AppError::update)?;
-        if response
-            .content_length()
-            .is_some_and(|size| size != component.size)
-        {
-            return Err(AppError::update(
-                "GitHub update Content-Length did not match the signed manifest",
-            ));
-        }
-        let mut output = File::create(&temporary).map_err(AppError::transaction_io)?;
-        let mut downloaded = 0_u64;
-        let mut buffer = [0_u8; 128 * 1024];
-        loop {
-            if CANCELLED.load(Ordering::Acquire) {
-                return Err(AppError::update("Update download was cancelled"));
-            }
-            let count = response
-                .read(&mut buffer)
-                .map_err(|error| AppError::update(format!("Update download failed: {error}")))?;
-            if count == 0 {
-                break;
-            }
-            downloaded = downloaded.saturating_add(count as u64);
-            if downloaded > component.size || downloaded > update_core::MAX_ARCHIVE_BYTES {
-                return Err(AppError::update(
-                    "Downloaded update exceeded the signed size",
-                ));
-            }
-            output
-                .write_all(&buffer[..count])
-                .map_err(AppError::transaction_io)?;
-            set_progress(
-                app,
-                UpdateProgress {
-                    component: name.into(),
-                    stage: "downloading".into(),
-                    downloaded_bytes: downloaded,
-                    total_bytes: component.size,
-                },
-            );
-        }
-        output.sync_all().map_err(AppError::transaction_io)?;
-        update_core::verify_component_file(&temporary, component.size, &component.sha256)
-            .map_err(AppError::update)?;
-        atomic_fs::replace(&temporary, &archive).map_err(AppError::transaction_io)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result?;
-    Ok((component, archive))
-}
-
-fn clear_directory(path: &Path) -> Result<()> {
-    if path.exists() {
-        fs::remove_dir_all(path).map_err(AppError::transaction_io)?;
-    }
-    fs::create_dir_all(path).map_err(AppError::transaction_io)
-}
-
-fn find_payload_root(extracted: &Path) -> Option<PathBuf> {
-    if extracted.join(installer::MANIFEST_FILE).is_file() {
-        return Some(extracted.to_path_buf());
-    }
-    fs::read_dir(extracted)
-        .ok()?
-        .flatten()
-        .filter(|entry| entry.path().is_dir())
-        .map(|entry| entry.path())
-        .find(|path| path.join(installer::MANIFEST_FILE).is_file())
-}
-
-pub fn prepare_plugin(app: &AppHandle) -> Result<(String, PathBuf)> {
-    let (component, archive) = download_component(app, "plugin")?;
-    set_progress(
-        app,
-        UpdateProgress {
-            component: "plugin".into(),
-            stage: "extracting".into(),
-            downloaded_bytes: component.size,
-            total_bytes: component.size,
-        },
-    );
-    let directory = update_root()?.join("payloads").join(&component.version);
-    clear_directory(&directory)?;
-    let file = File::open(archive).map_err(AppError::transaction_io)?;
-    if let Err(error) = update_core::extract_zip_safely(file, &directory) {
-        let _ = fs::remove_dir_all(&directory);
-        return Err(AppError::update(error));
-    }
-    let root = find_payload_root(&directory)
-        .ok_or_else(|| AppError::payload("Plugin update ZIP has no payload manifest"))?;
-    let manifest = installer::verify_payload(&root)?;
-    if manifest.package_version != component.version {
-        return Err(AppError::payload(
-            "Plugin payload version does not match the signed update manifest",
-        ));
-    }
-    Ok((component.version, root))
 }
 
 pub fn activate_payload(version: &str, path: &Path) -> Result<()> {
@@ -548,12 +388,6 @@ pub fn active_payload_root() -> Option<PathBuf> {
         return None;
     }
     Some(path)
-}
-
-pub fn prepare_panel(_app: &AppHandle) -> Result<UpdateResult> {
-    Err(AppError::update(
-        "Online Panel installation is disabled for this personal Local Arena fork",
-    ))
 }
 
 pub fn cancel() {
