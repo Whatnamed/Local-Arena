@@ -30,7 +30,7 @@ export const THIRD_PARTY_GROUPS: ThirdPartyGroup[] = [
       },
       {
         name: "Metamod:Source",
-        version: "2.0.0-git1406",
+        version: "2.0.0-git1469",
         license: "zlib/libpng",
         url: "https://github.com/alliedmodders/metamod-source",
         description: "Native Source engine plugin loader distributed with the managed payload.",
@@ -38,7 +38,7 @@ export const THIRD_PARTY_GROUPS: ThirdPartyGroup[] = [
       },
       {
         name: "CounterStrikeSharp",
-        version: "v1.0.371",
+        version: "v1.0.375",
         license: "GPL-3.0 + MIT plugin exception",
         url: "https://github.com/roflmuffin/CounterStrikeSharp",
         description: "Managed CS2 plugin runtime. Published plugins may use the repository's MIT exception.",

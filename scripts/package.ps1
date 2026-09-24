@@ -160,6 +160,19 @@ foreach ($botProfileVpk in $botProfileVpks) {
     ConvertTo-BotProfileOnlyVpk $botProfileVpk.FullName
 }
 
+# Remove upstream bundled runtime trees to guarantee that pinned Metamod
+# and CounterStrikeSharp releases provide all runtime binaries and gamedata cleanly,
+# with zero stale 1406/371 remnants.
+$staleMetamodBin = Join-Path $payload "addons\metamod\bin"
+if (Test-Path -LiteralPath $staleMetamodBin) { Remove-Item -LiteralPath $staleMetamodBin -Recurse -Force }
+$staleCss = Join-Path $payload "addons\counterstrikesharp"
+if (Test-Path -LiteralPath $staleCss) {
+    Remove-Item -LiteralPath (Join-Path $staleCss "bin") -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $staleCss "api") -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $staleCss "gamedata") -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $staleCss "source") -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $metamodAddons = Join-Path $metamodExtract "addons"
 if (-not (Test-Path -LiteralPath $metamodAddons)) { throw "Metamod archive has no addons payload." }
 Copy-Tree $metamodAddons (Join-Path $payload "addons")

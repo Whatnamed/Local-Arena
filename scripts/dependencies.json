@@ -12,23 +12,23 @@
   },
   "metamod": {
     "repository": "https://github.com/alliedmodders/metamod-source",
-    "release": "2.0.0-git1406",
+    "release": "2.0.0-git1469",
     "windowsAsset": {
-      "name": "mmsource-2.0.0-git1406-windows.zip",
-      "url": "https://mms.alliedmods.net/mmsdrop/2.0/mmsource-2.0.0-git1406-windows.zip",
-      "sha256": "e147d4cbe90bbd4be3264cffe2b028792165c38f49f77b21c7964be0f117b131"
+      "name": "mmsource-2.0.0-git1469-windows.zip",
+      "url": "https://mms.alliedmods.net/mmsdrop/2.0/mmsource-2.0.0-git1469-windows.zip",
+      "sha256": "e1b3daa232b492f19922f260deac2a2caa50dbf975a9907a4e69684ce8dfa3e8"
     },
-    "windowsLoaderSha256": "7d1d9f2ac5c486962b95e7334700d521816a44541b3d83d82146719f51f278f9"
+    "windowsLoaderSha256": "c57f348a49561e614768f20af8545998cab5ab7f8e4f913906c8889d34e40cfc"
   },
   "counterStrikeSharp": {
     "repository": "https://github.com/roflmuffin/CounterStrikeSharp",
-    "release": "v1.0.371",
+    "release": "v1.0.375",
     "windowsAsset": {
-      "name": "counterstrikesharp-with-runtime-windows-1.0.371.zip",
-      "url": "https://github.com/roflmuffin/CounterStrikeSharp/releases/download/v1.0.371/counterstrikesharp-with-runtime-windows-1.0.371.zip",
-      "sha256": "ab66ef273dfd41379f04777c80dd3c7fcae09c59cf3c689bd40b69b95b99af6e"
+      "name": "counterstrikesharp-with-runtime-windows-1.0.375.zip",
+      "url": "https://github.com/roflmuffin/CounterStrikeSharp/releases/download/v1.0.375/counterstrikesharp-with-runtime-windows-1.0.375.zip",
+      "sha256": "1e21a4d0ea8abf27b6dabdcc66b1bbaeafab37b7b593da752489c1becd0c41e5"
     },
-    "windowsCoreSha256": "3faafeaf00f03774061b567f47be3a568c234cf130d4680d1106dd4a0818e708"
+    "windowsCoreSha256": "69334463860eed462993502b667ac4bec626ef0dc38c3977c792415c37bee1dd"
   },
   "rayTrace": {
     "repository": "https://github.com/FUNPLAY-pro-CS2/Ray-Trace",
