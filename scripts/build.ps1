@@ -143,7 +143,13 @@ function Get-RayTraceApi {
     if (-not $dll) {
         if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
         New-Item -ItemType Directory -Path $extract -Force | Out-Null
-        $tar = (Get-Command tar.exe -ErrorAction Stop).Source
+        # Windows' own tar accepts an absolute "E:\..." operand; a GNU tar found earlier on PATH
+        # (Git for Windows) reads that colon as a remote "host:path" archive and fails, so which
+        # tar is on PATH must not decide whether the build works.
+        $tar = Join-Path $env:SystemRoot "System32\tar.exe"
+        if (-not (Test-Path -LiteralPath $tar -PathType Leaf)) {
+            $tar = (Get-Command tar.exe -ErrorAction Stop).Source
+        }
         & $tar -xzf $archive -C $extract
         if ($LASTEXITCODE -ne 0) { throw "Failed to extract $archive" }
         $dll = Get-ChildItem -LiteralPath $extract -Filter "RayTraceApi.dll" -File -Recurse |

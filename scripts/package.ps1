@@ -65,7 +65,13 @@ function Copy-Tree {
 
 function Expand-TarGz {
     param([string]$Archive, [string]$Destination)
-    $tar = (Get-Command tar.exe -ErrorAction Stop).Source
+    # Windows' own tar accepts an absolute "E:\..." operand; a GNU tar found earlier on PATH
+    # (Git for Windows) reads that colon as a remote "host:path" archive and fails, so which tar
+    # is on PATH must not decide whether packaging works.
+    $tar = Join-Path $env:SystemRoot "System32\tar.exe"
+    if (-not (Test-Path -LiteralPath $tar -PathType Leaf)) {
+        $tar = (Get-Command tar.exe -ErrorAction Stop).Source
+    }
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     & $tar -xzf $Archive -C $Destination
     if ($LASTEXITCODE -ne 0) { throw "Failed to extract $Archive" }
@@ -427,7 +433,9 @@ $sumLines = foreach ($file in $sumFiles) {
     "$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($file))"
 }
 $sums = Join-Path $OutputDirectory "SHA256SUMS.txt"
-Set-Content -LiteralPath $sums -Value $sumLines -Encoding ascii
+# Set-Content writes CRLF, and `sha256sum -c` then reads the trailing \r as part of the file name
+# and rejects the manifest. The file is hex plus ASCII names, so write LF explicitly.
+[IO.File]::WriteAllText($sums, ($sumLines -join "`n") + "`n")
 
 Write-Host "Package complete: $fullZip"
 Write-Host "SHA256 manifest: $sums"
