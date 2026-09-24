@@ -23,7 +23,7 @@
 - 开始和结束都报告：worktree 路径、branch、HEAD、Git status。
 - 未经用户要求，不执行 `git worktree remove/prune`、`git gc`、强制移动其他 branch/ref、跨 worktree reset/clean 等仓库级维护操作。
 - 不自动 cherry-pick、merge 或复制另一个实验分支的实现。并行比较阶段必须保持实现独立；需要汇总时由用户明确指定。
-- 仓库存在未提交的进行中工作时，另建独立 branch 进行维护类改动，不与该工作混合提交。
+- 工作树已有未提交改动时，仅新建 branch 不构成隔离：未提交修改会跟随 branch switch 一起带过去。无关的维护类改动应在独立的 clean worktree 加独立 branch 中进行，不得只在原 dirty worktree 里换个 branch 继续。
 
 ## Upstream and ownership
 
