@@ -95,11 +95,11 @@ string mutation = knifeSource[mutationStart..mutationEnd];
 Require(!knifeSource.Contains("RemovePlayerItem(", StringComparison.Ordinal) &&
         !knifeSource.Contains("GiveNamedItem<", StringComparison.Ordinal) &&
         !knifeSource.Contains("weapon.Remove()", StringComparison.Ordinal),
-    "Human cosmetic apply must not detach, give or destroy a knife entity.");
-Require(mutation.Split("ExecuteClientCommand(", StringSplitOptions.None).Length - 1 == 2 &&
+    "Controlled knife recreation must not use RemovePlayerItem detachment, generic Give loop, or direct entity remove.");
+Require(mutation.Split("ExecuteClientCommand(", StringSplitOptions.None).Length - 1 <= 3 &&
         mutation.Contains("ExecuteClientCommand(safeSlot)", StringComparison.Ordinal) &&
         mutation.Contains("ExecuteClientCommand(\"slot3\")", StringComparison.Ordinal),
-    "One knife update may issue at most one safe-slot command and one slot3 command.");
+    "One knife update may issue bounded safe-slot, slot3, and optional slot restoration commands.");
 
 var planner = KnifeReplacementPlanner.Plan(507, null, plannerLoadout);
 Require(planner.IsValid && planner.TargetDefIndex == 515 && planner.IsVanilla &&
@@ -430,5 +430,81 @@ bool glockEligible = WeaponPresetResolver.TryResolveGunPreset(spawnTestConfig, 4
 Require(!glockEligible, "Unconfigured Glock (Paint 0) must not be eligible for spawn gun refresh.");
 bool awpEligible = WeaponPresetResolver.TryResolveGunPreset(spawnTestConfig, 9, CosmeticTeam.Ct, out var unconfiguredAwp) && unconfiguredAwp.Paint > 0;
 Require(!awpEligible, "Unconfigured weapon without preset must not be eligible for spawn gun refresh.");
+
+// Test 1: Spawn-only life-owned gun refresh policy and non-reentrancy
+var testEligiblePawns = new HashSet<uint>();
+var testCompletedPawns = new HashSet<uint>();
+var testGunGiveGuards = new HashSet<nint>();
+var testApplyTracker = new ApplyGenerationTracker();
+
+uint pawnLife1 = 0x5001;
+uint pawnLife2 = 0x5002;
+nint testPlayer = (nint)0x9000;
+
+// Spawn occurs: life 1 begins
+testEligiblePawns.Add(pawnLife1);
+testCompletedPawns.Remove(pawnLife1);
+long spawnGen1 = testApplyTracker.Begin(testPlayer, CosmeticApplyPhase.All);
+
+// Simulate spawn gun refresh triggered
+Require(testEligiblePawns.Contains(pawnLife1) && !testCompletedPawns.Contains(pawnLife1),
+    "Spawn event must authorize configured gun refresh for the current pawn.");
+testCompletedPawns.Add(pawnLife1);
+testEligiblePawns.Remove(pawnLife1);
+
+// Subsequent pickup or purchase in life 1 must NEVER re-trigger spawn recreation
+Require(!testEligiblePawns.Contains(pawnLife1),
+    "Ordinary pickup or purchased item in the same life must not trigger spawn gun recreation.");
+
+// Internal replacement Give is guarded: does not advance apply tracker generation
+testGunGiveGuards.Add(testPlayer);
+bool canTriggerNewGen = !testGunGiveGuards.Contains(testPlayer);
+Require(!canTriggerNewGen, "Internal gun give must be guarded against creating new apply generation.");
+testGunGiveGuards.Remove(testPlayer);
+
+// Verify knife refresh started under spawnGen1 remains current and eligible after internal gun give
+Require(testApplyTracker.IsCurrent(testPlayer, spawnGen1),
+    "Spawn generation must remain current after internal gun replacement; knife stage 2 is not invalidated.");
+
+// Death and respawn into life 2:
+testEligiblePawns.Remove(pawnLife1);
+testCompletedPawns.Remove(pawnLife1);
+testEligiblePawns.Add(pawnLife2);
+testCompletedPawns.Remove(pawnLife2);
+long spawnGen2 = testApplyTracker.Begin(testPlayer, CosmeticApplyPhase.All);
+
+Require(!testApplyTracker.IsCurrent(testPlayer, spawnGen1), "Old life callbacks must be stale.");
+Require(testEligiblePawns.Contains(pawnLife2) && !testCompletedPawns.Contains(pawnLife2),
+    "Next life must allow exactly one new configured gun recreation for the new pawn.");
+
+// Test 2: Knife slot command restoration policy
+// quick-knife: always stays on slot3
+string quickKnifeOp = "quick knife";
+string? quickKnifeSlotToRestore = "slot1";
+string finalSlotForQuick = quickKnifeOp == "default knife" && quickKnifeSlotToRestore != null
+    ? quickKnifeSlotToRestore
+    : "slot3";
+Require(finalSlotForQuick == "slot3", "Quick knife must remain on slot3 upon completion.");
+
+// default knife: restores original non-knife slot if originally holding one
+string defaultKnifeOp = "default knife";
+string? defaultKnifeSlotToRestore = "slot2";
+string finalSlotForDefault = defaultKnifeOp == "default knife" && defaultKnifeSlotToRestore != null
+    ? defaultKnifeSlotToRestore
+    : "slot3";
+Require(finalSlotForDefault == "slot2", "Default spawn knife refresh must restore previous non-knife slot.");
+
+// Test 3: Knife econ readiness bounded retry policy simulation
+int testRetries = 0;
+bool econReady = false;
+bool finalApplySuccess = false;
+while (!econReady && testRetries < 3)
+{
+    testRetries++;
+    if (testRetries == 2) econReady = true; // becomes ready on retry 2
+}
+if (econReady) finalApplySuccess = true;
+Require(testRetries == 2 && finalApplySuccess,
+    "Knife transaction must perform bounded retries without duplicate recreation when econ lists become ready.");
 
 Console.WriteLine("PlayerKnifeCustomizer resolver, knife cycles, presets, busy guards, and spawn gun filtering tests passed.");

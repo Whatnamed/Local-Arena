@@ -2081,11 +2081,12 @@ fn set_drop_knives(
     }
     let mut config = read_config(&app)?;
     let previous_selected = config.drop_knife_subclasses.clone();
+    let previous_bind_key = config.drop_knife_bind.clone();
     let cosmetics_snapshot = snapshot_cosmetics_files(&root)?;
     let cfg_snapshot = snapshot_quick_knife_cfg(&root)?;
     let mut knife_config = read_knife_config(&root)?;
     knife_config.shortcut_knives = selected.clone();
-    if let Err(error) = replace_quick_knife_bind(&root, &bind_key, &previous_selected, !selected.is_empty()) {
+    if let Err(error) = replace_quick_knife_bind(&root, &previous_bind_key, &bind_key, &previous_selected, !selected.is_empty()) {
         let _ = restore_quick_knife_cfg(&cfg_snapshot);
         return Err(error);
     }
@@ -2119,64 +2120,82 @@ fn validate_quick_knife_bind(bind_key: &str) -> Result<()> {
 
 fn replace_quick_knife_bind(
     csgo: &Path,
-    bind_key: &str,
+    previous_bind_key: &str,
+    target_bind_key: &str,
     previous_selected: &[u16],
     enabled: bool,
 ) -> Result<()> {
-    let key_prefix = format!("bind {bind_key}");
+    validate_quick_knife_bind(target_bind_key)?;
+
+    let prev_key_prefix = format!("bind {previous_bind_key}");
+    let target_key_prefix = format!("bind {target_bind_key}");
+
     let previous_command = previous_selected
         .iter()
         .map(|id| format!("subclass_create {id}"))
         .collect::<Vec<_>>()
         .join(";");
-    let previous_line = format!("{key_prefix} \"{previous_command}\"");
-    let replacement = if enabled {
-        format!("{key_prefix} \"css_quick_knife\"")
-    } else {
-        format!("unbind {bind_key}")
+    let previous_line = format!("{prev_key_prefix} \"{previous_command}\"");
+    let target_previous_line = format!("{target_key_prefix} \"{previous_command}\"");
+
+    let is_owned_quick_knife_line = |trimmed: &str, prefix: &str, prev_line: &str| -> bool {
+        if !is_bind_line_for_key(trimmed, prefix) {
+            return false;
+        }
+        trimmed.contains("css_quick_knife") || trimmed == prev_line
     };
+
+    let target_line = format!("{target_key_prefix} \"css_quick_knife\"");
 
     let mut files = Vec::new();
     for canonical in cfg_paths(csgo) {
         let path = mode_layout::active_or_disabled(&canonical).unwrap_or(canonical);
         let text = fs::read_to_string(&path)?;
-        for line in text.lines() {
-            let trimmed = line.trim_start();
-            if !is_bind_line_for_key(trimmed, &key_prefix) {
-                continue;
-            }
-            let owned = trimmed.contains("css_quick_knife") || trimmed == previous_line;
-            if !owned && enabled {
-                return Err(AppError::invalid(format!(
-                    "Bind key {bind_key} is already used by a user command"
-                )));
+        if enabled {
+            for line in text.lines() {
+                let trimmed = line.trim_start();
+                if is_bind_line_for_key(trimmed, &target_key_prefix) {
+                    let owned = is_owned_quick_knife_line(trimmed, &target_key_prefix, &target_previous_line)
+                        || is_owned_quick_knife_line(trimmed, &target_key_prefix, &previous_line);
+                    if !owned {
+                        return Err(AppError::invalid(format!(
+                            "Bind key {target_bind_key} is already used by a user command"
+                        )));
+                    }
+                }
             }
         }
         files.push((path, text));
     }
 
     for (path, text) in files {
-        let mut found_owned = false;
+        let mut target_written = false;
         let mut lines = Vec::new();
+
         for line in text.lines() {
             let trimmed = line.trim_start();
-            if is_bind_line_for_key(trimmed, &key_prefix)
-                && (trimmed.contains("css_quick_knife") || trimmed == previous_line)
-            {
-                if !found_owned {
-                    lines.push(replacement.clone());
-                    found_owned = true;
+
+            let is_prev_owned = !previous_bind_key.is_empty()
+                && is_owned_quick_knife_line(trimmed, &prev_key_prefix, &previous_line);
+
+            let is_target_owned = is_owned_quick_knife_line(trimmed, &target_key_prefix, &target_previous_line)
+                || is_owned_quick_knife_line(trimmed, &target_key_prefix, &previous_line);
+
+            if is_prev_owned || is_target_owned {
+                if enabled && !target_written {
+                    lines.push(target_line.clone());
+                    target_written = true;
                 }
             } else {
                 lines.push(line.to_string());
             }
         }
-        if enabled && !found_owned {
-            lines.push(replacement.clone());
+
+        if enabled && !target_written {
+            lines.push(target_line.clone());
         }
-        if enabled || found_owned {
-            fs::write(path, format!("{}\r\n", lines.join("\r\n")))?;
-        }
+
+        fs::write(path, format!("{}\r\n", lines.join("\r\n")))?;
     }
     Ok(())
 }
@@ -2835,7 +2854,8 @@ where
 
     let execute_import = || -> Result<()> {
         if cfg_present {
-            replace_quick_knife_bind(root, &target_bind_key, &previous_selected, enabled)?;
+            let prev_bind_key = &app_config_snapshot.drop_knife_bind;
+            replace_quick_knife_bind(root, prev_bind_key, &target_bind_key, &previous_selected, enabled)?;
         }
         save_knife_config(root, &mut config)?;
         let mut new_app_config = app_config_snapshot.clone();
@@ -3710,8 +3730,55 @@ mod tests {
         let restored_app = read_app_config_direct().unwrap();
         assert_eq!(restored_app.drop_knife_bind, "\\");
         assert_eq!(restored_app.drop_knife_subclasses, vec![507, 515, 508, 500, 525, 512]);
-        let restored_cfg = fs::read_to_string(&normal_cfg).unwrap();
-        assert!(restored_cfg.contains("bind \\ \"css_quick_knife\""));
+        for cfg in [&normal_cfg, &ffa_cfg] {
+            let content = fs::read_to_string(cfg).unwrap();
+            assert!(content.contains("bind \\ \"css_quick_knife\""));
+            assert!(!content.contains("bind k \"css_quick_knife\""));
+            assert_eq!(
+                content.lines().filter(|l| l.contains("css_quick_knife")).count(),
+                1,
+                "Exactly one quick-knife bind must exist in cfg"
+            );
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn set_drop_knives_removes_old_managed_bind_when_changing_keys() {
+        let _guard = app_storage::TEST_STATE_ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let root = test_root();
+        fs::create_dir_all(root.join("cfg")).unwrap();
+        let normal_cfg = root.join("cfg/my_bot_normal_config.cfg");
+        let ffa_cfg = root.join("cfg/my_bot_ffa_config.cfg");
+        fs::write(&normal_cfg, "bind k \"css_quick_knife\"\r\n").unwrap();
+        fs::write(&ffa_cfg, "bind k \"css_quick_knife\"\r\n").unwrap();
+
+        let mut app_config = read_app_config_direct().unwrap();
+        app_config.drop_knife_bind = "k".into();
+        app_config.drop_knife_subclasses = vec![507, 515];
+        write_app_config_direct(&app_config).unwrap();
+
+        let previous_bind_key = app_config.drop_knife_bind.clone();
+        let previous_selected = app_config.drop_knife_subclasses.clone();
+        let new_key = "\\".to_string();
+        let new_selected = vec![507, 515, 508];
+
+        replace_quick_knife_bind(&root, &previous_bind_key, &new_key, &previous_selected, true).unwrap();
+        app_config.drop_knife_bind = new_key;
+        app_config.drop_knife_subclasses = new_selected;
+        write_app_config_direct(&app_config).unwrap();
+
+        for cfg in [&normal_cfg, &ffa_cfg] {
+            let content = fs::read_to_string(cfg).unwrap();
+            assert!(content.contains("bind \\ \"css_quick_knife\""));
+            assert!(!content.contains("bind k \"css_quick_knife\""));
+            assert_eq!(
+                content.lines().filter(|l| l.contains("css_quick_knife")).count(),
+                1,
+                "Exactly one quick-knife bind must exist in cfg after set_drop_knives key switch"
+            );
+        }
 
         fs::remove_dir_all(root).unwrap();
     }
