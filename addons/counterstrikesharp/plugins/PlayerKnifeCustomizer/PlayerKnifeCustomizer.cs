@@ -211,6 +211,8 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private readonly ApplyGenerationTracker _applyTracker = new();
     private readonly KnifeRefreshGate _knifeRefresh = new();
     private readonly Dictionary<nint, long> _gloveRevisions = new();
+    private readonly HashSet<nint> _knifeGiveGuards = new();
+    private readonly Dictionary<nint, long> _spawnGunsRefreshedGeneration = new();
     private long _configRevision;
     private bool _bodygroupAvailable = true;
     private static readonly float[] KnifeOwnershipRetryDelays = [0.05f, 0.12f, 0.25f];
@@ -304,6 +306,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             var player = GetPlayerFromItemServices(itemServices);
             if (!CanApplyToPlayer(player)) return HookResult.Continue;
             nint playerHandle = player!.Handle;
+            if (_knifeGiveGuards.Contains(playerHandle)) return HookResult.Continue;
 
             nint returnedHandle = hook.GetReturn<nint>();
             var returnedWeapon = returnedHandle == nint.Zero
@@ -326,6 +329,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private void OnKnifeEntitySpawned(CEntityInstance entity)
     {
         if (!_config.Enabled || !entity.IsValid || !IsKnifeName(entity.DesignerName)) return;
+        if (_knifeGiveGuards.Count > 0) return;
         var knife = new CHandle<CBasePlayerWeapon>(entity.EntityHandle.Raw);
         // Engine retakes can create/equip a knife outside GiveNamedItem. Ownership
         // is not ready inside OnEntitySpawned; resolve the serial handle later.
@@ -408,6 +412,8 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             _applyTracker.Cancel(victim.Handle);
             _knifeRefresh.Cancel(victim.Handle);
             _gloveRevisions.Remove(victim.Handle);
+            _spawnGunsRefreshedGeneration.Remove(victim.Handle);
+            _knifeGiveGuards.Remove(victim.Handle);
         }
         if (!CanApplyToPlayer(attacker) || victim == null || !victim.IsValid || attacker == victim)
             return HookResult.Continue;
@@ -435,6 +441,8 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         {
             _knifeRefresh.Cancel(player.Handle);
             _gloveRevisions.Remove(player.Handle);
+            _spawnGunsRefreshedGeneration.Remove(player.Handle);
+            _knifeGiveGuards.Remove(player.Handle);
         }
         if (CanApplyToPlayer(player))
             ScheduleApplyPipeline(player!.Handle, CosmeticApplyPhase.All);
@@ -449,6 +457,8 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             _applyTracker.Cancel(player.Handle);
             _knifeRefresh.Cancel(player.Handle);
             _gloveRevisions.Remove(player.Handle);
+            _spawnGunsRefreshedGeneration.Remove(player.Handle);
+            _knifeGiveGuards.Remove(player.Handle);
         }
         return HookResult.Continue;
     }
@@ -458,6 +468,8 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         _applyTracker.CancelAll();
         _knifeRefresh.CancelAll();
         _gloveRevisions.Clear();
+        _spawnGunsRefreshedGeneration.Clear();
+        _knifeGiveGuards.Clear();
         return HookResult.Continue;
     }
 
@@ -519,7 +531,10 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Guns,
             () => TryApplyGunPresets(player, readyPawn, readyTeam, out activeGunChanged), "gun pipeline");
         if (gunsPending && !_applyTracker.IsPending(playerHandle, generation, CosmeticApplyPhase.Guns))
+        {
             TryControlledReequip(player, readyPawn, readyTeam, generation, activeGunChanged);
+            TrySpawnConfiguredGunsRefresh(player, readyPawn, readyTeam, generation);
+        }
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Music,
             () => { ApplyMusicKit(player); return true; }, "music pipeline");
         if (finalAttempt) _applyTracker.MarkRetryExhausted(playerHandle, generation);
@@ -588,17 +603,39 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         if (target > 0 && !KnifeShortcutCycle.IsSupported(target)) return true;
         KnifeReplacementPlan plan;
         if (target > 0 && target != current)
-            plan = KnifeReplacementPlanner.Plan(current, [target], loadout);
+        {
+            KnifePreset targetPreset = loadout.KnifePresets.TryGetValue(target, out var configured) && configured.Paint > 0
+                ? configured.Clone()
+                : new KnifePreset { Paint = 0, Seed = 0, Wear = 0.01f };
+            plan = new KnifeReplacementPlan(
+                current,
+                target,
+                KnifeShortcutCycle.GetKnifeDesignerName(target),
+                KnifeShortcutCycle.GetKnifeDisplayName(target),
+                targetPreset,
+                targetPreset.Paint <= 0,
+                true,
+                string.Empty);
+        }
         else if (TryGetPreset(current, team, out var preset))
-            plan = new KnifeReplacementPlan(current, current, weapon.DesignerName,
-                KnifeShortcutCycle.GetKnifeDisplayName(current), preset.Clone(), false, true, string.Empty);
+        {
+            plan = new KnifeReplacementPlan(
+                current,
+                current,
+                weapon.DesignerName,
+                KnifeShortcutCycle.GetKnifeDisplayName(current),
+                preset.Clone(),
+                preset.Paint <= 0,
+                true,
+                string.Empty);
+        }
         else
+        {
             return true;
+        }
 
         if (!_applyTracker.TryStartKnifeOperation(playerHandle, generation)) return true;
-        // Once mutation starts, success and failure are both terminal for this
-        // generation. Generic readiness retries must never repeat the write.
-        ApplyExistingKnife(player!, pawn, team, weapon, plan, generation, "default knife");
+        ApplyExistingKnife(player!, pawn, team, weapon, plan, generation, "default knife", notifyPlayer: false);
         return true;
     }
 
@@ -635,6 +672,12 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             return;
         }
 
+        if (_knifeRefresh.IsBusy(player.Handle))
+        {
+            command.ReplyToCommand("[PlayerCosmetics] Wait for the current knife refresh.");
+            return;
+        }
+
         var item = current.AttributeManager?.Item;
         if (_setAttrByName == null || item == null || !HasReadyAttributeLists(item))
         {
@@ -653,92 +696,205 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         long generation = _applyTracker.CurrentGeneration(player.Handle);
         if (generation == 0) generation = _applyTracker.Begin(player.Handle, CosmeticApplyPhase.None);
         var outcome = ApplyExistingKnife(player, pawn!, team.Value, current, plan,
-            generation, "quick knife");
-        if (outcome is KnifeApplyOutcome.Applied or KnifeApplyOutcome.DeferredRefresh)
+            generation, "quick knife", notifyPlayer: true);
+        if (outcome is KnifeApplyOutcome.Applied or KnifeApplyOutcome.RefreshStarted)
             _applyTracker.Complete(player.Handle, generation, CosmeticApplyPhase.Knife);
         command.ReplyToCommand(outcome switch
         {
-            KnifeApplyOutcome.Applied => $"[PlayerCosmetics] Updated {plan.DisplayName}.",
-            KnifeApplyOutcome.DeferredRefresh => $"[PlayerCosmetics] Updated {plan.DisplayName}; switch away and back to refresh its viewmodel.",
+            KnifeApplyOutcome.Applied or KnifeApplyOutcome.RefreshStarted => $"[PlayerCosmetics] Switching to {plan.DisplayName}...",
             KnifeApplyOutcome.Busy => "[PlayerCosmetics] Wait for the current knife refresh.",
             _ => "[PlayerCosmetics] Knife update failed; the current entity was retained.",
         });
     }
 
-    private enum KnifeApplyOutcome { Applied, DeferredRefresh, Busy, Failed }
+    private enum KnifeApplyOutcome { Applied, RefreshStarted, Busy, Failed }
 
     private KnifeApplyOutcome ApplyExistingKnife(CCSPlayerController player, CCSPlayerPawn pawn,
         CosmeticTeam team, CBasePlayerWeapon knife, KnifeReplacementPlan plan,
-        long generation, string operation)
+        long generation, string operation, bool notifyPlayer = false)
     {
         if (!plan.IsValid || !KnifeShortcutCycle.IsSupported(plan.TargetDefIndex) ||
             !knife.IsValid || !IsInInventory(pawn, knife) ||
             knife.AttributeManager?.Item is not { } item || !HasReadyAttributeLists(item) ||
             (!plan.IsVanilla && !ValidatePreset(plan.TargetDefIndex, plan.Preset)))
             return KnifeApplyOutcome.Failed;
+
+        ushort currentDefIndex = item.ItemDefinitionIndex;
+        bool needsRecreation = currentDefIndex != plan.TargetDefIndex ||
+            (!plan.IsVanilla && knife.FallbackPaintKit != plan.Preset.Paint);
+
+        if (!needsRecreation)
+        {
+            bool directApplied = plan.IsVanilla
+                ? ApplyVanillaKnife(knife, plan.TargetDefIndex, player.SteamID)
+                : ApplyKnifePreset(knife, plan.TargetDefIndex, plan.Preset, player.SteamID);
+            if (directApplied)
+            {
+                Utilities.SetStateChanged(player, "CCSPlayerController", "m_pInventoryServices");
+                return KnifeApplyOutcome.Applied;
+            }
+        }
+
         if (!_knifeRefresh.TryBegin(player.Handle, pawn.EntityHandle.Raw, (int)team,
                 DateTimeOffset.UtcNow, out long revision))
             return KnifeApplyOutcome.Busy;
 
-        try
+        var activeWeapon = pawn.WeaponServices?.ActiveWeapon.Value;
+        bool isHoldingKnife = activeWeapon is { IsValid: true } && IsKnifeName(activeWeapon.DesignerName);
+        string? slotToRestore = isHoldingKnife ? null : GetSlotCommand(activeWeapon);
+
+        if (isHoldingKnife)
         {
-            ushort current = item.ItemDefinitionIndex;
-            if (current != plan.TargetDefIndex)
-                knife.AcceptInput("ChangeSubclass", value: plan.TargetDefIndex.ToString());
-            bool applied = plan.IsVanilla
-                ? ApplyVanillaKnife(knife, plan.TargetDefIndex, player.SteamID)
-                : ApplyKnifePreset(knife, plan.TargetDefIndex, plan.Preset, player.SteamID);
-            if (!applied)
-            {
-                LogApplyError(operation, new InvalidOperationException("existing knife econ attributes were not applied"));
-                _knifeRefresh.Complete(player.Handle, revision);
-                return KnifeApplyOutcome.Failed;
-            }
-
-            Utilities.SetStateChanged(player, "CCSPlayerController", "m_pInventoryServices");
-            if (pawn.WeaponServices?.ActiveWeapon.Raw != knife.EntityHandle.Raw)
-            {
-                _knifeRefresh.Complete(player.Handle, revision);
-                return KnifeApplyOutcome.Applied;
-            }
-
             string? safeSlot = FindSafeNonKnifeSlot(pawn);
-            if (safeSlot == null)
+            if (safeSlot != null) player.ExecuteClientCommand(safeSlot);
+        }
+
+        nint playerHandle = player.Handle;
+        ulong steamId = player.SteamID;
+        uint pawnHandle = pawn.EntityHandle.Raw;
+        uint oldKnifeHandle = knife.EntityHandle.Raw;
+        ushort targetDefIndex = plan.TargetDefIndex;
+        KnifePreset targetPreset = plan.Preset.Clone();
+        bool isVanilla = plan.IsVanilla;
+        long configRevision = _configRevision;
+
+        Logger.LogInformation("[PlayerCosmetics] Knife refresh begin: player={SteamId} team={Team} old_handle={OldHandle} old_def={OldDef} target_def={TargetDef} target_paint={TargetPaint} gen={Gen}",
+            steamId, team, oldKnifeHandle, currentDefIndex, targetDefIndex, targetPreset.Paint, generation);
+
+        AddTimer(0.10f, () =>
+        {
+            try
             {
-                _knifeRefresh.Complete(player.Handle, revision);
-                return KnifeApplyOutcome.DeferredRefresh;
+                var currentPlayer = ResolvePlayer(playerHandle);
+                var currentPawn = currentPlayer?.PlayerPawn.Value;
+                if (!_knifeRefresh.IsCurrent(playerHandle, pawnHandle, (int)team, revision) ||
+                    !_applyTracker.IsCurrent(playerHandle, generation) ||
+                    _configRevision != configRevision || !CanApplyToPlayer(currentPlayer) ||
+                    !currentPlayer!.PawnIsAlive || GetCosmeticTeam(currentPlayer) != team ||
+                    currentPawn is not { IsValid: true } || currentPawn.EntityHandle.Raw != pawnHandle)
+                {
+                    _knifeRefresh.Complete(playerHandle, revision);
+                    return;
+                }
+
+                var old = FindOwnedKnife(currentPawn);
+                if (old is { IsValid: true } && OwnedBy(old, currentPawn))
+                {
+                    old.AddEntityIOEvent("Kill", old, null, "", 0f);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogApplyError("knife kill stage", ex);
+                _knifeRefresh.Complete(playerHandle, revision);
+            }
+        }, TimerFlags.STOP_ON_MAPCHANGE);
+
+        AddTimer(0.23f, () =>
+        {
+            var currentPlayer = ResolvePlayer(playerHandle);
+            var currentPawn = currentPlayer?.PlayerPawn.Value;
+            if (!_knifeRefresh.IsCurrent(playerHandle, pawnHandle, (int)team, revision) ||
+                !_applyTracker.IsCurrent(playerHandle, generation) ||
+                _configRevision != configRevision || !CanApplyToPlayer(currentPlayer) ||
+                !currentPlayer!.PawnIsAlive || GetCosmeticTeam(currentPlayer) != team ||
+                currentPawn is not { IsValid: true } || currentPawn.EntityHandle.Raw != pawnHandle)
+            {
+                _knifeRefresh.Complete(playerHandle, revision);
+                return;
             }
 
-            player.ExecuteClientCommand(safeSlot);
-            nint playerHandle = player.Handle;
-            uint pawnHandle = pawn.EntityHandle.Raw;
-            uint knifeHandle = knife.EntityHandle.Raw;
-            long configRevision = _configRevision;
+            string baseKnife = KnifeShortcutCycle.GetBaseDesignerName(team);
+            uint firstKnifeHandle = 0;
+            uint temporaryPistolHandle = 0;
+            uint finalKnifeHandle = 0;
+
+            _knifeGiveGuards.Add(playerHandle);
+            try
+            {
+                firstKnifeHandle = GiveWeaponRaw(currentPlayer!, baseKnife);
+                bool hasGun = HasNonKnifeWeapon(currentPawn);
+                temporaryPistolHandle = hasGun ? 0u : GiveWeaponRaw(currentPlayer!, "weapon_usp_silencer");
+                finalKnifeHandle = GiveWeaponRaw(currentPlayer!, baseKnife);
+            }
+            catch (Exception ex)
+            {
+                LogApplyError("knife give handshake", ex);
+            }
+            finally
+            {
+                _knifeGiveGuards.Remove(playerHandle);
+            }
+
+            currentPlayer!.ExecuteClientCommand("slot3");
+
             Server.NextFrame(() =>
             {
                 try
                 {
-                    var currentPlayer = ResolvePlayer(playerHandle);
-                    var currentPawn = currentPlayer?.PlayerPawn.Value;
-                    if (_knifeRefresh.IsCurrent(playerHandle, pawnHandle, (int)team, revision) &&
-                        _applyTracker.IsCurrent(playerHandle, generation) &&
-                        _configRevision == configRevision && CanApplyToPlayer(currentPlayer) &&
-                        currentPlayer!.PawnIsAlive && GetCosmeticTeam(currentPlayer) == team &&
-                        currentPawn is { IsValid: true } && currentPawn.EntityHandle.Raw == pawnHandle &&
-                        currentPawn.WeaponServices?.MyWeapons.Any(handle => handle.Raw == knifeHandle) == true)
-                        currentPlayer.ExecuteClientCommand("slot3");
+                    var nextPlayer = ResolvePlayer(playerHandle);
+                    var nextPawn = nextPlayer?.PlayerPawn.Value;
+                    if (!_knifeRefresh.IsCurrent(playerHandle, pawnHandle, (int)team, revision) ||
+                        !_applyTracker.IsCurrent(playerHandle, generation) ||
+                        _configRevision != configRevision || !CanApplyToPlayer(nextPlayer) ||
+                        !nextPlayer!.PawnIsAlive || GetCosmeticTeam(nextPlayer) != team ||
+                        nextPawn is not { IsValid: true } || nextPawn.EntityHandle.Raw != pawnHandle)
+                    {
+                        return;
+                    }
+
+                    var finalKnife = ResolveWeapon(finalKnifeHandle);
+                    var firstKnife = ResolveWeapon(firstKnifeHandle);
+                    var temporaryPistol = ResolveWeapon(temporaryPistolHandle);
+
+                    if (finalKnife != null && firstKnife != null)
+                        firstKnife.AddEntityIOEvent("Kill", firstKnife, null, "", 0.01f);
+                    if (temporaryPistol != null)
+                        temporaryPistol.AddEntityIOEvent("Kill", temporaryPistol, null, "", 0.01f);
+
+                    var targetKnife = finalKnife ?? firstKnife;
+                    if (targetKnife != null)
+                    {
+                        targetKnife.AcceptInput("ChangeSubclass", value: targetDefIndex.ToString());
+                        var newItem = targetKnife.AttributeManager?.Item;
+                        if (newItem != null) newItem.ItemDefinitionIndex = targetDefIndex;
+
+                        if (!isVanilla && targetPreset.Paint > 0)
+                            ApplyKnifePreset(targetKnife, targetDefIndex, targetPreset, nextPlayer.SteamID);
+                        else
+                            ApplyVanillaKnife(targetKnife, targetDefIndex, nextPlayer.SteamID);
+
+                        Utilities.SetStateChanged(nextPlayer, "CCSPlayerController", "m_pInventoryServices");
+                        Utilities.SetStateChanged(targetKnife, "CEconEntity", "m_AttributeManager");
+
+                        Logger.LogInformation("[PlayerCosmetics] Knife refresh complete: player={SteamId} new_handle={NewHandle} actual_def={ActualDef} fallback_paint={FallbackPaint}",
+                            nextPlayer.SteamID, targetKnife.Handle, targetDefIndex, targetKnife.FallbackPaintKit);
+
+
+                        _applyTracker.Complete(playerHandle, generation, CosmeticApplyPhase.Knife);
+                        if (notifyPlayer)
+                            nextPlayer.PrintToChat($"[PlayerCosmetics] Equipped {KnifeShortcutCycle.GetKnifeDisplayName(targetDefIndex)}.");
+                    }
+                    else
+                    {
+                        _knifeGiveGuards.Add(playerHandle);
+                        try { nextPlayer.GiveNamedItem(baseKnife); }
+                        catch (Exception ex) { LogApplyError("knife base fallback", ex); }
+                        finally { _knifeGiveGuards.Remove(playerHandle); }
+                    }
                 }
-                catch (Exception ex) { LogApplyError("knife viewmodel refresh", ex); }
-                finally { _knifeRefresh.Complete(playerHandle, revision); }
+                catch (Exception ex)
+                {
+                    LogApplyError(operation, ex);
+                }
+                finally
+                {
+                    _knifeRefresh.Complete(playerHandle, revision);
+                }
             });
-            return KnifeApplyOutcome.Applied;
-        }
-        catch (Exception ex)
-        {
-            _knifeRefresh.Complete(player.Handle, revision);
-            LogApplyError(operation, ex);
-            return KnifeApplyOutcome.Failed;
-        }
+        }, TimerFlags.STOP_ON_MAPCHANGE);
+
+        return KnifeApplyOutcome.RefreshStarted;
     }
 
     private static string? FindSafeNonKnifeSlot(CCSPlayerPawn pawn)
@@ -759,6 +915,171 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         }
         return null;
     }
+
+    private readonly record struct SpawnGunRefreshEntry(
+        uint OldRawHandle,
+        ushort DefIndex,
+        string ClassName,
+        KnifePreset Preset,
+        int Clip,
+        int Reserve,
+        bool WasActive
+    );
+
+    private void TrySpawnConfiguredGunsRefresh(CCSPlayerController player, CCSPlayerPawn pawn, CosmeticTeam team, long generation)
+    {
+        if (_spawnGunsRefreshedGeneration.TryGetValue(player.Handle, out long lastGen) && lastGen == generation)
+            return;
+
+        var weapons = pawn.WeaponServices?.MyWeapons;
+        if (weapons == null) return;
+
+        var entries = new List<SpawnGunRefreshEntry>();
+        foreach (var handle in weapons)
+        {
+            var weapon = handle.Value;
+            if (weapon == null || !weapon.IsValid || IsKnifeName(weapon.DesignerName)) continue;
+            var item = weapon.AttributeManager?.Item;
+            if (item == null) continue;
+            ushort defIndex = item.ItemDefinitionIndex;
+            if (!TryGetPreset(defIndex, team, out var preset) || preset.Paint <= 0) continue;
+
+            string className = weapon.DesignerName;
+            int clip = weapon.Clip1;
+            int reserve = weapon.ReserveAmmo.Length > 0 ? weapon.ReserveAmmo[0] : 0;
+            bool wasActive = pawn.WeaponServices?.ActiveWeapon.Raw == weapon.EntityHandle.Raw;
+            entries.Add(new SpawnGunRefreshEntry(weapon.EntityHandle.Raw, defIndex, className, preset.Clone(), clip, reserve, wasActive));
+        }
+
+        if (entries.Count == 0) return;
+
+        _spawnGunsRefreshedGeneration[player.Handle] = generation;
+        nint playerHandle = player.Handle;
+        ulong steamId = player.SteamID;
+        uint pawnHandle = pawn.EntityHandle.Raw;
+
+        AddTimer(0.08f, () =>
+        {
+            var validPlayer = ResolvePlayer(playerHandle);
+            if (!CanApplyToPlayer(validPlayer) || validPlayer!.SteamID != steamId ||
+                GetCosmeticTeam(validPlayer) != team || !validPlayer.PawnIsAlive)
+                return;
+            var currentPawn = validPlayer.PlayerPawn.Value;
+            if (currentPawn is not { IsValid: true } || currentPawn.EntityHandle.Raw != pawnHandle)
+                return;
+
+            foreach (var entry in entries)
+            {
+                var old = ResolveWeapon(entry.OldRawHandle);
+                if (old is { IsValid: true } && OwnedBy(old, currentPawn))
+                    old.AddEntityIOEvent("Kill", old, null, "", 0f);
+            }
+        }, TimerFlags.STOP_ON_MAPCHANGE);
+
+        AddTimer(0.20f, () =>
+        {
+            var validPlayer = ResolvePlayer(playerHandle);
+            if (!CanApplyToPlayer(validPlayer) || validPlayer!.SteamID != steamId ||
+                GetCosmeticTeam(validPlayer) != team || !validPlayer.PawnIsAlive)
+                return;
+            var currentPawn = validPlayer.PlayerPawn.Value;
+            if (currentPawn is not { IsValid: true } || currentPawn.EntityHandle.Raw != pawnHandle)
+                return;
+
+            var givenEntries = new List<(SpawnGunRefreshEntry Entry, uint NewHandle)>();
+            foreach (var entry in entries)
+            {
+                uint newHandle = GiveWeaponRaw(validPlayer, entry.ClassName);
+                if (newHandle != 0)
+                    givenEntries.Add((entry, newHandle));
+            }
+
+            Server.NextFrame(() =>
+            {
+                var nextPlayer = ResolvePlayer(playerHandle);
+                if (!CanApplyToPlayer(nextPlayer) || nextPlayer!.SteamID != steamId)
+                    return;
+
+                SpawnGunRefreshEntry? activeToRestore = null;
+                foreach (var (entry, newHandle) in givenEntries)
+                {
+                    var newWeapon = ResolveWeapon(newHandle);
+                    if (newWeapon == null) continue;
+
+                    newWeapon.Clip1 = entry.Clip;
+                    if (newWeapon.ReserveAmmo.Length > 0)
+                        newWeapon.ReserveAmmo[0] = entry.Reserve;
+
+                    ApplyGunPreset(newWeapon, entry.DefIndex, entry.Preset, nextPlayer.SteamID);
+
+                    Logger.LogInformation("[PlayerCosmetics] Configured spawn gun refresh: defindex={DefIndex} paint={Paint} old_handle={OldHandle} new_handle={NewHandle}",
+                        entry.DefIndex, entry.Preset.Paint, entry.OldRawHandle, newWeapon.Handle);
+
+                    if (entry.WasActive)
+                        activeToRestore = entry;
+                }
+
+                Utilities.SetStateChanged(nextPlayer, "CCSPlayerController", "m_pInventoryServices");
+
+                if (activeToRestore != null)
+                {
+                    string? slotCmd = activeToRestore.Value.DefIndex is 61 or 32 or 4 or 1 or 2 or 3 or 30 or 36 or 63 or 64 ? "slot2" : "slot1";
+                    nextPlayer.ExecuteClientCommand(slotCmd);
+                }
+            });
+        }, TimerFlags.STOP_ON_MAPCHANGE);
+    }
+
+    private static uint GiveWeaponRaw(CCSPlayerController player, string className)
+    {
+        nint handle = player.GiveNamedItem(className);
+        if (handle == nint.Zero) return 0;
+        var weapon = new CBasePlayerWeapon(handle);
+        return weapon.EntityHandle.Raw;
+    }
+
+    private static CBasePlayerWeapon? ResolveWeapon(uint rawHandle)
+    {
+        if (rawHandle == 0) return null;
+        var weapon = new CHandle<CBasePlayerWeapon>(rawHandle).Value;
+        return weapon is { IsValid: true } ? weapon : null;
+    }
+
+    private static bool OwnedBy(CBasePlayerWeapon weapon, CCSPlayerPawn pawn)
+    {
+        var owner = weapon.OwnerEntity.Value;
+        return owner != null && owner.IsValid && owner.EntityHandle.Raw == pawn.EntityHandle.Raw;
+    }
+
+    private static bool HasNonKnifeWeapon(CCSPlayerPawn pawn)
+    {
+        var weapons = pawn.WeaponServices?.MyWeapons;
+        if (weapons == null) return false;
+        foreach (var handle in weapons)
+        {
+            var weapon = handle.Value;
+            if (weapon is { IsValid: true } && !IsKnifeName(weapon.DesignerName))
+                return true;
+        }
+        return false;
+    }
+
+    private static string? GetSlotCommand(CBasePlayerWeapon? weapon)
+    {
+        if (weapon == null || !weapon.IsValid) return null;
+        if (IsKnifeName(weapon.DesignerName)) return "slot3";
+        try
+        {
+            var slot = weapon.As<CCSWeaponBase>().VData?.GearSlot;
+            if (slot == gear_slot_t.GEAR_SLOT_RIFLE) return "slot1";
+            if (slot == gear_slot_t.GEAR_SLOT_PISTOL) return "slot2";
+            if (slot == gear_slot_t.GEAR_SLOT_GRENADES) return "slot4";
+            if (slot == gear_slot_t.GEAR_SLOT_C4) return "slot5";
+        }
+        catch { }
+        return null;
+    }
+
 
     private static bool IsInInventory(CCSPlayerPawn pawn, CBasePlayerWeapon weapon) =>
         pawn.WeaponServices?.MyWeapons.Any(handle => handle.Raw == weapon.EntityHandle.Raw) == true;
@@ -1625,7 +1946,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private void OnStatusCommand(CCSPlayerController? player, CommandInfo command)
     {
-        command.ReplyToCommand($"[PlayerKnifeCustomizer] enabled={_config.Enabled}, stickers={DecorationReleaseEnabled && _config.StickersEnabled}, charms={DecorationReleaseEnabled && _config.CharmsEnabled}, agents={DecorationReleaseEnabled && _config.AgentsEnabled}, signature={(_setAttrByName == null ? "missing" : "loaded")}, ct_knives={_config.Loadouts.Ct.KnifePresets.Count}, t_knives={_config.Loadouts.T.KnifePresets.Count}, ct_guns={_config.Loadouts.Ct.GunPresets.Count}, t_guns={_config.Loadouts.T.GunPresets.Count}, music={_config.MusicKitId}, catalog={_skinCatalog.Values.Sum(skins => skins.Count)}, sticker_catalog={_validStickers.Count}, charm_catalog={_validCharms.Count}, agent_catalog={_agentModels.Values.Sum(models => models.Count)}, active_generations={_applyTracker.ActiveCount}, schedules={_applyTracker.Schedules}, phase_completions={_applyTracker.PhaseCompletions}, retry_exhaustions={_applyTracker.RetryExhaustions}, context_invalidations={_applyTracker.ContextInvalidations}");
+        command.ReplyToCommand($"[PlayerKnifeCustomizer] enabled={_config.Enabled}, stickers={DecorationReleaseEnabled && _config.StickersEnabled}, charms={DecorationReleaseEnabled && _config.CharmsEnabled}, agents={DecorationReleaseEnabled && _config.AgentsEnabled}, signature={(_setAttrByName == null ? "missing" : "loaded")}, ct_knives={_config.Loadouts.Ct.KnifePresets.Count}, t_knives={_config.Loadouts.T.KnifePresets.Count}, ct_guns={_config.Loadouts.Ct.GunPresets.Count}, t_guns={_config.Loadouts.T.GunPresets.Count}, music={_config.MusicKitId}, catalog={_skinCatalog.Values.Sum(skins => skins.Count)}, sticker_catalog={_validStickers.Count}, charm_catalog={_validCharms.Count}, agent_catalog={_agentModels.Values.Sum(models => models.Count)}, active_generations={_applyTracker.ActiveCount}, schedules={_applyTracker.Schedules}, phase_completions={_applyTracker.PhaseCompletions}, retry_exhaustions={_applyTracker.RetryExhaustions}, context_invalidations={_applyTracker.ContextInvalidations}, shortcut_list=[{string.Join(",", _config.ShortcutKnives)}], knife_refresh_busy={(player != null && _knifeRefresh.IsBusy(player.Handle))}");
     }
 
     private void LogApplyError(string operation, Exception ex)

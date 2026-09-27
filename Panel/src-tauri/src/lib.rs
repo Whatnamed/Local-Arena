@@ -564,10 +564,17 @@ struct KnifeCustomizerState {
     config: KnifeCustomizerConfig,
 }
 
-const COSMETICS_EXPORT_SCHEMA_VERSION: u8 = 2;
+const COSMETICS_EXPORT_SCHEMA_VERSION: u8 = 3;
+const LEGACY_V2_COSMETICS_EXPORT_SCHEMA_VERSION: u8 = 2;
 const LEGACY_COSMETICS_EXPORT_SCHEMA_VERSION: u8 = 1;
 const COSMETICS_EXPORT_KIND: &str = "cs2bip-cosmetics-preset";
 const MAX_COSMETICS_IMPORT_BYTES: u64 = 4 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuickKnifeExportTransport {
+    pub bind_key: String,
+    pub selected: Vec<u16>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CosmeticsPresetBundle {
@@ -575,6 +582,8 @@ struct CosmeticsPresetBundle {
     kind: String,
     exported_at_unix: u64,
     config: KnifeCustomizerConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quick_knife: Option<QuickKnifeExportTransport>,
 }
 
 #[derive(Serialize)]
@@ -602,6 +611,22 @@ fn config_path() -> Result<PathBuf> {
     app_storage::panel_config_path()
 }
 
+fn read_app_config_direct() -> Result<AppConfig> {
+    let path = config_path()?;
+    if !path.exists() {
+        return Ok(AppConfig::default());
+    }
+    let mut config: AppConfig = serde_json::from_str(&fs::read_to_string(path)?)?;
+    apply_release_feature_gates(&mut config);
+    Ok(config)
+}
+
+fn write_app_config_direct(config: &AppConfig) -> Result<()> {
+    let mut config = config.clone();
+    apply_release_feature_gates(&mut config);
+    write_json_atomic(&config_path()?, &config)
+}
+
 fn read_config(app: &AppHandle) -> Result<AppConfig> {
     let path = config_path()?;
     if !path.is_file() {
@@ -616,23 +641,19 @@ fn read_config(app: &AppHandle) -> Result<AppConfig> {
             return Ok(config);
         }
     }
-    if !path.exists() {
-        return Ok(AppConfig::default());
-    }
-    let mut config: AppConfig = serde_json::from_str(&fs::read_to_string(path)?)?;
-    apply_release_feature_gates(&mut config);
-    Ok(config)
+    read_app_config_direct()
 }
 
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(AppError::transaction_io)?;
+    }
     let bytes = serde_json::to_vec_pretty(value)?;
     atomic_fs::write_replace(path, &bytes).map_err(AppError::transaction_io)
 }
 
 fn write_config(_app: &AppHandle, config: &AppConfig) -> Result<()> {
-    let mut config = config.clone();
-    apply_release_feature_gates(&mut config);
-    write_json_atomic(&config_path()?, &config)
+    write_app_config_direct(config)
 }
 
 fn cs2_running() -> bool {
@@ -2699,35 +2720,59 @@ fn export_cosmetics_preset_at(root: &Path, destination: &Path) -> Result<Cosmeti
     if !parent.is_dir() {
         return Err(AppError::invalid("Export destination directory does not exist"));
     }
-    let mut config = read_knife_config(&root)?;
+    let mut config = read_knife_config(root)?;
     normalize_knife_config(&mut config)?;
+    let app_config = read_app_config_direct()?;
+
+    // Canonical sequence: knife_config.shortcut_knives if non-empty, else app_config.drop_knife_subclasses
+    let mut selected = if !config.shortcut_knives.is_empty() {
+        config.shortcut_knives.clone()
+    } else {
+        app_config.drop_knife_subclasses.clone()
+    };
+    selected.retain(|id| SHORTCUT_KNIVES.contains(id));
+    config.shortcut_knives = selected.clone();
+
+    let mut bind_key = app_config.drop_knife_bind.clone();
+    if validate_quick_knife_bind(&bind_key).is_err() {
+        bind_key = "\\".to_string();
+    }
+
     let bundle = CosmeticsPresetBundle {
         schema_version: COSMETICS_EXPORT_SCHEMA_VERSION,
         kind: COSMETICS_EXPORT_KIND.into(),
         exported_at_unix: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
         config,
+        quick_knife: Some(QuickKnifeExportTransport {
+            bind_key,
+            selected,
+        }),
     };
     let bytes = serde_json::to_vec_pretty(&bundle)?;
-    atomic_fs::write_replace(&destination, &bytes)?;
+    atomic_fs::write_replace(destination, &bytes)?;
     Ok(CosmeticsPresetExportResult {
         path: destination.to_string_lossy().into_owned(),
         size_bytes: bytes.len() as u64,
     })
 }
 
-fn read_cosmetics_preset(source: &Path) -> Result<KnifeCustomizerConfig> {
-    let metadata = fs::metadata(&source)?;
+fn read_cosmetics_preset(source: &Path) -> Result<CosmeticsPresetBundle> {
+    let metadata = fs::metadata(source)?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_COSMETICS_IMPORT_BYTES {
         return Err(AppError::invalid("Cosmetics preset must be a non-empty JSON file no larger than 4 MiB"));
     }
-    let mut bundle: CosmeticsPresetBundle = serde_json::from_slice(&fs::read(&source)?)?;
-    if !matches!(bundle.schema_version, LEGACY_COSMETICS_EXPORT_SCHEMA_VERSION | COSMETICS_EXPORT_SCHEMA_VERSION)
-        || bundle.kind != COSMETICS_EXPORT_KIND
+    let mut bundle: CosmeticsPresetBundle = serde_json::from_slice(&fs::read(source)?)?;
+    if !matches!(
+        bundle.schema_version,
+        LEGACY_COSMETICS_EXPORT_SCHEMA_VERSION
+            | LEGACY_V2_COSMETICS_EXPORT_SCHEMA_VERSION
+            | COSMETICS_EXPORT_SCHEMA_VERSION
+    ) || bundle.kind != COSMETICS_EXPORT_KIND
     {
         return Err(AppError::invalid("Unsupported cosmetics preset schema or file type"));
     }
     normalize_knife_config(&mut bundle.config)?;
-    Ok(bundle.config)
+    Ok(bundle)
 }
 
 fn snapshot_cosmetics_files(root: &Path) -> Result<Vec<(PathBuf, Option<Vec<u8>>)>> {
@@ -2755,18 +2800,75 @@ fn import_cosmetics_preset_at<F>(root: &Path, source: &Path, after_write: F) -> 
 where
     F: FnOnce() -> Result<()>,
 {
-    let mut config = read_cosmetics_preset(source)?;
-    let snapshot = snapshot_cosmetics_files(root)?;
-    let backup = backup_cosmetics_before_import(&root)?;
-    if let Err(error) = save_knife_config(root, &mut config).and_then(|_| after_write()) {
-        if let Err(rollback) = restore_cosmetics_files(&snapshot) {
+    let bundle = read_cosmetics_preset(source)?;
+    let mut config = bundle.config;
+    let cosmetics_snapshot = snapshot_cosmetics_files(root)?;
+    let cfg_present = cfg_files_present(root);
+    let cfg_snapshot = if cfg_present {
+        snapshot_quick_knife_cfg(root)?
+    } else {
+        Vec::new()
+    };
+    let app_config_snapshot = read_app_config_direct()?;
+    let backup = backup_cosmetics_before_import(root)?;
+
+    let (target_bind_key, target_selected) = if bundle.schema_version == COSMETICS_EXPORT_SCHEMA_VERSION && bundle.quick_knife.is_some() {
+        let transport = bundle.quick_knife.unwrap();
+        validate_quick_knife_bind(&transport.bind_key)?;
+        let mut selected = transport.selected;
+        selected.retain(|id| SHORTCUT_KNIVES.contains(id));
+        (transport.bind_key, selected)
+    } else {
+        let mut legacy_shortcuts = config.shortcut_knives.clone();
+        legacy_shortcuts.retain(|id| SHORTCUT_KNIVES.contains(id));
+        if !legacy_shortcuts.is_empty() {
+            (app_config_snapshot.drop_knife_bind.clone(), legacy_shortcuts)
+        } else {
+            (app_config_snapshot.drop_knife_bind.clone(), app_config_snapshot.drop_knife_subclasses.clone())
+        }
+    };
+
+    config.shortcut_knives = target_selected.clone();
+
+    let previous_selected = app_config_snapshot.drop_knife_subclasses.clone();
+    let enabled = !target_selected.is_empty();
+
+    let execute_import = || -> Result<()> {
+        if cfg_present {
+            replace_quick_knife_bind(root, &target_bind_key, &previous_selected, enabled)?;
+        }
+        save_knife_config(root, &mut config)?;
+        let mut new_app_config = app_config_snapshot.clone();
+        new_app_config.drop_knife_bind = target_bind_key;
+        new_app_config.drop_knife_subclasses = target_selected;
+        write_app_config_direct(&new_app_config)?;
+        after_write()?;
+        Ok(())
+    };
+
+    if let Err(error) = execute_import() {
+        let mut rollback_errors = Vec::new();
+        if cfg_present {
+            if let Err(e) = restore_quick_knife_cfg(&cfg_snapshot) {
+                rollback_errors.push(format!("cfg: {}", e.detail));
+            }
+        }
+        if let Err(e) = restore_cosmetics_files(&cosmetics_snapshot) {
+            rollback_errors.push(format!("cosmetics: {}", e.detail));
+        }
+        if let Err(e) = write_app_config_direct(&app_config_snapshot) {
+            rollback_errors.push(format!("app_config: {}", e.detail));
+        }
+        if !rollback_errors.is_empty() {
             return Err(AppError::transaction(format!(
-                "Cosmetics import failed ({}) and rollback failed ({})",
-                error.detail, rollback.detail
+                "Cosmetics import failed ({}) and rollback encountered errors: {}",
+                error.detail,
+                rollback_errors.join("; ")
             )));
         }
         return Err(error);
     }
+
     Ok(backup)
 }
 
@@ -3488,6 +3590,7 @@ mod tests {
 
     #[test]
     fn cosmetics_export_and_import_are_atomic_and_keep_a_pre_import_backup() {
+        let _guard = app_storage::TEST_STATE_ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         let root = test_root();
         let mut original = KnifeCustomizerConfig::default();
         original.enabled = false;
@@ -3527,6 +3630,7 @@ mod tests {
 
     #[test]
     fn cosmetics_import_rolls_back_when_post_write_mirroring_fails() {
+        let _guard = app_storage::TEST_STATE_ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         let root = test_root();
         let mut original = KnifeCustomizerConfig::default();
         original.enabled = false;
@@ -3542,6 +3646,7 @@ mod tests {
             kind: COSMETICS_EXPORT_KIND.into(),
             exported_at_unix: 1,
             config: replacement,
+            quick_knife: None,
         };
         fs::write(&source, serde_json::to_vec_pretty(&bundle).unwrap()).unwrap();
 
@@ -3556,6 +3661,159 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn v3_cosmetics_export_and_import_roundtrip_restores_shortcuts_and_cfg_bind() {
+        let _guard = app_storage::TEST_STATE_ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let root = test_root();
+        fs::create_dir_all(root.join("cfg")).unwrap();
+        let normal_cfg = root.join("cfg/my_bot_normal_config.cfg");
+        let ffa_cfg = root.join("cfg/my_bot_ffa_config.cfg");
+        fs::write(&normal_cfg, "bind \\ \"css_quick_knife\"\r\n").unwrap();
+        fs::write(&ffa_cfg, "bind \\ \"css_quick_knife\"\r\n").unwrap();
+
+        let mut initial_knife = KnifeCustomizerConfig::default();
+        initial_knife.shortcut_knives = vec![507, 515, 508, 500, 525, 512];
+        save_knife_config(&root, &mut initial_knife).unwrap();
+
+        let mut app_config = read_app_config_direct().unwrap();
+        app_config.drop_knife_subclasses = vec![507, 515, 508, 500, 525, 512];
+        app_config.drop_knife_bind = "\\".into();
+        write_app_config_direct(&app_config).unwrap();
+
+        let export_path = root.join("v3-export.json");
+        let export_result = export_cosmetics_preset_at(&root, &export_path).unwrap();
+        assert!(export_result.size_bytes > 0);
+
+        let bundle: CosmeticsPresetBundle =
+            serde_json::from_slice(&fs::read(&export_path).unwrap()).unwrap();
+        assert_eq!(bundle.schema_version, 3);
+        let transport = bundle.quick_knife.expect("v3 bundle must include quick_knife");
+        assert_eq!(transport.bind_key, "\\");
+        assert_eq!(transport.selected, vec![507, 515, 508, 500, 525, 512]);
+
+        // Disrupt state: change bind to 'k', empty subclasses, change cfg
+        app_config.drop_knife_bind = "k".into();
+        app_config.drop_knife_subclasses = vec![];
+        write_app_config_direct(&app_config).unwrap();
+        fs::write(&normal_cfg, "bind k \"css_quick_knife\"\r\n").unwrap();
+        fs::write(&ffa_cfg, "bind k \"css_quick_knife\"\r\n").unwrap();
+        let mut mutated_knife = initial_knife.clone();
+        mutated_knife.shortcut_knives = vec![];
+        save_knife_config(&root, &mut mutated_knife).unwrap();
+
+        // Import v3 bundle
+        import_cosmetics_preset_at(&root, &export_path, || Ok(())).unwrap();
+
+        // Verify restoration
+        let restored_knife = read_knife_config(&root).unwrap();
+        assert_eq!(restored_knife.shortcut_knives, vec![507, 515, 508, 500, 525, 512]);
+        let restored_app = read_app_config_direct().unwrap();
+        assert_eq!(restored_app.drop_knife_bind, "\\");
+        assert_eq!(restored_app.drop_knife_subclasses, vec![507, 515, 508, 500, 525, 512]);
+        let restored_cfg = fs::read_to_string(&normal_cfg).unwrap();
+        assert!(restored_cfg.contains("bind \\ \"css_quick_knife\""));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn v2_legacy_cosmetics_import_restores_shortcuts_and_preserves_current_bind_key() {
+        let _guard = app_storage::TEST_STATE_ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let root = test_root();
+        fs::create_dir_all(root.join("cfg")).unwrap();
+        let normal_cfg = root.join("cfg/my_bot_normal_config.cfg");
+        let ffa_cfg = root.join("cfg/my_bot_ffa_config.cfg");
+        fs::write(&normal_cfg, "bind p \"css_quick_knife\"\r\n").unwrap();
+        fs::write(&ffa_cfg, "bind p \"css_quick_knife\"\r\n").unwrap();
+
+        let mut config = KnifeCustomizerConfig::default();
+        config.shortcut_knives = vec![508, 515, 507];
+        save_knife_config(&root, &mut config).unwrap();
+
+        let mut app_config = read_app_config_direct().unwrap();
+        app_config.drop_knife_bind = "p".into();
+        app_config.drop_knife_subclasses = vec![];
+        write_app_config_direct(&app_config).unwrap();
+
+        let v2_bundle = CosmeticsPresetBundle {
+            schema_version: 2,
+            kind: COSMETICS_EXPORT_KIND.into(),
+            exported_at_unix: 1,
+            config: config.clone(),
+            quick_knife: None,
+        };
+        let v2_source = root.join("v2-preset.json");
+        fs::write(&v2_source, serde_json::to_vec_pretty(&v2_bundle).unwrap()).unwrap();
+
+        // Import v2 bundle
+        import_cosmetics_preset_at(&root, &v2_source, || Ok(())).unwrap();
+
+        // Verify: sequence restored, but bind key 'p' is preserved
+        let restored_knife = read_knife_config(&root).unwrap();
+        assert_eq!(restored_knife.shortcut_knives, vec![508, 515, 507]);
+        let restored_app = read_app_config_direct().unwrap();
+        assert_eq!(restored_app.drop_knife_bind, "p");
+        assert_eq!(restored_app.drop_knife_subclasses, vec![508, 515, 507]);
+        let restored_cfg = fs::read_to_string(&normal_cfg).unwrap();
+        assert!(restored_cfg.contains("bind p \"css_quick_knife\""));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_cosmetics_import_rolls_back_all_four_state_domains() {
+        let _guard = app_storage::TEST_STATE_ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let root = test_root();
+        fs::create_dir_all(root.join("cfg")).unwrap();
+        let normal_cfg = root.join("cfg/my_bot_normal_config.cfg");
+        let ffa_cfg = root.join("cfg/my_bot_ffa_config.cfg");
+        fs::write(&normal_cfg, "bind \\ \"css_quick_knife\"\r\n").unwrap();
+        fs::write(&ffa_cfg, "bind \\ \"css_quick_knife\"\r\n").unwrap();
+
+        let mut original_knife_cfg = KnifeCustomizerConfig::default();
+        original_knife_cfg.enabled = true;
+        original_knife_cfg.shortcut_knives = vec![507, 515];
+        save_knife_config(&root, &mut original_knife_cfg).unwrap();
+        let original_knife_bytes = fs::read(knife_config_path(&root)).unwrap();
+        let original_guns_bytes = fs::read(gun_config_path(&root)).unwrap();
+
+        let mut original_app = read_app_config_direct().unwrap();
+        original_app.drop_knife_bind = "\\".into();
+        original_app.drop_knife_subclasses = vec![507, 515];
+        write_app_config_direct(&original_app).unwrap();
+
+        let source = root.join("failing-v3.json");
+        let failing_bundle = CosmeticsPresetBundle {
+            schema_version: 3,
+            kind: COSMETICS_EXPORT_KIND.into(),
+            exported_at_unix: 2,
+            config: KnifeCustomizerConfig::default(),
+            quick_knife: Some(QuickKnifeExportTransport {
+                bind_key: "o".into(),
+                selected: vec![508, 500],
+            }),
+        };
+        fs::write(&source, serde_json::to_vec_pretty(&failing_bundle).unwrap()).unwrap();
+
+        let error = import_cosmetics_preset_at(&root, &source, || {
+            Err(AppError::transaction("simulated failure after write"))
+        })
+        .unwrap_err();
+
+        assert!(error.detail.contains("simulated failure after write"));
+
+        // Verify all 4 domains rolled back:
+        assert_eq!(fs::read(knife_config_path(&root)).unwrap(), original_knife_bytes);
+        assert_eq!(fs::read(gun_config_path(&root)).unwrap(), original_guns_bytes);
+        let current_app = read_app_config_direct().unwrap();
+        assert_eq!(current_app.drop_knife_bind, "\\");
+        assert_eq!(current_app.drop_knife_subclasses, vec![507, 515]);
+        let current_cfg = fs::read_to_string(&normal_cfg).unwrap();
+        assert!(current_cfg.contains("bind \\ \"css_quick_knife\""));
+        assert!(!current_cfg.contains("bind o \"css_quick_knife\""));
+
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn legacy_config_migration_restarts_the_portable_first_run_wizard() {
         let mut legacy = AppConfig::default();
@@ -4063,13 +4321,13 @@ mod tests {
             kind: COSMETICS_EXPORT_KIND.into(),
             exported_at_unix: 1,
             config,
+            quick_knife: None,
         }).unwrap()).unwrap();
 
         let imported = read_cosmetics_preset(&source).unwrap();
 
-        assert_eq!(imported.schema_version, COSMETICS_SCHEMA_VERSION);
-        assert!(!imported.stickers_enabled);
-        fs::remove_dir_all(root).unwrap();
+        assert_eq!(imported.config.schema_version, COSMETICS_SCHEMA_VERSION);
+        assert!(!imported.config.stickers_enabled);
     }
 
     #[test]

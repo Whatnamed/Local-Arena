@@ -363,4 +363,72 @@ var resumed = throttle.Check("gun", now.AddSeconds(31));
 Require(resumed.ShouldLog && resumed.Suppressed == 1,
     "The next error record must report how many duplicate errors were suppressed.");
 
-Console.WriteLine("PlayerKnifeCustomizer resolver, knife safety, and log-throttle tests passed.");
+// Knife shortcut cycle with presets test
+var cycleLoadout = new TeamLoadout();
+ushort[] shortcutKnives = [507, 515, 508, 500, 525, 512];
+var testPresets = new Dictionary<ushort, int>
+{
+    [507] = 417, // Karambit preset A
+    [515] = 568, // Butterfly preset B
+    [508] = 38,  // M9 preset C
+    [500] = 59,  // Bayonet preset D
+    [525] = 44,  // Skeleton preset E
+    [512] = 12,  // Falchion preset F
+};
+foreach (var (def, paint) in testPresets)
+    cycleLoadout.KnifePresets[def] = Preset(paint);
+
+ushort currentDef = 507;
+for (int step = 0; step < shortcutKnives.Length; step++)
+{
+    var plan = KnifeReplacementPlanner.Plan(currentDef, shortcutKnives, cycleLoadout);
+    ushort expectedTarget = shortcutKnives[(step + 1) % shortcutKnives.Length];
+    Require(plan.IsValid && plan.TargetDefIndex == expectedTarget,
+        $"Step {step}: Expected target knife {expectedTarget}, got {plan.TargetDefIndex}");
+    Require(!plan.IsVanilla && plan.Preset.Paint == testPresets[expectedTarget],
+        $"Step {step}: Knife {expectedTarget} must resolve its own configured preset {testPresets[expectedTarget]}, got {plan.Preset.Paint}");
+    currentDef = expectedTarget;
+}
+
+// Test that missing preset produces vanilla plan without altering next cycle
+cycleLoadout.KnifePresets.Remove(512);
+var falchionPlan = KnifeReplacementPlanner.Plan(525, shortcutKnives, cycleLoadout);
+Require(falchionPlan.IsValid && falchionPlan.TargetDefIndex == 512 && falchionPlan.IsVanilla && falchionPlan.Preset.Paint == 0,
+    "A knife without configured preset must generate a vanilla plan with Paint=0.");
+var wrapPlan = KnifeReplacementPlanner.Plan(512, shortcutKnives, cycleLoadout);
+Require(wrapPlan.IsValid && wrapPlan.TargetDefIndex == 507 && !wrapPlan.IsVanilla && wrapPlan.Preset.Paint == 417,
+    "Cycle must wrap from unconfigured Falchion back to configured Karambit with preset A intact.");
+
+// Test busy simulation: rapid repeated commands while busy must not advance sequence
+bool isBusy = true;
+ushort simulatedKnife = 507;
+for (int burst = 0; burst < 10; burst++)
+{
+    if (isBusy)
+    {
+        // Command rejected by busy gate, simulatedKnife remains unchanged
+        continue;
+    }
+    var rejectedPlan = KnifeReplacementPlanner.Plan(simulatedKnife, shortcutKnives, cycleLoadout);
+    simulatedKnife = rejectedPlan.TargetDefIndex;
+}
+Require(simulatedKnife == 507, "Busy gate must reject commands and prevent sequence advance.");
+isBusy = false;
+var nextAfterBusy = KnifeReplacementPlanner.Plan(simulatedKnife, shortcutKnives, cycleLoadout);
+Require(nextAfterBusy.TargetDefIndex == 515, "Sequence must resume at the immediate next knife after busy clears.");
+
+// Spawn-only configured gun override filtering test:
+// Configured weapons (e.g. CT USP-S 61 with Paint > 0) are matched; unconfigured weapons are skipped.
+var spawnTestConfig = new KnifeConfig();
+spawnTestConfig.Loadouts.Ct.GunPresets[61] = Preset(653); // USP-S configured
+spawnTestConfig.Loadouts.Ct.GunPresets[4] = new KnifePreset { Paint = 0 }; // Glock unconfigured / vanilla
+// AWP 9 not in GunPresets at all
+
+Require(WeaponPresetResolver.TryResolveGunPreset(spawnTestConfig, 61, CosmeticTeam.Ct, out var ctUsp) && ctUsp.Paint == 653,
+    "Configured CT USP-S must resolve positive paint for spawn refresh.");
+bool glockEligible = WeaponPresetResolver.TryResolveGunPreset(spawnTestConfig, 4, CosmeticTeam.Ct, out var ctGlock) && ctGlock.Paint > 0;
+Require(!glockEligible, "Unconfigured Glock (Paint 0) must not be eligible for spawn gun refresh.");
+bool awpEligible = WeaponPresetResolver.TryResolveGunPreset(spawnTestConfig, 9, CosmeticTeam.Ct, out var unconfiguredAwp) && unconfiguredAwp.Paint > 0;
+Require(!awpEligible, "Unconfigured weapon without preset must not be eligible for spawn gun refresh.");
+
+Console.WriteLine("PlayerKnifeCustomizer resolver, knife cycles, presets, busy guards, and spawn gun filtering tests passed.");

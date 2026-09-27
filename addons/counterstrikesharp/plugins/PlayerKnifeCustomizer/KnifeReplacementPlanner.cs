@@ -31,7 +31,7 @@ public static class KnifeReplacementPlanner
 
         // The planner must be side-effect free. In particular, a failed existing-entity mutation
         // must not create a phantom preset that changes the next cycle.
-        KnifePreset preset = loadout.KnifePresets.TryGetValue(targetDefIndex, out var configured)
+        KnifePreset preset = loadout.KnifePresets.TryGetValue(targetDefIndex, out var configured) && configured.Paint > 0
             ? configured.Clone()
             : new KnifePreset { Paint = 0, Seed = 0, Wear = 0.01f };
 
