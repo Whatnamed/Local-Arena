@@ -977,6 +977,7 @@ fn recover_incomplete_locked(state_root: &Path, target: &Path) -> Result<bool> {
     if !journal.committed {
         rollback(&directory, &journal)?;
         restore_previous_record(&directory, &journal.previous_record)?;
+        let _ = fs::remove_dir_all(directory.join("retired").join(&journal.transaction_dir));
     }
     let _ = fs::remove_dir_all(directory.join(&journal.transaction_dir));
     fs::remove_file(journal_path).map_err(AppError::transaction_io)?;
@@ -991,6 +992,16 @@ pub fn recover_incomplete(state_root: &Path, target: &Path) -> Result<bool> {
     recover_incomplete_locked(state_root, target)
 }
 
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_AFTER_RETIREMENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub fn set_fail_after_retirement_for_test(fail: bool) {
+    FAIL_AFTER_RETIREMENT.with(|cell| cell.set(fail));
+}
 pub fn install(
     payload_root: &Path,
     state_root: &Path,
@@ -1239,8 +1250,8 @@ pub fn install(
                 }
             }
 
-            let retired_dir = directory.join("retired");
-            let manifest_file = retired_dir.join("manifest.json");
+            let retired_batch_dir = directory.join("retired").join(&transaction_name);
+            let manifest_file = retired_batch_dir.join("manifest.json");
 
             for retired_path in candidate_paths {
                 if manifest.entries.iter().any(|entry| entry.path == retired_path) {
@@ -1285,7 +1296,7 @@ pub fn install(
                         if let Some(original_rel) = &previous.original_backup {
                             let original_src = directory.join(original_rel);
                             if original_src.is_file() {
-                                let preserved = retired_dir.join(&relative);
+                                let preserved = retired_batch_dir.join(&relative);
                                 copy_file_for(
                                     "retired payload pre-plus preservation",
                                     &original_src,
@@ -1308,7 +1319,7 @@ pub fn install(
                     } else {
                         "untracked_legacy"
                     };
-                    let preserved = retired_dir.join(&relative);
+                    let preserved = retired_batch_dir.join(&relative);
                     copy_file_for(
                         "retired payload preservation",
                         &destination,
@@ -1328,6 +1339,11 @@ pub fn install(
 
             let _ = remove_empty_tree(&disk_root);
         }
+
+        #[cfg(test)]
+        if FAIL_AFTER_RETIREMENT.with(|cell| cell.get()) {
+            return Err(AppError::transaction("Injected post-retirement failure"));
+        }
         Ok(())
     })();
 
@@ -1335,6 +1351,7 @@ pub fn install(
         let rollback_error = rollback(&directory, &journal).err();
         let record_error = restore_previous_record(&directory, &journal.previous_record).err();
         let _ = fs::remove_dir_all(&transaction_root);
+        let _ = fs::remove_dir_all(directory.join("retired").join(&transaction_name));
         let _ = fs::remove_file(&journal_path);
         return Err(rollback_error.or(record_error).unwrap_or(error));
     }
@@ -2492,6 +2509,18 @@ mod tests {
         fs::remove_dir_all(base).unwrap();
     }
 
+    fn latest_retired_batch_dir(inst_dir: &Path) -> PathBuf {
+        let retired_root = inst_dir.join("retired");
+        let mut entries = fs::read_dir(&retired_root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .map(|e| e.path())
+            .collect::<Vec<_>>();
+        entries.sort();
+        entries.pop().expect("No retired batch found")
+    }
+
     #[test]
     fn legacy_plus_untracked_telemetry_retired_and_preserved() {
         let base = root("telemetry-legacy-untracked");
@@ -2514,14 +2543,15 @@ mod tests {
         assert!(!telemetry_target.exists());
         assert!(!target.join("addons/counterstrikesharp/plugins/OfflineMatchTelemetry").exists());
 
-        // 2. Preserved backup must exist under installer state retired storage
+        // 2. Preserved backup must exist under installer state retired batch storage
         let inst_dir = installation_dir(&state, &target);
-        let preserved = inst_dir.join("retired").join(telemetry_rel.replace('/', "\\"));
+        let batch_dir = latest_retired_batch_dir(&inst_dir);
+        let preserved = batch_dir.join(telemetry_rel.replace('/', "\\"));
         assert!(preserved.is_file());
         assert_eq!(fs::read(&preserved).unwrap(), b"legacy-untracked-telemetry-bytes");
 
         // 3. Manifest metadata recorded
-        let manifest_file = inst_dir.join("retired/manifest.json");
+        let manifest_file = batch_dir.join("manifest.json");
         assert!(manifest_file.is_file());
         let manifest: Vec<RetiredPreservedFile> = serde_json::from_slice(&fs::read(manifest_file).unwrap()).unwrap();
         assert!(manifest.iter().any(|e| e.path == telemetry_rel && e.source == "untracked_legacy"));
@@ -2556,7 +2586,8 @@ mod tests {
 
         // 2. Preserved backup must exist with modified bytes
         let inst_dir = installation_dir(&state, &target);
-        let preserved = inst_dir.join("retired").join(telemetry_rel.replace('/', "\\"));
+        let batch_dir = latest_retired_batch_dir(&inst_dir);
+        let preserved = batch_dir.join(telemetry_rel.replace('/', "\\"));
         assert!(preserved.is_file());
         assert_eq!(fs::read(&preserved).unwrap(), b"user-customized-telemetry-bytes");
 
@@ -2565,10 +2596,12 @@ mod tests {
         assert!(!rec.entries.iter().any(|e| e.path == telemetry_rel));
 
         // 4. Manifest metadata recorded
-        let manifest_file = inst_dir.join("retired/manifest.json");
+        let manifest_file = batch_dir.join("manifest.json");
         assert!(manifest_file.is_file());
         let manifest: Vec<RetiredPreservedFile> = serde_json::from_slice(&fs::read(manifest_file).unwrap()).unwrap();
-        assert!(manifest.iter().any(|e| e.path == telemetry_rel && e.source == "user_modified"));
+        let item = manifest.iter().find(|e| e.path == telemetry_rel).unwrap();
+        assert_eq!(item.source, "user_modified");
+        assert_eq!(item.sha256, sha256(&preserved).unwrap());
 
         fs::remove_dir_all(base).unwrap();
     }
@@ -2584,6 +2617,12 @@ mod tests {
         let telemetry_rel = "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.dll";
         let telemetry_target = target.join(telemetry_rel.replace('/', "\\"));
 
+        // Pre-create an existing retired batch from an earlier operation
+        let inst_dir = installation_dir(&state, &target);
+        let existing_batch = inst_dir.join("retired/transaction-existing");
+        fs::create_dir_all(&existing_batch).unwrap();
+        fs::write(existing_batch.join("manifest.json"), b"[]").unwrap();
+
         fixture(&old_payload, &target);
         add_payload_file(&old_payload, telemetry_rel, b"plus-telemetry-v1");
         install(&old_payload, &state, &target, false).unwrap();
@@ -2592,25 +2631,33 @@ mod tests {
         fs::write(&telemetry_target, b"user-customized-telemetry-pre-upgrade").unwrap();
 
         fixture(&new_payload, &base.join("new-target-fixture"));
-        // Create an invalid entry in new payload to force install failure
-        let mut manifest = read_manifest_document(&new_payload).unwrap();
-        manifest.entries.push(PayloadEntry {
-            path: "nonexistent/invalid.dll".to_string(),
-            size: 100,
-            sha256: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-            component: "invalid".to_string(),
-            ownership: "plus".to_string(),
-            restore_policy: "restore".to_string(),
-        });
-        write_json_atomic(&new_payload.join(MANIFEST_FILE), &manifest).unwrap();
 
-        // Upgrade fails
-        assert!(install(&new_payload, &state, &target, false).is_err());
+        // Inject failure that occurs AFTER retirement is executed
+        set_fail_after_retirement_for_test(true);
+        let result = install(&new_payload, &state, &target, false);
+        set_fail_after_retirement_for_test(false);
 
-        // Telemetry DLL was rolled back and preserved in active path with EXACT bytes
+        // Upgrade must fail
+        assert!(result.is_err());
+
+        // 1. Telemetry DLL was rolled back and preserved in active path with EXACT bytes
         assert_eq!(fs::read(&telemetry_target).unwrap(), b"user-customized-telemetry-pre-upgrade");
-        let rec = read_record(&installation_dir(&state, &target)).unwrap();
+
+        // 2. Previous record restored
+        let rec = read_record(&inst_dir).unwrap();
         assert!(rec.entries.iter().any(|e| e.path == telemetry_rel));
+
+        // 3. Pre-existing retired batch is unaffected
+        assert!(existing_batch.join("manifest.json").is_file());
+
+        // 4. This failed transaction's retired batch was cleaned up (only existing_batch remains)
+        let mut batches = fs::read_dir(inst_dir.join("retired"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        batches.sort();
+        assert_eq!(batches, vec!["transaction-existing".to_string()]);
 
         fs::remove_dir_all(base).unwrap();
     }
@@ -2643,12 +2690,65 @@ mod tests {
         assert!(!telemetry_target.exists());
         assert!(!target.join("addons/counterstrikesharp/plugins/OfflineMatchTelemetry").exists());
         let inst_dir = installation_dir(&state, &target);
-        let preserved = inst_dir.join("retired").join(telemetry_rel.replace('/', "\\"));
+        let batch_dir = latest_retired_batch_dir(&inst_dir);
+        let preserved = batch_dir.join(telemetry_rel.replace('/', "\\"));
         assert!(preserved.is_file());
         assert_eq!(fs::read(&preserved).unwrap(), b"pre-plus-original-telemetry");
 
         let rec = read_record(&inst_dir).unwrap();
         assert!(!rec.entries.iter().any(|e| e.path == telemetry_rel));
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn successful_retirement_preserves_batch_with_valid_manifest_and_hash() {
+        let base = root("telemetry-success-batch");
+        let old_payload = base.join("old-payload");
+        let new_payload = base.join("new-payload");
+        let target = base.join("target");
+        let state = base.join("state");
+
+        let telemetry_rel = "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.dll";
+        let telemetry_target = target.join(telemetry_rel.replace('/', "\\"));
+
+        fixture(&old_payload, &target);
+        add_payload_file(&old_payload, telemetry_rel, b"clean-telemetry-payload-v1");
+        install(&old_payload, &state, &target, false).unwrap();
+
+        // Custom file placed in telemetry directory
+        let extra_rel = "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/extra_note.txt";
+        let extra_target = target.join(extra_rel.replace('/', "\\"));
+        fs::write(&extra_target, b"custom-user-note").unwrap();
+
+        fixture(&new_payload, &base.join("new-target-fixture"));
+        install(&new_payload, &state, &target, false).unwrap();
+
+        // 1. Active path completely eliminated
+        assert!(!telemetry_target.exists());
+        assert!(!extra_target.exists());
+        assert!(!target.join("addons/counterstrikesharp/plugins/OfflineMatchTelemetry").exists());
+
+        // 2. Transaction-specific batch exists and preserves untracked file
+        let inst_dir = installation_dir(&state, &target);
+        let batch_dir = latest_retired_batch_dir(&inst_dir);
+        let preserved_extra = batch_dir.join(extra_rel.replace('/', "\\"));
+        assert!(preserved_extra.is_file());
+        assert_eq!(fs::read(&preserved_extra).unwrap(), b"custom-user-note");
+
+        // 3. Manifest metadata contains valid hash and timestamp
+        let manifest_file = batch_dir.join("manifest.json");
+        assert!(manifest_file.is_file());
+        let manifest: Vec<RetiredPreservedFile> = serde_json::from_slice(&fs::read(manifest_file).unwrap()).unwrap();
+        let extra_item = manifest.iter().find(|e| e.path == extra_rel).unwrap();
+        assert_eq!(extra_item.sha256, sha256(&preserved_extra).unwrap());
+        assert_eq!(extra_item.source, "untracked_legacy");
+        assert!(extra_item.retired_at > 0);
+
+        // 4. Record ownership cleanly released
+        let rec = read_record(&inst_dir).unwrap();
+        assert!(!rec.entries.iter().any(|e| e.path == telemetry_rel));
+        assert!(!rec.entries.iter().any(|e| e.path == extra_rel));
 
         fs::remove_dir_all(base).unwrap();
     }
