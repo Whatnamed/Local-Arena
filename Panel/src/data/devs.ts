@@ -54,7 +54,7 @@ export const THIRD_PARTY_GROUPS: ThirdPartyGroup[] = [
       },
       {
         name: "CS2-Bot-Hider",
-        version: "v0.3.3",
+        version: "v0.5.0",
         license: "AGPL-3.0",
         url: "https://github.com/XBribo/CS2-Bot-Hider",
         description: "Bot visibility and shared-state component included in the payload.",

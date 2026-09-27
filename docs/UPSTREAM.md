@@ -51,7 +51,7 @@ Windows package 不提交生成的或第三方的二进制。`scripts/package.ps
 - BotAI 的 Windows signature 刷新来自上游 PR #75（`3db93ba`）。
 - Cosmetic / native binding 的逐条来源与本地用法见
   [docs/archive/CS2-2026-09-23-COMPATIBILITY.md](archive/CS2-2026-09-23-COMPATIBILITY.md)。
-- BotHider Windows gamedata 的 overlay 来源同一份记录，`scripts/dependencies.json` 的 `botHider.gamedataWindowsSourceCommit` 保存对应 commit。
+- BotHider 现已升级至官方 v0.5.0 正式 release（commit 1c8fc7d），直接使用官方 gamedata 与 release DLL，移除了旧 v0.3.3 的 commit 拼装逻辑。
 - v1.4.4 upstream 的审查结论与「保持既有 pin」的决定见
   [docs/archive/UPSTREAM-v1.4.4-REVIEW.md](archive/UPSTREAM-v1.4.4-REVIEW.md)。
 

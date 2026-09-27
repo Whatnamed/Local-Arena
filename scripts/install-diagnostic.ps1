@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("A", "B")]
+    [ValidateSet("A", "B", "C")]
     [string]$Mode = "A",
     [string]$Cs2Root,
     [string]$PackageSource,
@@ -104,25 +104,44 @@ try {
     $targetKnife = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"
     $targetKnifeDisabled = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled"
 
-    # In both modes, BotHider native and BotHiderImpl are disabled
-    if (Test-Path -LiteralPath $targetVdf) { Remove-Item -LiteralPath $targetVdf -Force }
-    $pkgVdfDisabled = Join-Path $PackageSource "addons\metamod\BotHider.vdf.csbip-disabled"
-    if (Test-Path -LiteralPath $pkgVdfDisabled) {
-        Copy-Item -LiteralPath $pkgVdfDisabled -Destination $targetVdfDisabled -Force
-    } elseif (-not (Test-Path -LiteralPath $targetVdfDisabled)) {
-        "disabled" | Set-Content $targetVdfDisabled -Encoding utf8
-    }
+    if ($Mode -in @("A", "B")) {
+        # In modes A and B, BotHider native and BotHiderImpl are disabled
+        if (Test-Path -LiteralPath $targetVdf) { Remove-Item -LiteralPath $targetVdf -Force }
+        $pkgVdfDisabled = Join-Path $PackageSource "addons\metamod\BotHider.vdf.csbip-disabled"
+        if (Test-Path -LiteralPath $pkgVdfDisabled) {
+            Copy-Item -LiteralPath $pkgVdfDisabled -Destination $targetVdfDisabled -Force
+        } elseif (-not (Test-Path -LiteralPath $targetVdfDisabled)) {
+            "disabled" | Set-Content $targetVdfDisabled -Encoding utf8
+        }
 
-    if (Test-Path -LiteralPath $targetImpl) { Remove-Item -LiteralPath $targetImpl -Force }
-    $pkgImplDisabled = Join-Path $PackageSource "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll.csbip-disabled"
-    if (Test-Path -LiteralPath $pkgImplDisabled) {
-        $parent = Split-Path -Parent $targetImplDisabled
-        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-        Copy-Item -LiteralPath $pkgImplDisabled -Destination $targetImplDisabled -Force
-    } elseif (-not (Test-Path -LiteralPath $targetImplDisabled)) {
-        $parent = Split-Path -Parent $targetImplDisabled
-        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-        "disabled" | Set-Content $targetImplDisabled -Encoding utf8
+        if (Test-Path -LiteralPath $targetImpl) { Remove-Item -LiteralPath $targetImpl -Force }
+        $pkgImplDisabled = Join-Path $PackageSource "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll.csbip-disabled"
+        if (Test-Path -LiteralPath $pkgImplDisabled) {
+            $parent = Split-Path -Parent $targetImplDisabled
+            if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            Copy-Item -LiteralPath $pkgImplDisabled -Destination $targetImplDisabled -Force
+        } elseif (-not (Test-Path -LiteralPath $targetImplDisabled)) {
+            $parent = Split-Path -Parent $targetImplDisabled
+            if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            "disabled" | Set-Content $targetImplDisabled -Encoding utf8
+        }
+    } else {
+        # Mode C: BotHider native and BotHiderImpl are ON
+        if (Test-Path -LiteralPath $targetVdfDisabled) { Remove-Item -LiteralPath $targetVdfDisabled -Force }
+        $pkgVdfActive = Join-Path $PackageSource "addons\metamod\BotHider.vdf"
+        if (Test-Path -LiteralPath $pkgVdfActive) {
+            $parent = Split-Path -Parent $targetVdf
+            if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            Copy-Item -LiteralPath $pkgVdfActive -Destination $targetVdf -Force
+        }
+
+        if (Test-Path -LiteralPath $targetImplDisabled) { Remove-Item -LiteralPath $targetImplDisabled -Force }
+        $pkgImplActive = Join-Path $PackageSource "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll"
+        if (Test-Path -LiteralPath $pkgImplActive) {
+            $parent = Split-Path -Parent $targetImpl
+            if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            Copy-Item -LiteralPath $pkgImplActive -Destination $targetImpl -Force
+        }
     }
 
     if ($Mode -eq "A") {
@@ -139,7 +158,7 @@ try {
             "disabled" | Set-Content $targetKnifeDisabled -Encoding utf8
         }
     } else {
-        # Mode B: PlayerKnifeCustomizer is ON (deploy current build DLL and deps.json, do not touch presets)
+        # Mode B and C: PlayerKnifeCustomizer is ON (deploy current build DLL and deps.json, do not touch presets)
         if (Test-Path -LiteralPath $targetKnifeDisabled) { Remove-Item -LiteralPath $targetKnifeDisabled -Force }
         $pkgKnifeActive = Join-Path $PackageSource "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"
         if (Test-Path -LiteralPath $pkgKnifeActive) {

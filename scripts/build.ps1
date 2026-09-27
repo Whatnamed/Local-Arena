@@ -238,6 +238,10 @@ try {
         "run", "--project", "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer.Tests\PlayerKnifeCustomizer.Tests.csproj",
         "-c", "Release"
     )
+    Invoke-Checked $DotNet @(
+        "run", "--project", "addons\counterstrikesharp\plugins\BotHider.Tests\BotHider.Tests.csproj",
+        "-c", "Release", "--nologo"
+    )
 
     $tauriSource = Join-Path $panel "src-tauri"
     Invoke-Checked $cargo @("test", "--locked") $tauriSource

@@ -315,8 +315,101 @@ if (Test-Path -LiteralPath $zipB) { Remove-Item -LiteralPath $zipB -Force }
 Compress-Archive -Path (Join-Path $stageB "*") -DestinationPath $zipB -CompressionLevel Optimal
 Write-Host "Diagnostic Package B ready: $zipB"
 
+# --- Package C: Full Stack (BotHider ON, PlayerCosmetics ON) ---
+Write-Host "Preparing Diagnostic Package C (Full Stack Baseline)..."
+$stageC = Join-Path $output "stage-diagC"
+if (Test-Path -LiteralPath $stageC) { Remove-Item -LiteralPath $stageC -Recurse -Force }
+New-Item -ItemType Directory -Path $stageC -Force | Out-Null
+Copy-Item -Path (Join-Path $stageBase "*") -Destination $stageC -Recurse -Force
+
+# BotHider native ON (ensure active VDF is present, remove any .csbip-disabled residue)
+$botHiderVdfDisabledC = Join-Path $stageC "addons\metamod\BotHider.vdf.csbip-disabled"
+if (Test-Path -LiteralPath $botHiderVdfDisabledC) {
+    Remove-Item -LiteralPath $botHiderVdfDisabledC -Force
+}
+
+# BotHiderImpl ON (ensure active DLL is present, remove any .csbip-disabled residue)
+$botHiderImplDisabledC = Join-Path $stageC "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll.csbip-disabled"
+if (Test-Path -LiteralPath $botHiderImplDisabledC) {
+    Remove-Item -LiteralPath $botHiderImplDisabledC -Force
+}
+
+# PlayerCosmetics ON (ensure active DLL is present, remove any .csbip-disabled residue)
+$knifeDllDisabledC = Join-Path $stageC "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled"
+if (Test-Path -LiteralPath $knifeDllDisabledC) {
+    Remove-Item -LiteralPath $knifeDllDisabledC -Force
+}
+
+# Diagnostic state marker
+$markerC = [ordered]@{
+    mode = "C"
+    metamod = "2.0.0-git1469"
+    counterstrikesharp = "1.0.375"
+    bot_hider_native = $true
+    bot_hider_impl = $true
+    player_cosmetics = $true
+}
+$markerC | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stageC "diagnostic-state.json") -Encoding utf8
+
+Copy-DiagnosticTooling $stageC "C"
+
+@"
+===================================================================
+Local Arena Diagnostic Package C: Full Stack (Gate C)
+===================================================================
+
+Isolation & Transaction Contract:
+- Narrow Mutation Surface: Diagnostic installer only mutates MM1469/CSS375 runtime
+  trees, official loaders, and the 3 target components. It does NOT overwrite
+  other existing plugins, shared libraries, cfgs, or overrides.
+- Clean Runtime Purge: Target runtime trees are purged prior to installation
+  to eliminate any stale CSS371 or Metamod residue.
+- Pre-Diagnostic Snapshot: Preserved from Package A/B (original pre-test state is retained).
+- Metamod:Source: 2.0.0-git1469 (ACTIVE)
+- CounterStrikeSharp: v1.0.375 (ACTIVE)
+- BotHider native: ON (ACTIVE, official v0.5.0 build)
+- BotHiderImpl: ON (ACTIVE, reconciled managed layer on CSS 375)
+- PlayerCosmetics: ON (ACTIVE, built on CSS 375)
+- BotAI / BotRandomizer / NadeSystem / MatchCoordinator / RayTrace: ON (ACTIVE)
+
+Purpose & Precondition:
+Gate C is ONLY for validating the full stack AFTER Diagnostic A and B have both passed cleanly.
+
+Installation:
+DO NOT use Panel to install or launch this diagnostic build.
+Run:
+  pwsh .\INSTALL-DIAGNOSTIC-C.ps1 -Cs2Root "<path-to-game/csgo>"
+Verify after install:
+  pwsh .\VERIFY-DIAGNOSTIC.ps1 -Cs2Root "<path-to-game/csgo>"
+
+Manual Test Procedure:
+1. Ensure CS2 is closed before running INSTALL-DIAGNOSTIC-C.ps1.
+2. Run VERIFY-DIAGNOSTIC.ps1 and confirm:
+   - Exact runtime tree verified (matches manifest with 0 stale residues)
+   - MM 1469 active
+   - CSS 375 active
+   - BotHider native active
+   - BotHiderImpl active
+   - PlayerCosmetics active (verified against current build hash)
+3. Launch CS2.
+4. Start an Offline match with Enhanced Bots.
+5. Verify scoreboard bot disguise and bot_info name source.
+6. Verify player cosmetics (knife, gloves, weapon skins).
+7. Confirm overall gameplay stability with complete stack active.
+
+Post-Test:
+To restore exact pre-diagnostic environment when testing is complete:
+  pwsh .\RESTORE-NORMAL.ps1 -Cs2Root "<path-to-game/csgo>"
+"@ | Set-Content -LiteralPath (Join-Path $stageC "DIAGNOSTIC-MODE-C.txt") -Encoding utf8
+
+Update-PayloadManifest $stageC "1.4.3.3-diagC"
+$zipC = Join-Path $output "LocalArena-diagC-full-stack.zip"
+if (Test-Path -LiteralPath $zipC) { Remove-Item -LiteralPath $zipC -Force }
+Compress-Archive -Path (Join-Path $stageC "*") -DestinationPath $zipC -CompressionLevel Optimal
+Write-Host "Diagnostic Package C ready: $zipC"
+
 # Write SHA256 sums
-$diagZips = @($zipA, $zipB)
+$diagZips = @($zipA, $zipB, $zipC)
 $lines = foreach ($z in $diagZips) {
     "$((Get-FileHash -LiteralPath $z -Algorithm SHA256).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($z))"
 }

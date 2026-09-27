@@ -50,13 +50,13 @@
   },
   "botHider": {
     "repository": "https://github.com/XBribo/CS2-Bot-Hider",
-    "release": "v0.3.3",
-    "gamedataWindowsSourceCommit": "941e642b35f649b4cf08005c2049e57519cfaefa",
+    "release": "v0.5.0",
+    "targetCommit": "1c8fc7dea8111a598084f925b7653bb32378b988",
     "windowsAsset": {
-      "name": "BotHider-windows-0.3.3.zip",
-      "url": "https://github.com/XBribo/CS2-Bot-Hider/releases/download/v0.3.3/BotHider-windows-0.3.3.zip",
-      "sha256": "838f23217687462d87bbfab49d9cd9b6ae602d65f80fad3cc0758b38533642bc"
+      "name": "BotHider-Windows-0.5.0.zip",
+      "url": "https://github.com/XBribo/CS2-Bot-Hider/releases/download/v0.5.0/BotHider-Windows-0.5.0.zip",
+      "sha256": "cb701e9a05731ef71f23535542ee54c16ea3e5e017c7293926ebedda64b5f717"
     },
-    "windowsDllSha256": "1c0559a2da917c60b8d3dbb3e4f2b673a499bb52b879241e63fe34b3f803cd9d"
+    "windowsDllSha256": "5cb397227452183c657d2b7cde7a2fdd9b9796c58fc4650e9b932376e58d99d6"
   }
 }

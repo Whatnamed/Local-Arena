@@ -140,6 +140,7 @@ else {
         "addons/counterstrikesharp/plugins/BotControllerImpl/ReplayDriver.cs",
         "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImpl.csproj",
         "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImplPlugin.cs",
+        "addons/counterstrikesharp/plugins/BotHiderImpl/SharedMemoryClient.cs",
         "addons/counterstrikesharp/plugins/BotState/BotState.cs",
         "addons/counterstrikesharp/plugins/BotState/BotState.csproj",
         "addons/counterstrikesharp/plugins/NadeSystem/NadeSystem.cs",
@@ -510,14 +511,14 @@ function Assert-BotProfileContent([string]$Profile, [string]$Label) {
 $botHiderImpl = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImplPlugin.cs") -Raw
 if ($botHiderImpl -notmatch "foreach \(int slot in managedSlots\)" -or
     $botHiderImpl -notmatch "player\.PlayerName = name" -or
-    $botHiderImpl -notmatch 'ModuleVersion => "0\.3\.3"' -or
+    $botHiderImpl -notmatch 'ModuleVersion => "0\.5\.0"' -or
     $botHiderImpl -notmatch "EnsureBotInfoNameSource\(\)") {
-    Add-Failure "BotHiderImpl no longer preserves the v0.3.3 managed-name integration."
+    Add-Failure "BotHiderImpl no longer preserves the v0.5.0 managed-name integration."
 }
 $botHiderGameData = Get-Content -LiteralPath (Join-Path $repo "addons/BotHider/gamedata.json") -Raw
 if ($botHiderGameData -notmatch '"CServerSideClient::SetName"' -or
     $botHiderGameData -notmatch '"CNetworkGameServer::PackEntities"') {
-    Add-Failure "BotHider gamedata no longer contains the v0.3.3 name and identity targets."
+    Add-Failure "BotHider gamedata no longer contains the v0.5.0 name and identity targets."
 }
 $botHiderData = $botHiderGameData | ConvertFrom-Json
 if ($botHiderData.'CNetworkGameServerBase::m_Clients'.offsets.windows -ne 616 -or
@@ -781,7 +782,7 @@ if ($PackageRoot) {
     if (Test-Path -LiteralPath $native) {
         $nativeHash = (Get-FileHash -LiteralPath $native -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($nativeHash -ne $manifest.botHider.windowsDllSha256.ToLowerInvariant()) {
-            Add-Failure "Package BotHider.dll is not the verified v0.3.3 build: $nativeHash"
+            Add-Failure "Package BotHider.dll is not the verified v0.5.0 build: $nativeHash"
         }
     }
 

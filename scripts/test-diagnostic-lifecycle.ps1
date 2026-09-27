@@ -337,9 +337,41 @@ if ($restoredDepsHash -ne $oldKnifeDepsHash) {
 }
 
 Write-Host "Case 7 PASSED: PlayerKnifeCustomizer.deps.json cleanly updated in B and exactly restored." -ForegroundColor Green
+Write-Host "`n--- Case 8: Mode C full stack installation and exact restoration ---"
+$c8 = Join-Path $testBase "case8\game\csgo"
+Setup-BaseTarget $c8
+
+"pre-test-c8-marker" | Set-Content (Join-Path $c8 "addons\metamod\bin\win64\server.dll")
+
+Write-Host "Installing Mode C on target..."
+& (Join-Path $PSScriptRoot "install-diagnostic.ps1") -Mode C -Cs2Root $c8
+
+$c8TargetVdf = Join-Path $c8 "addons\metamod\BotHider.vdf"
+$c8TargetImpl = Join-Path $c8 "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll"
+$c8TargetKnife = Join-Path $c8 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"
+
+if (-not (Test-Path $c8TargetVdf)) { throw "Case 8: BotHider.vdf not active in Mode C!" }
+if (Test-Path (Join-Path $c8 "addons\metamod\BotHider.vdf.csbip-disabled")) { throw "Case 8: BotHider.vdf.csbip-disabled lingering in Mode C!" }
+if (-not (Test-Path $c8TargetImpl)) { throw "Case 8: BotHiderImpl.dll not active in Mode C!" }
+if (Test-Path (Join-Path $c8 "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll.csbip-disabled")) { throw "Case 8: BotHiderImpl.dll.csbip-disabled lingering in Mode C!" }
+if (-not (Test-Path $c8TargetKnife)) { throw "Case 8: PlayerKnifeCustomizer.dll not active in Mode C!" }
+if (Test-Path (Join-Path $c8 "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled")) { throw "Case 8: PlayerKnifeCustomizer.dll.csbip-disabled lingering in Mode C!" }
+
+Write-Host "Verifying Mode C installation..."
+& (Join-Path $PSScriptRoot "verify-diagnostic-install.ps1") -Mode C -Cs2Root $c8
+
+Write-Host "Restoring pre-test state..."
+& (Join-Path $PSScriptRoot "restore-normal-install.ps1") -Cs2Root $c8
+
+$restoredServerDll8 = (Get-Content (Join-Path $c8 "addons\metamod\bin\win64\server.dll") -Raw).Trim()
+if ($restoredServerDll8 -ne "pre-test-c8-marker") {
+    throw "Case 8: Restored server.dll does not match original pre-C content!"
+}
+
+Write-Host "Case 8 PASSED: Mode C installed, verified, and exact pre-C state restored." -ForegroundColor Green
 
 Write-Host "`n=========================================================="
-Write-Host "ALL 7 DIAGNOSTIC TRANSACTION TEST CASES PASSED SUCCESSFULLY"
+Write-Host "ALL 8 DIAGNOSTIC TRANSACTION TEST CASES PASSED SUCCESSFULLY"
 Write-Host "=========================================================="
 
 Remove-Item -LiteralPath $testBase -Recurse -Force

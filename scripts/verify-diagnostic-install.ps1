@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("A", "B")]
+    [ValidateSet("A", "B", "C")]
     [string]$Mode = "A",
     [string]$Cs2Root
 )
@@ -42,8 +42,8 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
 
 $expectedKnifeCustomizerHash = $null
 $manifestCandidates = @(
+    (Join-Path (Split-Path -Parent $PSScriptRoot) "artifacts\diagnostic\stage-diag$Mode\plus-payload-manifest.json"),
     (Join-Path (Split-Path -Parent $PSScriptRoot) "artifacts\diagnostic\stage-diagB\plus-payload-manifest.json"),
-    (Join-Path $PSScriptRoot "plus-payload-manifest.json"),
     (Join-Path $PSScriptRoot "scripts\plus-payload-manifest.json"),
     (Join-Path $csgo "plus-payload-manifest.json")
 )
@@ -263,29 +263,53 @@ if (Test-Path -LiteralPath $cssDotnet) {
     Record-Check "CSS 375 .NET Host" "FAIL" "dotnet.exe missing" $false
 }
 
-# 4. BotHider native isolation
+# 4. BotHider native isolation / activation
 $botHiderVdf = Join-Path $csgo "addons\metamod\BotHider.vdf"
 $botHiderVdfDisabled = Join-Path $csgo "addons\metamod\BotHider.vdf.csbip-disabled"
-if (Test-Path -LiteralPath $botHiderVdf) {
-    Record-Check "BotHider native" "FAIL" "Active BotHider.vdf found! Must be inactive for A/B bisection." $false
-} elseif (Test-Path -LiteralPath $botHiderVdfDisabled) {
-    Record-Check "BotHider native" "PASS" "BotHider.vdf is disabled (.csbip-disabled)" $true
+if ($Mode -in @("A", "B")) {
+    if (Test-Path -LiteralPath $botHiderVdf) {
+        Record-Check "BotHider native" "FAIL" "Active BotHider.vdf found! Must be inactive for A/B bisection." $false
+    } elseif (Test-Path -LiteralPath $botHiderVdfDisabled) {
+        Record-Check "BotHider native" "PASS" "BotHider.vdf is disabled (.csbip-disabled)" $true
+    } else {
+        Record-Check "BotHider native" "PASS" "BotHider.vdf is not present" $true
+    }
 } else {
-    Record-Check "BotHider native" "PASS" "BotHider.vdf is not present" $true
+    # Mode C: BotHider native must be ACTIVE
+    if (-not (Test-Path -LiteralPath $botHiderVdf)) {
+        Record-Check "BotHider native" "FAIL" "BotHider.vdf is missing! Must be ON for Gate C." $false
+    } else {
+        Record-Check "BotHider native" "PASS" "BotHider.vdf is active" $true
+        if (Test-Path -LiteralPath $botHiderVdfDisabled) {
+            Record-Check "BotHider native Residue" "WARN" "Leftover BotHider.vdf.csbip-disabled present" $true
+        }
+    }
 }
 
-# 5. BotHiderImpl isolation
+# 5. BotHiderImpl isolation / activation
 $botHiderImplDll = Join-Path $csgo "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll"
 $botHiderImplDllDisabled = Join-Path $csgo "addons\counterstrikesharp\plugins\BotHiderImpl\BotHiderImpl.dll.csbip-disabled"
-if (Test-Path -LiteralPath $botHiderImplDll) {
-    Record-Check "BotHiderImpl" "FAIL" "Active BotHiderImpl.dll found! Must be inactive for A/B bisection." $false
-} elseif (Test-Path -LiteralPath $botHiderImplDllDisabled) {
-    Record-Check "BotHiderImpl" "PASS" "BotHiderImpl.dll is disabled (.csbip-disabled)" $true
+if ($Mode -in @("A", "B")) {
+    if (Test-Path -LiteralPath $botHiderImplDll) {
+        Record-Check "BotHiderImpl" "FAIL" "Active BotHiderImpl.dll found! Must be inactive for A/B bisection." $false
+    } elseif (Test-Path -LiteralPath $botHiderImplDllDisabled) {
+        Record-Check "BotHiderImpl" "PASS" "BotHiderImpl.dll is disabled (.csbip-disabled)" $true
+    } else {
+        Record-Check "BotHiderImpl" "PASS" "BotHiderImpl.dll is not present" $true
+    }
 } else {
-    Record-Check "BotHiderImpl" "PASS" "BotHiderImpl.dll is not present" $true
+    # Mode C: BotHiderImpl must be ACTIVE
+    if (-not (Test-Path -LiteralPath $botHiderImplDll)) {
+        Record-Check "BotHiderImpl" "FAIL" "BotHiderImpl.dll is missing! Must be ON for Gate C." $false
+    } else {
+        Record-Check "BotHiderImpl" "PASS" "BotHiderImpl.dll is active" $true
+        if (Test-Path -LiteralPath $botHiderImplDllDisabled) {
+            Record-Check "BotHiderImpl Residue" "WARN" "Leftover BotHiderImpl.dll.csbip-disabled present" $true
+        }
+    }
 }
 
-# 6. PlayerKnifeCustomizer (PlayerCosmetics) isolation
+# 6. PlayerKnifeCustomizer (PlayerCosmetics) isolation / activation
 $knifeDll = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll"
 $knifeDllDisabled = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.dll.csbip-disabled"
 
@@ -298,8 +322,9 @@ if ($Mode -eq "A") {
         Record-Check "PlayerCosmetics" "PASS" "PlayerKnifeCustomizer.dll is not present" $true
     }
 } else {
+    # Mode B and C: PlayerCosmetics must be ON
     if (-not (Test-Path -LiteralPath $knifeDll)) {
-        Record-Check "PlayerCosmetics" "FAIL" "PlayerKnifeCustomizer.dll is missing! Must be ON for Package B." $false
+        Record-Check "PlayerCosmetics" "FAIL" "PlayerKnifeCustomizer.dll is missing! Must be ON for Mode $Mode." $false
     } else {
         $actualHash = (Get-FileHash -LiteralPath $knifeDll -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actualHash -eq $expectedKnifeCustomizerHash) {
@@ -312,10 +337,10 @@ if ($Mode -eq "A") {
         }
     }
 
-    # Verify Mode B runtime sidecar PlayerKnifeCustomizer.deps.json
+    # Verify Mode B/C runtime sidecar PlayerKnifeCustomizer.deps.json
     $targetKnifeDeps = Join-Path $csgo "addons\counterstrikesharp\plugins\PlayerKnifeCustomizer\PlayerKnifeCustomizer.deps.json"
     if (-not (Test-Path -LiteralPath $targetKnifeDeps)) {
-        Record-Check "PlayerCosmetics Sidecar" "FAIL" "PlayerKnifeCustomizer.deps.json is missing in Mode B!" $false
+        Record-Check "PlayerCosmetics Sidecar" "FAIL" "PlayerKnifeCustomizer.deps.json is missing in Mode $Mode!" $false
     } else {
         $actualDepsHash = (Get-FileHash -LiteralPath $targetKnifeDeps -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actualDepsHash -eq $expectedKnifeDepsHash) {

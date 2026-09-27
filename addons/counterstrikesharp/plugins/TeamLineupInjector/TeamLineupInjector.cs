@@ -204,7 +204,7 @@ public sealed class TeamLineupInjectorPlugin : BasePlugin
         {
             var api = BotHiderCapability.Get()
                 ?? throw new InvalidOperationException("BotHider capability returned no API instance");
-            if (!api.SetDisguise(true) || !api.SetNameSource(true))
+            if (!api.SetIdentityMode(BotIdentityMode.Player) || !api.SetNameSource(true))
                 throw new InvalidOperationException("BotHider shared-memory commands were rejected");
             _botHider = api;
             Logger.LogInformation("[TeamLineup] BotHider API connected");
