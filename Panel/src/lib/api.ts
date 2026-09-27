@@ -1,13 +1,4 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import type {
-  Cs2ssOverviewResponse,
-  Cs2ssMatchSummary,
-  Cs2ssMatchDetailResponse,
-  Cs2ssPlayerDetailResponse,
-  Cs2ssMatchWithStats,
-  Cs2ssConfig,
-  Cs2ssDmOverview,
-} from "../data/cs2ssTypes";
 
 function invoke<T>(command: string, args?: Record<string, unknown>) {
   return tauriInvoke<T>(command, args);
@@ -753,17 +744,4 @@ export const api = {
   installAllUpdates: (csgo: string | null) =>
     invoke<UpdateBatchResult>("install_all_updates", { csgo }),
   cancelUpdate: () => invoke<void>("cancel_update"),
-  // CS2SS telemetry
-  getCs2ssOverview: (csgo: string) => invoke<Cs2ssOverviewResponse>("get_cs2ss_overview", { csgo }),
-  listCs2ssMatches: (csgo: string) => invoke<Cs2ssMatchSummary[]>("list_cs2ss_matches", { csgo }),
-  getCs2ssMatchDetail: (csgo: string, matchId: number) => invoke<Cs2ssMatchDetailResponse>("get_cs2ss_match_detail", { csgo, matchId }),
-  getCs2ssPlayerDetail: (csgo: string, steamId: string) => invoke<Cs2ssPlayerDetailResponse>("get_cs2ss_player_detail", { csgo, steamId }),
-  listCs2ssMatchesWithStats: (csgo: string) => invoke<Cs2ssMatchWithStats[]>("list_cs2ss_matches_with_stats", { csgo }),
-  getCs2ssConfig: (csgo: string) => invoke<Cs2ssConfig>("get_cs2ss_config", { csgo }),
-  saveCs2ssConfig: (csgo: string, config: Cs2ssConfig) => invoke<void>("save_cs2ss_config", { csgo, config }),
-  getCs2ssDmOverview: (csgo: string, steamId: string) => invoke<Cs2ssDmOverview>("get_cs2ss_dm_overview", { csgo, steamId }),
-  deleteCs2ssMatches: (csgo: string, matchIds: number[]) =>
-    invoke<number>("delete_cs2ss_matches", { csgo, matchIds }),
-  pruneCs2ssBotPlayers: (csgo: string, matchId: number) =>
-    invoke<[number, number]>("prune_cs2ss_bot_players", { csgo, matchId }),
 };

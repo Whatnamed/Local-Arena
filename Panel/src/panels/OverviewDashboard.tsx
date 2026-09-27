@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   ArrowRight,
-  BarChart3,
   BookOpenText,
   Command,
   Crosshair,
@@ -22,8 +21,7 @@ import { MAP_IMAGES, MAP_LABELS } from "../data/maps";
 import { useT, type I18nKey } from "../i18n";
 
 export type DashboardTarget =
-  | "match" | "matchHistory" | "stats" | "settings" | "presets" | "commands" | "weaponPresets" | "guide";
-
+  | "match" | "matchHistory" | "settings" | "presets" | "commands" | "weaponPresets" | "guide";
 type Tile = { view: DashboardTarget; key: I18nKey; icon: LucideIcon };
 
 const TILES: Tile[] = [
@@ -31,7 +29,6 @@ const TILES: Tile[] = [
   { view: "matchHistory", key: "match.history", icon: History },
   { view: "weaponPresets", key: "weapons.title", icon: Crosshair },
   { view: "presets", key: "pre.title", icon: SlidersHorizontal },
-  { view: "stats", key: "stats.globalHistory", icon: BarChart3 },
   { view: "commands", key: "cmd.title", icon: Command },
   { view: "guide", key: "nav.guide", icon: BookOpenText },
   { view: "settings", key: "set.title", icon: Settings2 },

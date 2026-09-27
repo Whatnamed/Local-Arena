@@ -291,9 +291,7 @@ $requiredSources = @(
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_cosmetic_catalog.json",
     "addons/counterstrikesharp/plugins/BotHiderImpl/BotHiderImplPlugin.cs",
     "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.cs",
-    "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.csproj",
-    "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.cs",
-    "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.csproj"
+    "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.csproj"
 )
 foreach ($relative in $requiredSources) {
     Assert-File (Join-Path $repo $relative) $relative
@@ -572,14 +570,6 @@ if ($PackageRoot) {
         "addons/counterstrikesharp/plugins/PlusMatchCoordinator/profiles/Medium/botprofile.db",
         "addons/counterstrikesharp/plugins/PlusMatchCoordinator/profiles/High/botprofile.db",
         "addons/counterstrikesharp/plugins/TeamLineupInjector/TeamLineupInjector.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.deps.json",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.pdb",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/Microsoft.Data.Sqlite.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/SQLitePCLRaw.batteries_v2.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/SQLitePCLRaw.core.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/SQLitePCLRaw.provider.e_sqlite3.dll",
-        "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/e_sqlite3.dll",
         "addons/counterstrikesharp/shared/0Harmony/0Harmony.dll",
         "addons/counterstrikesharp/shared/BotHiderApi/BotHiderApi.dll",
         "addons/counterstrikesharp/shared/BotControllerApi/BotControllerApi.dll",
@@ -593,23 +583,14 @@ if ($PackageRoot) {
         Assert-File (Join-Path $package $relative) "package file $relative"
     }
     $telemetryPackageRoot = Join-Path $package "addons/counterstrikesharp/plugins/OfflineMatchTelemetry"
-    $expectedTelemetryFiles = @(
-        "OfflineMatchTelemetry.dll",
-        "OfflineMatchTelemetry.deps.json",
-        "OfflineMatchTelemetry.pdb",
-        "Microsoft.Data.Sqlite.dll",
-        "SQLitePCLRaw.batteries_v2.dll",
-        "SQLitePCLRaw.core.dll",
-        "SQLitePCLRaw.provider.e_sqlite3.dll",
-        "e_sqlite3.dll"
-    ) | Sort-Object
-    $packagedTelemetryFiles = @(
-        Get-ChildItem -LiteralPath $telemetryPackageRoot -File -ErrorAction SilentlyContinue |
-            ForEach-Object Name |
-            Sort-Object
-    )
-    if (@(Compare-Object $expectedTelemetryFiles $packagedTelemetryFiles).Count -gt 0) {
-        Add-Failure "Packaged OfflineMatchTelemetry file set does not match the release allowlist."
+    if (Test-Path -LiteralPath $telemetryPackageRoot) {
+        Add-Failure "Packaged payload must not contain OfflineMatchTelemetry: $telemetryPackageRoot"
+    }
+    $bannedSqliteFiles = @(Get-ChildItem -LiteralPath $package -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -like "*sqlite*" -or $_.Name -like "Microsoft.Data.Sqlite*"
+    })
+    if ($bannedSqliteFiles.Count -gt 0) {
+        Add-Failure "Packaged payload contains disallowed SQLite binaries: $(($bannedSqliteFiles | ForEach-Object FullName) -join ', ')"
     }
     $packagedNadeDataRoot = Join-Path $package "addons/counterstrikesharp/plugins/NadeSystem/grenades"
     $packagedNadeDataFiles = @(
@@ -738,12 +719,9 @@ if ($PackageRoot) {
                     Add-Failure "TeamLineupInjector payload is not Plus-owned: $relative"
                 }
             }
-            foreach ($relative in $manifestPaths.Keys | Where-Object {
-                $_ -like "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/*"
-            }) {
-                if ($manifestOwnership[$relative] -ne "plus") {
-                    Add-Failure "OfflineMatchTelemetry payload is not Plus-owned: $relative"
-                }
+            $telemetryEntries = @($manifestPaths.Keys | Where-Object { $_ -like "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/*" })
+            if ($telemetryEntries.Count -gt 0) {
+                Add-Failure "Package payload manifest must not contain OfflineMatchTelemetry entries."
             }
         }
         catch {

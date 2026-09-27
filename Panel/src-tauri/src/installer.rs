@@ -19,6 +19,10 @@ const SUPERSEDED_PAYLOAD_PATHS: &[(&str, &str)] = &[
     ),
 ];
 
+const RETIRED_PAYLOAD_ROOTS: &[&str] = &[
+    "addons/counterstrikesharp/plugins/OfflineMatchTelemetry",
+];
+
 const PLUS_MARKERS: &[&str] = &[
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/PlayerKnifeCustomizer.dll",
     "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/player_knife_presets.json",
@@ -1185,6 +1189,67 @@ pub fn install(
             }
             record_entries.remove(*superseded_path);
         }
+
+        for root in RETIRED_PAYLOAD_ROOTS {
+            let prefix = format!("{root}/");
+            let retired_paths: Vec<String> = old_entries
+                .iter()
+                .filter(|(path, previous)| {
+                    previous.ownership == "plus"
+                        && (*path == *root || path.starts_with(&prefix))
+                        && !manifest.entries.iter().any(|entry| entry.path == **path)
+                })
+                .map(|(path, _)| path.clone())
+                .collect();
+
+            for retired_path in retired_paths {
+                let Some(previous) = old_entries.get(&retired_path) else {
+                    continue;
+                };
+                let relative = safe_relative(&retired_path)?;
+                let destination = target.join(&relative);
+                if !destination.is_file() {
+                    record_entries.remove(&retired_path);
+                    continue;
+                }
+                if !sha256(&destination)?.eq_ignore_ascii_case(&previous.installed_sha256) {
+                    record_entries.remove(&retired_path);
+                    continue;
+                }
+
+                let transaction_backup = transaction_root.join(&relative);
+                copy_file_for(
+                    "retired payload rollback backup",
+                    &destination,
+                    &transaction_backup,
+                )?;
+                journal.changes.push(TransactionChange {
+                    path: retired_path.clone(),
+                    existed: true,
+                    backup: Some(format!(
+                        "{transaction_name}/{}",
+                        retired_path.replace('\\', "/")
+                    )),
+                });
+                write_json_atomic(&journal_path, &journal)?;
+
+                if previous.original_existed {
+                    let original = previous.original_backup.as_ref().ok_or_else(|| {
+                        AppError::transaction(format!(
+                            "Original backup is missing for retired payload: {retired_path}"
+                        ))
+                    })?;
+                    copy_file_for(
+                        "retired payload original restore",
+                        &directory.join(original),
+                        &destination,
+                    )?;
+                } else {
+                    fs::remove_file(&destination).map_err(AppError::transaction_io)?;
+                }
+                record_entries.remove(&retired_path);
+            }
+        }
         Ok(())
     })();
 
@@ -1219,6 +1284,11 @@ pub fn install(
     write_json_atomic(&journal_path, &journal)?;
     let _ = fs::remove_dir_all(transaction_root);
     fs::remove_file(journal_path).map_err(AppError::transaction_io)?;
+    for root in RETIRED_PAYLOAD_ROOTS {
+        if let Ok(relative) = safe_relative(root) {
+            let _ = remove_empty_tree(&target.join(relative));
+        }
+    }
     Ok(InstallTransactionResult {
         package_version: manifest.package_version,
         installed_files,
@@ -2294,6 +2364,155 @@ mod tests {
         assert_eq!(fs::read(target.join("cfg/test.cfg")).unwrap(), b"plus");
         assert!(directory.join("record.json").is_file());
         assert!(!directory.join("journal.json").exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn managed_upgrade_retires_offline_match_telemetry_and_preserves_unrelated_plugin() {
+        let base = root("telemetry-retirement");
+        let old_payload = base.join("old-payload");
+        let new_payload = base.join("new-payload");
+        let target = base.join("target");
+        let state = base.join("state");
+
+        let telemetry_rel = "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.dll";
+        let other_rel = "addons/counterstrikesharp/plugins/BotRandomizer/BotRandomizer.dll";
+
+        // 1. Setup old payload with telemetry DLL and unrelated plugin
+        fixture(&old_payload, &target);
+        add_payload_file(&old_payload, telemetry_rel, b"old-telemetry-v1");
+        add_payload_file(&old_payload, other_rel, b"randomizer-v1");
+        install(&old_payload, &state, &target, false).unwrap();
+
+        let telemetry_target = target.join(telemetry_rel.replace('/', "\\"));
+        let other_target = target.join(other_rel.replace('/', "\\"));
+        assert_eq!(fs::read(&telemetry_target).unwrap(), b"old-telemetry-v1");
+        assert_eq!(fs::read(&other_target).unwrap(), b"randomizer-v1");
+        let old_rec = read_record(&installation_dir(&state, &target)).unwrap();
+        assert!(old_rec.entries.iter().any(|e| e.path == telemetry_rel));
+
+        // 2. Setup new payload WITHOUT telemetry, but WITH updated unrelated plugin
+        fixture(&new_payload, &base.join("new-target-fixture"));
+        add_payload_file(&new_payload, other_rel, b"randomizer-v2");
+        install(&new_payload, &state, &target, false).unwrap();
+
+        // 3. Verify telemetry is gone, empty directory removed, unrelated plugin updated & survived
+        assert!(!telemetry_target.exists());
+        assert!(!target.join("addons/counterstrikesharp/plugins/OfflineMatchTelemetry").exists());
+        assert_eq!(fs::read(&other_target).unwrap(), b"randomizer-v2");
+
+        // 4. Verify new install record no longer owns the retired telemetry path
+        let new_rec = read_record(&installation_dir(&state, &target)).unwrap();
+        assert!(!new_rec.entries.iter().any(|e| e.path == telemetry_rel));
+        assert!(new_rec.entries.iter().any(|e| e.path == other_rel));
+
+        // 5. Verify restore restores target to pre-plus state cleanly
+        restore(&new_payload, &state, &target).unwrap();
+        assert!(!telemetry_target.exists());
+        assert!(!other_target.exists());
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn managed_upgrade_restores_pre_plus_file_at_retired_telemetry_path() {
+        let base = root("telemetry-original-restore");
+        let old_payload = base.join("old-payload");
+        let new_payload = base.join("new-payload");
+        let target = base.join("target");
+        let state = base.join("state");
+
+        let telemetry_rel = "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.dll";
+        let telemetry_target = target.join(telemetry_rel.replace('/', "\\"));
+
+        // Put a pre-existing 3rd party file at the path before old install
+        fixture(&old_payload, &target);
+        fs::create_dir_all(telemetry_target.parent().unwrap()).unwrap();
+        fs::write(&telemetry_target, b"pre-plus-original-telemetry").unwrap();
+
+        add_payload_file(&old_payload, telemetry_rel, b"plus-telemetry-v1");
+        install(&old_payload, &state, &target, false).unwrap();
+        assert_eq!(fs::read(&telemetry_target).unwrap(), b"plus-telemetry-v1");
+
+        // Upgrade to new payload without telemetry
+        fixture(&new_payload, &base.join("new-target-fixture"));
+        install(&new_payload, &state, &target, false).unwrap();
+
+        // Original pre-plus file is restored
+        assert_eq!(fs::read(&telemetry_target).unwrap(), b"pre-plus-original-telemetry");
+        let rec = read_record(&installation_dir(&state, &target)).unwrap();
+        assert!(!rec.entries.iter().any(|e| e.path == telemetry_rel));
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn managed_upgrade_preserves_user_modified_telemetry_and_releases_ownership() {
+        let base = root("telemetry-user-modified");
+        let old_payload = base.join("old-payload");
+        let new_payload = base.join("new-payload");
+        let target = base.join("target");
+        let state = base.join("state");
+
+        let telemetry_rel = "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.dll";
+        let telemetry_target = target.join(telemetry_rel.replace('/', "\\"));
+
+        fixture(&old_payload, &target);
+        add_payload_file(&old_payload, telemetry_rel, b"plus-telemetry-v1");
+        install(&old_payload, &state, &target, false).unwrap();
+
+        // User modifies the telemetry DLL
+        fs::write(&telemetry_target, b"user-customized-telemetry").unwrap();
+
+        fixture(&new_payload, &base.join("new-target-fixture"));
+        install(&new_payload, &state, &target, false).unwrap();
+
+        // User file is preserved, not silently removed
+        assert_eq!(fs::read(&telemetry_target).unwrap(), b"user-customized-telemetry");
+        // But record no longer claims ownership
+        let rec = read_record(&installation_dir(&state, &target)).unwrap();
+        assert!(!rec.entries.iter().any(|e| e.path == telemetry_rel));
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn failed_upgrade_rolls_back_retired_telemetry_payload() {
+        let base = root("telemetry-upgrade-rollback");
+        let old_payload = base.join("old-payload");
+        let new_payload = base.join("new-payload");
+        let target = base.join("target");
+        let state = base.join("state");
+
+        let telemetry_rel = "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/OfflineMatchTelemetry.dll";
+        let telemetry_target = target.join(telemetry_rel.replace('/', "\\"));
+
+        fixture(&old_payload, &target);
+        add_payload_file(&old_payload, telemetry_rel, b"plus-telemetry-v1");
+        install(&old_payload, &state, &target, false).unwrap();
+        assert_eq!(fs::read(&telemetry_target).unwrap(), b"plus-telemetry-v1");
+
+        fixture(&new_payload, &base.join("new-target-fixture"));
+        // Create an invalid entry in new payload to force install failure
+        let mut manifest = read_manifest_document(&new_payload).unwrap();
+        manifest.entries.push(PayloadEntry {
+            path: "nonexistent/invalid.dll".to_string(),
+            size: 100,
+            sha256: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            component: "invalid".to_string(),
+            ownership: "plus".to_string(),
+            restore_policy: "restore".to_string(),
+        });
+        write_json_atomic(&new_payload.join(MANIFEST_FILE), &manifest).unwrap();
+
+        // Upgrade fails
+        assert!(install(&new_payload, &state, &target, false).is_err());
+
+        // Telemetry DLL was rolled back and preserved
+        assert_eq!(fs::read(&telemetry_target).unwrap(), b"plus-telemetry-v1");
+        let rec = read_record(&installation_dir(&state, &target)).unwrap();
+        assert!(rec.entries.iter().any(|e| e.path == telemetry_rel));
+
         fs::remove_dir_all(base).unwrap();
     }
 }

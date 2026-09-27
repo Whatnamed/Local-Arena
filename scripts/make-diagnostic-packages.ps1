@@ -27,7 +27,6 @@ function Update-PayloadManifest {
                 $relative -like "addons/counterstrikesharp/plugins/BotHiderImpl/*" -or
                 $relative -like "addons/counterstrikesharp/plugins/PlusMatchCoordinator/*" -or
                 $relative -like "addons/counterstrikesharp/plugins/TeamLineupInjector/*" -or
-                $relative -like "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/*" -or
                 $relative -like "addons/counterstrikesharp/shared/BotHiderApi/*" -or
                 $relative -in @("cfg/my_bot_ffa_config.cfg", "cfg/my_bot_normal_config.cfg")
             $component = if ($relative -like "addons/counterstrikesharp/plugins/*") {

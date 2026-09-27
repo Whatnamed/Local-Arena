@@ -226,10 +226,6 @@ try {
     foreach ($project in $pluginProjects) {
         Invoke-Checked $DotNet (@("build", $project.Path, "-c", "Release", "--nologo") + $project.Properties)
     }
-    Invoke-Checked $DotNet @("publish", "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\OfflineMatchTelemetry.csproj", "-c", "Release", "--nologo", "--self-contained", "false", "-o", (Join-Path $repo "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\bin\Release\net8.0"))
-    $omtBuild = Join-Path $repo "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\bin\Release\net8.0"
-    $sqliteNative = Join-Path $omtBuild "runtimes\win-x64\native\e_sqlite3.dll"
-    if (Test-Path -LiteralPath $sqliteNative) { Copy-Item -LiteralPath $sqliteNative -Destination $omtBuild -Force }
     Invoke-Checked $DotNet @(
         "run", "--project", "addons\counterstrikesharp\shared\MatchCore.Tests\MatchCore.Tests.csproj",
         "-c", "Release", "--nologo"

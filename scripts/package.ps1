@@ -263,26 +263,6 @@ foreach ($plugin in $upstreamPluginBuilds) {
     }
     Copy-Tree $build (Join-Path $payload "addons\counterstrikesharp\plugins\$($plugin.Name)")
 }
-$telemetryStage = Join-Path $repo "addons\counterstrikesharp\plugins\OfflineMatchTelemetry\stage\game\csgo\addons\counterstrikesharp\plugins\OfflineMatchTelemetry"
-$telemetryExpectedFiles = @(
-    "OfflineMatchTelemetry.dll",
-    "OfflineMatchTelemetry.deps.json",
-    "OfflineMatchTelemetry.pdb",
-    "Microsoft.Data.Sqlite.dll",
-    "SQLitePCLRaw.batteries_v2.dll",
-    "SQLitePCLRaw.core.dll",
-    "SQLitePCLRaw.provider.e_sqlite3.dll",
-    "e_sqlite3.dll"
-)
-if (-not (Test-Path -LiteralPath $telemetryStage)) {
-    throw "OfflineMatchTelemetry staged deployment was not produced: $telemetryStage"
-}
-$telemetryStageFiles = @(Get-ChildItem -LiteralPath $telemetryStage -File | ForEach-Object Name | Sort-Object)
-$telemetryDifference = @(Compare-Object ($telemetryExpectedFiles | Sort-Object) $telemetryStageFiles)
-if ($telemetryDifference.Count -gt 0) {
-    throw "OfflineMatchTelemetry staged deployment does not match the release allowlist."
-}
-Copy-Tree $telemetryStage (Join-Path $payload "addons\counterstrikesharp\plugins\OfflineMatchTelemetry")
 $botControllerApiBuild = Join-Path $repo "addons\counterstrikesharp\shared\BotControllerApi\bin\Release\net10.0"
 if (-not (Test-Path -LiteralPath (Join-Path $botControllerApiBuild "BotControllerApi.dll"))) {
     throw "Expected BotController shared API build output was not produced: $botControllerApiBuild"
@@ -420,7 +400,6 @@ $manifestEntries = foreach ($topLevel in @("addons", "cfg", "overrides")) {
             $relative -like "addons/counterstrikesharp/plugins/BotHiderImpl/*" -or
             $relative -like "addons/counterstrikesharp/plugins/PlusMatchCoordinator/*" -or
             $relative -like "addons/counterstrikesharp/plugins/TeamLineupInjector/*" -or
-            $relative -like "addons/counterstrikesharp/plugins/OfflineMatchTelemetry/*" -or
             $relative -like "addons/counterstrikesharp/shared/BotHiderApi/*" -or
             $relative -in @("cfg/my_bot_ffa_config.cfg", "cfg/my_bot_normal_config.cfg")
         $component = if ($relative -like "addons/counterstrikesharp/plugins/*") {

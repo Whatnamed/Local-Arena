@@ -12,7 +12,6 @@ mod app_storage;
 mod app_version;
 mod appearance;
 mod atomic_fs;
-mod cs2ss_bridge;
 mod core_config;
 mod diagnostics;
 mod install_checks;
@@ -4260,13 +4259,7 @@ pub fn run() {
             record_panel_error, get_update_snapshot, check_online_updates,
             install_panel_update, install_plugin_update, install_all_updates, cancel_update,
             get_match_catalog, prepare_and_launch_match, finish_active_match, get_active_match, list_match_history,
-            get_match_result, delete_match, get_match_history_stats, run_install_checks, play_demo, open_demo_folder,
-            cs2ss_bridge::get_cs2ss_overview, cs2ss_bridge::list_cs2ss_matches,
-            cs2ss_bridge::get_cs2ss_match_detail, cs2ss_bridge::get_cs2ss_player_detail,
-            cs2ss_bridge::list_cs2ss_matches_with_stats,
-            cs2ss_bridge::get_cs2ss_config, cs2ss_bridge::save_cs2ss_config,
-            cs2ss_bridge::get_cs2ss_dm_overview, cs2ss_bridge::delete_cs2ss_matches,
-            cs2ss_bridge::prune_cs2ss_bot_players])
+            get_match_result, delete_match, get_match_history_stats, run_install_checks, play_demo, open_demo_folder])
         .run(tauri::generate_context!())
         .expect("error while running CS2BotImproverPlus");
 }

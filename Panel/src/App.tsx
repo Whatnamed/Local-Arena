@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  BarChart3,
   BookOpenText,
   Command,
   Crosshair,
@@ -21,7 +20,6 @@ import CommandsPanel from "./panels/CommandsPanel";
 import WeaponPresetsPanel from "./panels/WeaponPresetsPanel";
 import MatchPanel from "./panels/MatchPanel";
 import MatchHistoryPanel from "./panels/MatchHistoryPanel";
-import StatsDashboard from "./panels/StatsDashboard";
 import GuideView from "./panels/GuideView";
 import SettingsView from "./panels/settings/SettingsView";
 import StickersPanel from "./panels/StickersPanel";
@@ -38,7 +36,7 @@ import "./App.css";
 
 type View = "main" | "stickers" | DashboardTarget;
 
-const VIEWS: View[] = ["main", "match", "matchHistory", "stats", "settings", "presets", "commands", "weaponPresets", "stickers", "guide"];
+const VIEWS: View[] = ["main", "match", "matchHistory", "settings", "presets", "commands", "weaponPresets", "stickers", "guide"];
 const VIEW_KEY = "cs2bi.view";
 const WELCOME_STORY_URL = "https://api.hypcvgm.top/la";
 
@@ -97,7 +95,6 @@ export default function App() {
     { view: "main", key: "nav.overview", icon: LayoutDashboard },
     { view: "match", key: "match.title", icon: Swords },
     { view: "matchHistory", key: "match.history", icon: History },
-    { view: "stats", key: "stats.globalHistory", icon: BarChart3 },
     { view: "presets", key: "pre.title", icon: SlidersHorizontal },
     { view: "commands", key: "cmd.title", icon: Command },
     { view: "weaponPresets", key: "weapons.title", icon: Crosshair },
@@ -165,8 +162,6 @@ export default function App() {
             <MatchPanel onOpenInstallation={() => setView("settings")} onOpenHistory={() => setView("matchHistory")} onOpenLineup={() => setView("presets")} />
           ) : view === "matchHistory" ? (
             <MatchHistoryPanel />
-          ) : view === "stats" ? (
-            <StatsDashboard />
           ) : view === "guide" ? (
             <GuideView anchor={guideAnchor} onAnchorHandled={clearGuideAnchor} />
           ) : (

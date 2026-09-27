@@ -43,7 +43,7 @@ function Setup-BaseTarget {
     $allOtherPlugins = @(
         "BotAI", "BotAimImprover", "BotBuy", "BotControllerImpl",
         "BotRandomizer", "BotState", "NadeSystem", "RoundDamageRecap",
-        "PlusMatchCoordinator", "TeamLineupInjector", "OfflineMatchTelemetry"
+        "PlusMatchCoordinator", "TeamLineupInjector"
     )
     foreach ($p in $allOtherPlugins) {
         $pDir = Join-Path $Target "addons\counterstrikesharp\plugins\$p"

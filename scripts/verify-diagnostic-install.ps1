@@ -355,7 +355,7 @@ if ($Mode -eq "A") {
 $otherPlugins = @(
     "BotAI", "BotAimImprover", "BotBuy", "BotControllerImpl",
     "BotRandomizer", "BotState", "NadeSystem", "RoundDamageRecap",
-    "PlusMatchCoordinator", "TeamLineupInjector", "OfflineMatchTelemetry"
+    "PlusMatchCoordinator", "TeamLineupInjector"
 )
 $missingOther = @()
 foreach ($p in $otherPlugins) {
@@ -365,7 +365,7 @@ foreach ($p in $otherPlugins) {
     }
 }
 if ($missingOther.Count -eq 0) {
-    Record-Check "Enhanced Bots plugins" "PASS" "All 11 enhanced bot plugins present and active" $true
+    Record-Check "Enhanced Bots plugins" "PASS" "All 10 enhanced bot plugins present and active" $true
 } else {
     Record-Check "Enhanced Bots plugins" "FAIL" "Missing plugins: $($missingOther -join ', ')" $false
 }
