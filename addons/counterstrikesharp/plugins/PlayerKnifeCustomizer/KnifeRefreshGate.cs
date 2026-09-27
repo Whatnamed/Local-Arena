@@ -7,6 +7,8 @@ public sealed class KnifeRefreshGate
     {
         public required uint Pawn { get; init; }
         public required int Team { get; init; }
+        public ulong SteamId { get; init; }
+        public long ConfigRevision { get; init; }
         public required long Revision { get; init; }
         public required DateTimeOffset NextAllowed { get; init; }
         public bool Busy { get; set; } = true;
@@ -15,7 +17,10 @@ public sealed class KnifeRefreshGate
     private readonly Dictionary<nint, State> _states = new();
     private long _nextRevision;
 
-    public bool TryBegin(nint player, uint pawn, int team, DateTimeOffset now, out long revision)
+    public bool TryBegin(nint player, uint pawn, int team, DateTimeOffset now, out long revision) =>
+        TryBegin(player, pawn, team, 0, 0, now, out revision);
+
+    public bool TryBegin(nint player, uint pawn, int team, ulong steamId, long configRevision, DateTimeOffset now, out long revision)
     {
         revision = 0;
         if (player == nint.Zero || pawn == 0) return false;
@@ -27,7 +32,11 @@ public sealed class KnifeRefreshGate
         revision = ++_nextRevision;
         _states[player] = new State
         {
-            Pawn = pawn, Team = team, Revision = revision,
+            Pawn = pawn,
+            Team = team,
+            SteamId = steamId,
+            ConfigRevision = configRevision,
+            Revision = revision,
             NextAllowed = now.AddMilliseconds(350),
         };
         return true;
@@ -40,6 +49,12 @@ public sealed class KnifeRefreshGate
         _states.TryGetValue(player, out var state) && state.Busy &&
         state.Revision == revision && state.Pawn == pawn && state.Team == team;
 
+    public bool IsCurrent(nint player, uint pawn, int team, ulong steamId, long configRevision, long revision) =>
+        _states.TryGetValue(player, out var state) && state.Busy &&
+        state.Revision == revision && state.Pawn == pawn && state.Team == team &&
+        (state.SteamId == 0 || state.SteamId == steamId) &&
+        (state.ConfigRevision == 0 || state.ConfigRevision == configRevision);
+
     public void Complete(nint player, long revision)
     {
         if (_states.TryGetValue(player, out var state) && state.Revision == revision)
@@ -48,4 +63,5 @@ public sealed class KnifeRefreshGate
 
     public void Cancel(nint player) => _states.Remove(player);
     public void CancelAll() => _states.Clear();
+
 }
