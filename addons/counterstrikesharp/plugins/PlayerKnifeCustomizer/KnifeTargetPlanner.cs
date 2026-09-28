@@ -1,9 +1,8 @@
 namespace PlayerKnifeCustomizer;
 
-public sealed record KnifeReplacementPlan(
+public sealed record KnifeTargetPlan(
     ushort CurrentDefIndex,
     ushort TargetDefIndex,
-    string DesignerName,
     string DisplayName,
     KnifePreset Preset,
     bool IsVanilla,
@@ -11,9 +10,9 @@ public sealed record KnifeReplacementPlan(
     string ErrorMessage
 );
 
-public static class KnifeReplacementPlanner
+public static class KnifeTargetPlanner
 {
-    public static KnifeReplacementPlan Plan(
+    public static KnifeTargetPlan Plan(
         ushort currentDefIndex,
         IReadOnlyList<ushort>? customKnives,
         TeamLoadout loadout)
@@ -29,16 +28,28 @@ public static class KnifeReplacementPlanner
         if (!KnifeShortcutCycle.IsSupported(targetDefIndex))
             return Invalid(currentDefIndex, "The target knife definition is unavailable.");
 
-        // The planner must be side-effect free. In particular, a failed existing-entity mutation
-        // must not create a phantom preset that changes the next cycle.
+        return Create(currentDefIndex, targetDefIndex, loadout);
+    }
+
+    public static KnifeTargetPlan? PlanDefault(ushort currentDefIndex, ushort defaultDefIndex, TeamLoadout loadout)
+    {
+        if (defaultDefIndex > 0 && !KnifeShortcutCycle.IsSupported(defaultDefIndex)) return null;
+        ushort targetDefIndex = defaultDefIndex > 0 ? defaultDefIndex : currentDefIndex;
+        if (!KnifeShortcutCycle.IsSupported(targetDefIndex)) return null;
+        if (targetDefIndex == currentDefIndex && !loadout.KnifePresets.ContainsKey(targetDefIndex))
+            return null;
+        return Create(currentDefIndex, targetDefIndex, loadout);
+    }
+
+    private static KnifeTargetPlan Create(ushort currentDefIndex, ushort targetDefIndex, TeamLoadout loadout)
+    {
+        // Always resolve the target knife's own preset, without mutating the loadout.
         KnifePreset preset = loadout.KnifePresets.TryGetValue(targetDefIndex, out var configured) && configured.Paint > 0
             ? configured.Clone()
             : new KnifePreset { Paint = 0, Seed = 0, Wear = 0.01f };
-
-        return new KnifeReplacementPlan(
+        return new KnifeTargetPlan(
             CurrentDefIndex: currentDefIndex,
             TargetDefIndex: targetDefIndex,
-            DesignerName: KnifeShortcutCycle.GetKnifeDesignerName(targetDefIndex),
             DisplayName: KnifeShortcutCycle.GetKnifeDisplayName(targetDefIndex),
             Preset: preset,
             IsVanilla: preset.Paint <= 0,
@@ -46,11 +57,10 @@ public static class KnifeReplacementPlanner
             ErrorMessage: string.Empty);
     }
 
-    private static KnifeReplacementPlan Invalid(ushort currentDefIndex, string error) =>
+    private static KnifeTargetPlan Invalid(ushort currentDefIndex, string error) =>
         new(
             CurrentDefIndex: currentDefIndex,
             TargetDefIndex: 0,
-            DesignerName: "weapon_knife",
             DisplayName: "Default Knife",
             Preset: new KnifePreset { Paint = 0, Seed = 0, Wear = 0.01f },
             IsVanilla: true,

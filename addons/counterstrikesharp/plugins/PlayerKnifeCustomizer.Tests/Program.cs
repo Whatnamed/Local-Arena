@@ -63,53 +63,59 @@ Require(GiveNamedItemPhaseResolver.Resolve("weapon_knife_karambit", 507) == Cosm
     "GiveNamedItem return inspection must select knife, gun, or conservative combined phases.");
 
 var plannerLoadout = new TeamLoadout();
-// A failed or pending refresh cannot allow overlapping shortcut commands.
-var refreshGate = new KnifeRefreshGate();
+var shortcutDebounce = new KnifeShortcutDebounce();
 var instant = DateTimeOffset.UtcNow;
-Require(refreshGate.TryBegin(player: (nint)0x1000, pawn: 42, team: (int)CosmeticTeam.Ct,
-        now: instant, out long firstRefresh) &&
-        !refreshGate.TryBegin((nint)0x1000, 42, (int)CosmeticTeam.Ct,
-            instant.AddMilliseconds(1), out _),
-    "Rapid shortcut presses must not overlap a knife refresh.");
-Require(refreshGate.IsCurrent((nint)0x1000, 42, (int)CosmeticTeam.Ct, firstRefresh) &&
-        !refreshGate.IsCurrent((nint)0x1000, 43, (int)CosmeticTeam.Ct, firstRefresh),
-    "The refresh request must be bound to its Pawn and team.");
-refreshGate.Complete((nint)0x1000, firstRefresh);
-Require(!refreshGate.TryBegin((nint)0x1000, 42, (int)CosmeticTeam.Ct,
-        instant.AddMilliseconds(200), out _),
-    "Completing a refresh must retain its short debounce.");
-Require(refreshGate.TryBegin((nint)0x1000, 42, (int)CosmeticTeam.Ct,
-        instant.AddMilliseconds(400), out long secondRefresh) &&
-        !refreshGate.IsCurrent((nint)0x1000, 42, (int)CosmeticTeam.Ct, firstRefresh),
-    "A later shortcut may start once, and old callbacks must stay stale.");
-refreshGate.Cancel((nint)0x1000);
-Require(!refreshGate.IsCurrent((nint)0x1000, 42, (int)CosmeticTeam.Ct, secondRefresh),
-    "Death, team change or disconnect must cancel an in-flight refresh.");
+Require(shortcutDebounce.TryAcquire((nint)0x1000, 42, (int)CosmeticTeam.Ct, instant) &&
+        !shortcutDebounce.TryAcquire((nint)0x1000, 42, (int)CosmeticTeam.Ct, instant.AddMilliseconds(1)) &&
+        shortcutDebounce.TryAcquire((nint)0x1000, 42, (int)CosmeticTeam.Ct, instant.AddMilliseconds(300)),
+    "Only repeated shortcut commands inside the short debounce window must be rejected.");
+Require(shortcutDebounce.TryAcquire((nint)0x1000, 43, (int)CosmeticTeam.Ct, instant.AddMilliseconds(301)),
+    "A new Pawn must not inherit the old Pawn's debounce.");
+shortcutDebounce.Cancel((nint)0x1000);
+Require(shortcutDebounce.TryAcquire((nint)0x1000, 43, (int)CosmeticTeam.Ct, instant.AddMilliseconds(302)),
+    "Death, team change and disconnect must clear the debounce.");
 
 string knifeSource = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
     "..", "..", "..", "..", "PlayerKnifeCustomizer", "PlayerKnifeCustomizer.cs")));
-int mutationStart = knifeSource.IndexOf("private KnifeApplyOutcome ApplyExistingKnife(", StringComparison.Ordinal);
-int mutationEnd = knifeSource.IndexOf("private static string? FindSafeNonKnifeSlot(", mutationStart, StringComparison.Ordinal);
-Require(mutationStart >= 0 && mutationEnd > mutationStart, "The existing-entity knife path must be present.");
+int mutationStart = knifeSource.IndexOf("private bool ApplyKnifeTargetToExistingEntity(", StringComparison.Ordinal);
+int mutationEnd = knifeSource.IndexOf("private static CBasePlayerWeapon? ResolveWeapon(", mutationStart, StringComparison.Ordinal);
+Require(mutationStart >= 0 && mutationEnd > mutationStart, "The authoritative existing-entity knife path must be present.");
 string mutation = knifeSource[mutationStart..mutationEnd];
 Require(!knifeSource.Contains("RemovePlayerItem(", StringComparison.Ordinal) &&
-        !knifeSource.Contains("GiveNamedItem<", StringComparison.Ordinal) &&
-        !knifeSource.Contains("weapon.Remove()", StringComparison.Ordinal),
-    "Controlled knife recreation must not use RemovePlayerItem detachment, generic Give loop, or direct entity remove.");
-Require(mutation.Split("ExecuteClientCommand(", StringSplitOptions.None).Length - 1 <= 3 &&
-        mutation.Contains("ExecuteClientCommand(safeSlot)", StringComparison.Ordinal) &&
-        mutation.Contains("ExecuteClientCommand(\"slot3\")", StringComparison.Ordinal),
-    "One knife update may issue bounded safe-slot, slot3, and optional slot restoration commands.");
+        !knifeSource.Contains("GiveNamedItem(", StringComparison.Ordinal) &&
+        !knifeSource.Contains("AddEntityIOEvent(\"Kill\"", StringComparison.Ordinal) &&
+        !knifeSource.Contains("ProvideBaseKnifeFallback", StringComparison.Ordinal) &&
+        !knifeSource.Contains("RunKnifeEntityCustomization", StringComparison.Ordinal),
+    "Human knife production code must not retain Kill/Give recreation or fallback helpers.");
+Require(mutation.Contains("knife.AcceptInput(\"ChangeSubclass\"", StringComparison.Ordinal) &&
+        mutation.Contains("item = knife.AttributeManager?.Item", StringComparison.Ordinal) &&
+        mutation.Contains("IsInInventory(pawn, knife)", StringComparison.Ordinal) &&
+        mutation.Contains("mode == KnifeApplyMode.Shortcut || (holdingKnife && familyChanged)", StringComparison.Ordinal) &&
+        mutation.Split("ExecuteClientCommand(\"slot3\")", StringSplitOptions.None).Length - 1 == 1 &&
+        !mutation.Contains("AddTimer(", StringComparison.Ordinal),
+    "Knife target apply must reacquire econ after ChangeSubclass and only select slot3 when needed.");
+Require(knifeSource.Contains("plan, KnifeApplyMode.Default", StringComparison.Ordinal) &&
+        knifeSource.Contains("plan, KnifeApplyMode.Shortcut", StringComparison.Ordinal),
+    "Default and quick knife must use the same authoritative target apply.");
 
-var planner = KnifeReplacementPlanner.Plan(507, null, plannerLoadout);
+var planner = KnifeTargetPlanner.Plan(507, null, plannerLoadout);
 Require(planner.IsValid && planner.TargetDefIndex == 515 && planner.IsVanilla &&
         plannerLoadout.KnifePresets.Count == 0,
     "A vanilla quick-knife plan must not create a preset before mutation succeeds.");
 plannerLoadout.KnifePresets[515] = Preset(568);
-var configuredPlan = KnifeReplacementPlanner.Plan(507, null, plannerLoadout);
+var configuredPlan = KnifeTargetPlanner.Plan(507, null, plannerLoadout);
 Require(configuredPlan.IsValid && !configuredPlan.IsVanilla && configuredPlan.Preset.Paint == 568 &&
         !ReferenceEquals(configuredPlan.Preset, plannerLoadout.KnifePresets[515]),
     "A configured quick-knife plan must clone the preset without mutating loadout state.");
+plannerLoadout.KnifePresets[507] = Preset(417);
+var defaultPlan = KnifeTargetPlanner.PlanDefault(42, 507, plannerLoadout);
+Require(defaultPlan is { TargetDefIndex: 507, IsVanilla: false } && defaultPlan.Preset.Paint == 417,
+    "Default Karambit must use Karambit's own preset.");
+var missingDefaultPreset = KnifeTargetPlanner.PlanDefault(42, 508, plannerLoadout);
+Require(missingDefaultPreset is { TargetDefIndex: 508, IsVanilla: true } && missingDefaultPreset.Preset.Paint == 0,
+    "An unconfigured default knife target must be vanilla, not inherit the last knife's skin.");
+Require(KnifeTargetPlanner.PlanDefault(42, 0, plannerLoadout) == null,
+    "No configured default or current knife preset must leave the entity alone.");
 
 tAwp.StatTrakCount++;
 Require(config.Loadouts.T.GunPresets[9].StatTrakCount == 21 && config.Loadouts.Ct.GunPresets[9].StatTrakCount == 10,
@@ -292,14 +298,10 @@ for (int i = 0; i < 1000; i++)
     long spawn = tracker.Begin(playerHandle, CosmeticApplyPhase.All);
     Require(tracker.TryBindContext(playerHandle, spawn, firstPawn, (int)CosmeticTeam.Ct),
         "The current spawn generation must bind its initial pawn and team.");
-    Require(tracker.TryStartKnifeOperation(playerHandle, spawn) &&
-            !tracker.TryStartKnifeOperation(playerHandle, spawn),
-        "One apply generation may start exactly one knife mutation.");
     Require(tracker.Complete(playerHandle, spawn, CosmeticApplyPhase.Knife),
-        "Success or failure must terminate the knife phase.");
-    Require(!tracker.IsPending(playerHandle, spawn, CosmeticApplyPhase.Knife) &&
-            !tracker.TryStartKnifeOperation(playerHandle, spawn),
-        "Scheduled 0.25/0.50/0.90 retries must not restart a failed knife operation.");
+        "A successful knife write must complete the knife phase.");
+    Require(!tracker.IsPending(playerHandle, spawn, CosmeticApplyPhase.Knife),
+        "Scheduled retries must not repeat a completed knife write.");
 
     long teamChange = tracker.Begin(playerHandle, CosmeticApplyPhase.All);
     Require(!tracker.IsCurrent(playerHandle, spawn),
@@ -375,7 +377,7 @@ foreach (var (def, paint) in testPresets)
 ushort currentDef = 507;
 for (int step = 0; step < shortcutKnives.Length; step++)
 {
-    var plan = KnifeReplacementPlanner.Plan(currentDef, shortcutKnives, cycleLoadout);
+    var plan = KnifeTargetPlanner.Plan(currentDef, shortcutKnives, cycleLoadout);
     ushort expectedTarget = shortcutKnives[(step + 1) % shortcutKnives.Length];
     Require(plan.IsValid && plan.TargetDefIndex == expectedTarget,
         $"Step {step}: Expected target knife {expectedTarget}, got {plan.TargetDefIndex}");
@@ -386,30 +388,12 @@ for (int step = 0; step < shortcutKnives.Length; step++)
 
 // Test that missing preset produces vanilla plan without altering next cycle
 cycleLoadout.KnifePresets.Remove(512);
-var falchionPlan = KnifeReplacementPlanner.Plan(525, shortcutKnives, cycleLoadout);
+var falchionPlan = KnifeTargetPlanner.Plan(525, shortcutKnives, cycleLoadout);
 Require(falchionPlan.IsValid && falchionPlan.TargetDefIndex == 512 && falchionPlan.IsVanilla && falchionPlan.Preset.Paint == 0,
     "A knife without configured preset must generate a vanilla plan with Paint=0.");
-var wrapPlan = KnifeReplacementPlanner.Plan(512, shortcutKnives, cycleLoadout);
+var wrapPlan = KnifeTargetPlanner.Plan(512, shortcutKnives, cycleLoadout);
 Require(wrapPlan.IsValid && wrapPlan.TargetDefIndex == 507 && !wrapPlan.IsVanilla && wrapPlan.Preset.Paint == 417,
     "Cycle must wrap from unconfigured Falchion back to configured Karambit with preset A intact.");
-
-// Test busy simulation: rapid repeated commands while busy must not advance sequence
-bool isBusy = true;
-ushort simulatedKnife = 507;
-for (int burst = 0; burst < 10; burst++)
-{
-    if (isBusy)
-    {
-        // Command rejected by busy gate, simulatedKnife remains unchanged
-        continue;
-    }
-    var rejectedPlan = KnifeReplacementPlanner.Plan(simulatedKnife, shortcutKnives, cycleLoadout);
-    simulatedKnife = rejectedPlan.TargetDefIndex;
-}
-Require(simulatedKnife == 507, "Busy gate must reject commands and prevent sequence advance.");
-isBusy = false;
-var nextAfterBusy = KnifeReplacementPlanner.Plan(simulatedKnife, shortcutKnives, cycleLoadout);
-Require(nextAfterBusy.TargetDefIndex == 515, "Sequence must resume at the immediate next knife after busy clears.");
 
 // Gun identity is the current item defindex; a configured USP-S must never become a P2000.
 var spawnTestConfig = new KnifeConfig();
@@ -448,8 +432,12 @@ Require(gunWriter.Contains("item.ItemDefinitionIndex != actualDefIndex", StringC
 int valuesStart = knifeSource.IndexOf("private bool ApplyWeaponPresetValues(", gunEnd, StringComparison.Ordinal);
 int valuesEnd = knifeSource.IndexOf("private bool TryApplyGlove(", valuesStart, StringComparison.Ordinal);
 Require(valuesStart >= 0 && valuesEnd > valuesStart &&
-        !knifeSource[valuesStart..valuesEnd].Contains("ItemDefinitionIndex =", StringComparison.Ordinal),
-    "The shared cosmetics writer must not mutate gun or knife identity.");
+        !knifeSource[valuesStart..valuesEnd].Contains("ItemDefinitionIndex =", StringComparison.Ordinal) &&
+        knifeSource[valuesStart..valuesEnd].Contains("EnsureItemId(item, accountId)", StringComparison.Ordinal) &&
+        knifeSource[valuesStart..valuesEnd].Contains("weapon.FallbackPaintKit = preset.Paint", StringComparison.Ordinal) &&
+        knifeSource[valuesStart..valuesEnd].Contains("weapon.FallbackSeed = preset.Seed", StringComparison.Ordinal) &&
+        knifeSource[valuesStart..valuesEnd].Contains("weapon.FallbackWear = preset.Wear", StringComparison.Ordinal),
+    "Repeated cosmetics writes must retain identity and item ID while setting the same fallback values.");
 int callbackStart = knifeSource.IndexOf("private void ScheduleGivenGunReapply(", StringComparison.Ordinal);
 int callbackEnd = knifeSource.IndexOf("private void RunApplyPipeline(", callbackStart, StringComparison.Ordinal);
 Require(callbackStart >= 0 && callbackEnd > callbackStart, "Bounded GiveNamedItem gun reapply must exist.");
@@ -473,4 +461,4 @@ Require(knifeSource.Contains("MarkFallbackChanged(weapon)", StringComparison.Ord
         knifeSource.Contains("m_nFallbackStatTrak", StringComparison.Ordinal) &&
         knifeSource.Contains("CBaseModelEntity\", \"m_CBodyComponent", StringComparison.Ordinal),
     "Fallback fields and legacy bodygroup changes must be marked dirty.");
-Console.WriteLine("PlayerKnifeCustomizer resolver, knife cycles, presets, and existing-gun reapply tests passed.");
+Console.WriteLine("PlayerKnifeCustomizer gun and knife existing-entity contracts passed.");

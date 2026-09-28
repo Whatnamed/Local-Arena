@@ -15,29 +15,29 @@ public static class KnifeShortcutCycle
         512, // Falchion Knife
     ];
 
-    private static readonly IReadOnlyDictionary<ushort, (string Designer, string Display)> KnifeCatalog =
-        new Dictionary<ushort, (string Designer, string Display)>
+    private static readonly IReadOnlyDictionary<ushort, string> KnifeCatalog =
+        new Dictionary<ushort, string>
         {
-            [500] = ("weapon_bayonet", "Bayonet"),
-            [503] = ("weapon_knife_css", "Classic Knife"),
-            [505] = ("weapon_knife_flip", "Flip Knife"),
-            [506] = ("weapon_knife_gut", "Gut Knife"),
-            [507] = ("weapon_knife_karambit", "Karambit"),
-            [508] = ("weapon_knife_m9_bayonet", "M9 Bayonet"),
-            [509] = ("weapon_knife_tactical", "Huntsman Knife"),
-            [512] = ("weapon_knife_falchion", "Falchion Knife"),
-            [514] = ("weapon_knife_survival_bowie", "Bowie Knife"),
-            [515] = ("weapon_knife_butterfly", "Butterfly Knife"),
-            [516] = ("weapon_knife_push", "Shadow Daggers"),
-            [517] = ("weapon_knife_cord", "Paracord Knife"),
-            [518] = ("weapon_knife_canis", "Survival Knife"),
-            [519] = ("weapon_knife_ursus", "Ursus Knife"),
-            [520] = ("weapon_knife_gypsy_jackknife", "Navaja Knife"),
-            [521] = ("weapon_knife_outdoor", "Nomad Knife"),
-            [522] = ("weapon_knife_stiletto", "Stiletto Knife"),
-            [523] = ("weapon_knife_widowmaker", "Talon Knife"),
-            [525] = ("weapon_knife_skeleton", "Skeleton Knife"),
-            [526] = ("weapon_knife_kukri", "Kukri Knife"),
+            [500] = "Bayonet",
+            [503] = "Classic Knife",
+            [505] = "Flip Knife",
+            [506] = "Gut Knife",
+            [507] = "Karambit",
+            [508] = "M9 Bayonet",
+            [509] = "Huntsman Knife",
+            [512] = "Falchion Knife",
+            [514] = "Bowie Knife",
+            [515] = "Butterfly Knife",
+            [516] = "Shadow Daggers",
+            [517] = "Paracord Knife",
+            [518] = "Survival Knife",
+            [519] = "Ursus Knife",
+            [520] = "Navaja Knife",
+            [521] = "Nomad Knife",
+            [522] = "Stiletto Knife",
+            [523] = "Talon Knife",
+            [525] = "Skeleton Knife",
+            [526] = "Kukri Knife",
         };
 
     public static bool IsSupported(ushort defIndex) => KnifeCatalog.ContainsKey(defIndex);
@@ -71,12 +71,7 @@ public static class KnifeShortcutCycle
         return result;
     }
 
-    public static string GetKnifeDesignerName(ushort defIndex) =>
-        KnifeCatalog.TryGetValue(defIndex, out var entry) ? entry.Designer : "weapon_knife";
-
     public static string GetKnifeDisplayName(ushort defIndex) =>
-        KnifeCatalog.TryGetValue(defIndex, out var entry) ? entry.Display : $"Knife #{defIndex}";
+        KnifeCatalog.TryGetValue(defIndex, out var display) ? display : $"Knife #{defIndex}";
 
-    public static string GetBaseDesignerName(CosmeticTeam team) =>
-        team == CosmeticTeam.T ? "weapon_knife_t" : "weapon_knife";
 }

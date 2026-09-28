@@ -25,6 +25,7 @@
 
 - CT / T 独立配置、共享武器语义、PaintKit、Wear、Seed、Name Tag、StatTrak、Souvenir 等现有能力继续有效。
 - 玩家购买、出生发放或本项目明确创建的枪械可以应用当前阵营对应的 preset。
+- 真人玩家的枪械 preset 只写当前 gun entity 的饰品字段；以实体当前 `ItemDefinitionIndex` 选 preset，不为刷新皮肤 Kill/Give 或改变枪型身份。
 - 玩家捡到 Bot / 地面枪时，如果当前阵营为该 weapon defindex 配置了 preset，允许按 Local Arena 原有逻辑应用自己的 preset。
 - 如果没有对应 preset，不做无意义重写，保持当前实体状态。
 - 本项目不新增 gun provenance / foreign-pickup preservation 子系统，也不把“拾取已有实体必须保留外来皮肤”作为产品 invariant。
@@ -41,8 +42,8 @@
 - 提供可靠的快捷换刀功能，默认循环顺序为 Karambit 507、Butterfly 515、M9 Bayonet 508、Bayonet 500、Skeleton 525、Falchion 512。
 - 默认候选按键为 `\\`；未启用快捷功能时不得修改用户键位。保留将来配置自定义列表和按键的可能。
 - 切换必须以真实持有刀的 ItemDefinitionIndex 作为当前位置事实来源。
-- 不在当前 active entity 上直接原地 `ChangeSubclass` 作为完成方案，不生成一堆地面刀，也不依赖丢地再捡。
-- replacement 只有在创建、目标 subclass / defindex、econ attributes 和 preset 路径成功后才替换旧刀；失败必须有界、可恢复，不能让玩家永久没刀或跳过轮换位置。
+- 刀型切换使用玩家当前持有的 knife entity：必要时 `ChangeSubclass`，随后重取 econ item、应用目标 defindex 和该刀自己的 preset，并标记网络及模型状态变更。不 Kill/Give 刀具或临时枪，不生成地面旧刀。
+- 快捷切换成功后停在 `slot3`；出生时应用默认刀不会强制切走当前持有的枪。失败后由有界事件重试处理，不通过创建新刀来补救。
 - 没有当前阵营 preset 时仍允许切刀型，并进入明确的 Vanilla / default 路径；不得从另一阵营复制 preset。
 
 ## 5. 运行中应用和重新发装备
