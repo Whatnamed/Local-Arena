@@ -1,6 +1,6 @@
 """Read-only signature check against an installed CS2 Windows build.
 
-Usage: python scripts/verify-cs2-signatures.py <Counter-Strike Global Offensive/game directory>
+Usage: python scripts/verify-cs2-signatures.py <Counter-Strike Global Offensive/game directory> [CounterStrikeSharp gamedata.json]
 
 Pass the directory containing both csgo/bin/win64/server.dll and
 bin/win64/engine2.dll, not the game/csgo directory used by Local Arena UI.
@@ -42,7 +42,7 @@ def matches(data: bytes, signature: str) -> list[int]:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         print(__doc__.strip())
         return 2
     game = Path(sys.argv[1]).resolve()
@@ -63,6 +63,14 @@ def main() -> int:
         if match is None:
             raise ValueError(f"Missing Windows signature: {name}")
         targets[f"Cosmetics::{name}"] = ("server", match.group(1))
+    if len(sys.argv) == 3:
+        css_gamedata = json.loads(Path(sys.argv[2]).read_text("utf-8"))
+        for name, entry in css_gamedata.items():
+            signature = entry.get("signatures", {})
+            if signature.get("windows") and signature.get("library", "server") in data:
+                targets[f"CounterStrikeSharp::{name}"] = (
+                    signature.get("library", "server"), signature["windows"]
+                )
     failed = False
     for name, (module, signature) in targets.items():
         offsets = matches(data[module], signature)

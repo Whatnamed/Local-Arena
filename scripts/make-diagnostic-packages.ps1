@@ -5,6 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $stageBase = Join-Path $repo ".cache\package\stage-build\LocalArena-v1.4.3.3-windows"
+$cssRelease = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "dependencies.json") -Raw | ConvertFrom-Json).counterStrikeSharp.release
 
 if (-not (Test-Path -LiteralPath $stageBase)) {
     throw "Base stage build not found at $stageBase. Run scripts/package.ps1 first."
@@ -131,7 +132,7 @@ if (Test-Path -LiteralPath $knifeDllA) {
 $markerA = [ordered]@{
     mode = "A"
     metamod = "2.0.0-git1469"
-    counterstrikesharp = "1.0.375"
+    counterstrikesharp = $cssRelease.TrimStart('v')
     bot_hider_native = $false
     bot_hider_impl = $false
     player_cosmetics = $false
@@ -146,7 +147,7 @@ Local Arena Diagnostic Package A: Runtime-Only Baseline
 ===================================================================
 
 Isolation & Transaction Contract:
-- Narrow Mutation Surface: Diagnostic installer only mutates MM1469/CSS375 runtime
+- Narrow Mutation Surface: Diagnostic installer only mutates MM1469/$cssRelease runtime
   trees, official loaders, and the 3 target components. It does NOT overwrite
   other existing plugins, shared libraries, cfgs, or overrides.
 - Clean Runtime Purge: Target runtime trees are purged prior to installation
@@ -154,15 +155,15 @@ Isolation & Transaction Contract:
 - Pre-Diagnostic Snapshot: Created automatically at <csgo>/.csbip/diagnostic-snapshot
   before files are modified. Reversible via RESTORE-NORMAL.ps1.
 - Metamod:Source: 2.0.0-git1469 (ACTIVE)
-- CounterStrikeSharp: v1.0.375 (ACTIVE)
+- CounterStrikeSharp: $cssRelease (ACTIVE)
 - BotHider native: OFF (disabled via BotHider.vdf.csbip-disabled)
 - BotHiderImpl: OFF (disabled via BotHiderImpl.dll.csbip-disabled)
 - PlayerCosmetics: OFF (disabled via PlayerKnifeCustomizer.dll.csbip-disabled)
 - BotAI / BotRandomizer / NadeSystem / MatchCoordinator / RayTrace: ON (ACTIVE)
 
 Background & Root-Cause Status:
-- Proven: CounterStrikeSharp 371 signature CEntityInstance_AcceptInput has 0 matches
-  in CS2 1.41.8.2 server.dll, while CSS 375 matches uniquely.
+- Historical baseline: CSS371 AcceptInput did not match CS2 1.41.8.2.
+  Scan this package against the installed server.dll before use.
 - Strong correlation: All failing cosmetic surfaces (knife ChangeSubclass, glove
   bodygroup, legacy-model gun bodygroup) rely on AcceptInput.
 - Not yet proven: The exact internal entity replication mechanism of the CopyExistingEntity
@@ -181,7 +182,7 @@ Manual Test Procedure:
 2. Run VERIFY-DIAGNOSTIC.ps1 and confirm:
    - Exact runtime tree verified (matches manifest with 0 stale residues)
    - MM 1469 active
-   - CSS 375 active
+   - CSS $($cssRelease.TrimStart('v')) active
    - BotHider OFF
    - BotHiderImpl OFF
    - PlayerCosmetics OFF
@@ -235,7 +236,7 @@ if (Test-Path -LiteralPath $knifeDllDisabledB) {
 $markerB = [ordered]@{
     mode = "B"
     metamod = "2.0.0-git1469"
-    counterstrikesharp = "1.0.375"
+    counterstrikesharp = $cssRelease.TrimStart('v')
     bot_hider_native = $false
     bot_hider_impl = $false
     player_cosmetics = $true
@@ -250,22 +251,22 @@ Local Arena Diagnostic Package B: Human Cosmetics Only
 ===================================================================
 
 Isolation & Transaction Contract:
-- Narrow Mutation Surface: Diagnostic installer only mutates MM1469/CSS375 runtime
+- Narrow Mutation Surface: Diagnostic installer only mutates MM1469/$cssRelease runtime
   trees, official loaders, and the 3 target components. It does NOT overwrite
   other existing plugins, shared libraries, cfgs, or overrides.
 - Clean Runtime Purge: Target runtime trees are purged prior to installation
   to eliminate any stale CSS371 or Metamod residue.
 - Pre-Diagnostic Snapshot: Preserved from Package A (original pre-test state is retained).
 - Metamod:Source: 2.0.0-git1469 (ACTIVE)
-- CounterStrikeSharp: v1.0.375 (ACTIVE)
+- CounterStrikeSharp: $cssRelease (ACTIVE)
 - BotHider native: OFF (disabled via BotHider.vdf.csbip-disabled)
 - BotHiderImpl: OFF (disabled via BotHiderImpl.dll.csbip-disabled)
-- PlayerCosmetics: ON (ACTIVE, built from commit 8cddb93+d27c050 on CSS 375)
+- PlayerCosmetics: ON (ACTIVE, built from this package source on $cssRelease)
 - BotAI / BotRandomizer / NadeSystem / MatchCoordinator / RayTrace: ON (ACTIVE)
 
 Background & Root-Cause Status:
-- Proven: CounterStrikeSharp 371 signature CEntityInstance_AcceptInput has 0 matches
-  in CS2 1.41.8.2 server.dll, while CSS 375 matches uniquely.
+- Historical baseline: CSS371 AcceptInput did not match CS2 1.41.8.2.
+  Scan this package against the installed server.dll before use.
 - Strong correlation: All failing cosmetic surfaces (knife ChangeSubclass, glove
   bodygroup, legacy-model gun bodygroup) rely on AcceptInput.
 - Not yet proven: The exact internal entity replication mechanism of the CopyExistingEntity
@@ -286,7 +287,7 @@ Manual Test Procedure:
 2. Run VERIFY-DIAGNOSTIC.ps1 and confirm:
    - Exact runtime tree verified (matches manifest with 0 stale residues)
    - MM 1469 active
-   - CSS 375 active
+   - CSS $($cssRelease.TrimStart('v')) active
    - BotHider OFF
    - BotHiderImpl OFF
    - PlayerCosmetics ON (verified against current build hash)
@@ -343,7 +344,7 @@ if (Test-Path -LiteralPath $knifeDllDisabledC) {
 $markerC = [ordered]@{
     mode = "C"
     metamod = "2.0.0-git1469"
-    counterstrikesharp = "1.0.375"
+    counterstrikesharp = $cssRelease.TrimStart('v')
     bot_hider_native = $true
     bot_hider_impl = $true
     player_cosmetics = $true
@@ -358,17 +359,17 @@ Local Arena Diagnostic Package C: Full Stack (Gate C)
 ===================================================================
 
 Isolation & Transaction Contract:
-- Narrow Mutation Surface: Diagnostic installer only mutates MM1469/CSS375 runtime
+- Narrow Mutation Surface: Diagnostic installer only mutates MM1469/$cssRelease runtime
   trees, official loaders, and the 3 target components. It does NOT overwrite
   other existing plugins, shared libraries, cfgs, or overrides.
 - Clean Runtime Purge: Target runtime trees are purged prior to installation
   to eliminate any stale CSS371 or Metamod residue.
 - Pre-Diagnostic Snapshot: Preserved from Package A/B (original pre-test state is retained).
 - Metamod:Source: 2.0.0-git1469 (ACTIVE)
-- CounterStrikeSharp: v1.0.375 (ACTIVE)
+- CounterStrikeSharp: $cssRelease (ACTIVE)
 - BotHider native: ON (ACTIVE, official v0.5.0 build)
-- BotHiderImpl: ON (ACTIVE, reconciled managed layer on CSS 375)
-- PlayerCosmetics: ON (ACTIVE, built on CSS 375)
+- BotHiderImpl: ON (ACTIVE, reconciled managed layer on $cssRelease)
+- PlayerCosmetics: ON (ACTIVE, built on $cssRelease)
 - BotAI / BotRandomizer / NadeSystem / MatchCoordinator / RayTrace: ON (ACTIVE)
 
 Purpose & Precondition:
@@ -386,7 +387,7 @@ Manual Test Procedure:
 2. Run VERIFY-DIAGNOSTIC.ps1 and confirm:
    - Exact runtime tree verified (matches manifest with 0 stale residues)
    - MM 1469 active
-   - CSS 375 active
+   - CSS $($cssRelease.TrimStart('v')) active
    - BotHider native active
    - BotHiderImpl active
    - PlayerCosmetics active (verified against current build hash)

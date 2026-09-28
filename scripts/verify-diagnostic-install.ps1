@@ -28,17 +28,14 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
     $manifestPath = Join-Path $PSScriptRoot "scripts\dependencies.json"
 }
 if (-not (Test-Path -LiteralPath $manifestPath)) {
-    $expectedMetamodLoader = "c57f348a49561e614768f20af8545998cab5ab7f8e4f913906c8889d34e40cfc"
-    $expectedCssCore = "69334463860eed462993502b667ac4bec626ef0dc38c3977c792415c37bee1dd"
-    $expectedCssGamedata = "7d9bff7aaff8e9edb1ada4ca508fa4e2ad7b12e16ed00ee1b84dd0cb9a3e4ac5"
-    $expectedCssDotnetHost = "37c8f27cf35c5c59d942f7513496c3be68ba3018ed1b2220a31f5e5035df07ba"
-} else {
-    $depManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    $expectedMetamodLoader = $depManifest.metamod.windowsLoaderSha256.ToLowerInvariant()
-    $expectedCssCore = $depManifest.counterStrikeSharp.windowsCoreSha256.ToLowerInvariant()
-    $expectedCssGamedata = $depManifest.counterStrikeSharp.windowsGamedataSha256.ToLowerInvariant()
-    $expectedCssDotnetHost = $depManifest.counterStrikeSharp.windowsDotnetHostSha256.ToLowerInvariant()
+    throw "Diagnostic dependencies.json is missing. Cannot verify runtime pins."
 }
+$depManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$cssRelease = $depManifest.counterStrikeSharp.release
+$expectedMetamodLoader = $depManifest.metamod.windowsLoaderSha256.ToLowerInvariant()
+$expectedCssCore = $depManifest.counterStrikeSharp.windowsCoreSha256.ToLowerInvariant()
+$expectedCssGamedata = $depManifest.counterStrikeSharp.windowsGamedataSha256.ToLowerInvariant()
+$expectedCssDotnetHost = $depManifest.counterStrikeSharp.windowsDotnetHostSha256.ToLowerInvariant()
 
 $expectedKnifeCustomizerHash = $null
 $manifestCandidates = @(
@@ -177,7 +174,7 @@ if (-not $runtimeManifestPath) {
         }
 
         if ($missingFiles.Count -eq 0 -and $unexpectedFiles.Count -eq 0 -and $corruptFiles.Count -eq 0) {
-            Record-Check "Exact Runtime Tree" "PASS" "All $($expectedMap.Count) runtime files matched exact MM1469+CSS375 manifest with 0 stale residues" $true
+            Record-Check "Exact Runtime Tree" "PASS" "All $($expectedMap.Count) runtime files matched exact MM1469+$cssRelease manifest with 0 stale residues" $true
         } else {
             $errDetail = "Missing: $($missingFiles.Count), Unexpected: $($unexpectedFiles.Count), Corrupted: $($corruptFiles.Count)"
             if ($unexpectedFiles.Count -gt 0) {
@@ -231,36 +228,36 @@ $cssCore = Join-Path $csgo "addons\counterstrikesharp\bin\win64\counterstrikesha
 if (Test-Path -LiteralPath $cssCore) {
     $actualHash = (Get-FileHash -LiteralPath $cssCore -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -eq $expectedCssCore) {
-        Record-Check "CSS 375 Core" "PASS" "counterstrikesharp.dll matches pinned hash" $true
+        Record-Check "$cssRelease Core" "PASS" "counterstrikesharp.dll matches pinned hash" $true
     } else {
-        Record-Check "CSS 375 Core" "FAIL" "counterstrikesharp.dll hash mismatch: $actualHash" $false
+        Record-Check "$cssRelease Core" "FAIL" "counterstrikesharp.dll hash mismatch: $actualHash" $false
     }
 } else {
-    Record-Check "CSS 375 Core" "FAIL" "counterstrikesharp.dll missing" $false
+    Record-Check "$cssRelease Core" "FAIL" "counterstrikesharp.dll missing" $false
 }
 
 $cssGamedata = Join-Path $csgo "addons\counterstrikesharp\gamedata\gamedata.json"
 if (Test-Path -LiteralPath $cssGamedata) {
     $actualHash = (Get-FileHash -LiteralPath $cssGamedata -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -eq $expectedCssGamedata) {
-        Record-Check "CSS 375 Gamedata" "PASS" "gamedata.json matches CSS 375 signature release" $true
+        Record-Check "$cssRelease Gamedata" "PASS" "gamedata.json matches pinned release" $true
     } else {
-        Record-Check "CSS 375 Gamedata" "FAIL" "gamedata.json hash mismatch (possible stale 371): $actualHash" $false
+        Record-Check "$cssRelease Gamedata" "FAIL" "gamedata.json hash mismatch: $actualHash" $false
     }
 } else {
-    Record-Check "CSS 375 Gamedata" "FAIL" "gamedata.json missing" $false
+    Record-Check "$cssRelease Gamedata" "FAIL" "gamedata.json missing" $false
 }
 
 $cssDotnet = Join-Path $csgo "addons\counterstrikesharp\dotnet\dotnet.exe"
 if (Test-Path -LiteralPath $cssDotnet) {
     $actualHash = (Get-FileHash -LiteralPath $cssDotnet -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -eq $expectedCssDotnetHost) {
-        Record-Check "CSS 375 .NET Host" "PASS" "dotnet.exe matches pinned release" $true
+        Record-Check "$cssRelease .NET Host" "PASS" "dotnet.exe matches pinned release" $true
     } else {
-        Record-Check "CSS 375 .NET Host" "FAIL" "dotnet.exe hash mismatch: $actualHash" $false
+        Record-Check "$cssRelease .NET Host" "FAIL" "dotnet.exe hash mismatch: $actualHash" $false
     }
 } else {
-    Record-Check "CSS 375 .NET Host" "FAIL" "dotnet.exe missing" $false
+    Record-Check "$cssRelease .NET Host" "FAIL" "dotnet.exe missing" $false
 }
 
 # 4. BotHider native isolation / activation

@@ -46,6 +46,7 @@ if (-not $PackageSource) {
     }
 }
 Write-Host "Package source: $PackageSource"
+$cssRelease = (Get-Content -LiteralPath (Join-Path $PackageSource "scripts\dependencies.json") -Raw | ConvertFrom-Json).counterStrikeSharp.release
 
 # Step 1: Ensure pre-diagnostic snapshot exists before any changes
 $snapshot = Ensure-DiagnosticSnapshot $csgo
@@ -53,7 +54,7 @@ $snapshot = Ensure-DiagnosticSnapshot $csgo
 # Step 2: Perform narrow clean diagnostic install with rollback guard
 try {
     # 2.1 Clean purge of target runtime trees
-    Write-Host "Purging target runtime trees for clean MM1469 + CSS375 convergence..."
+    Write-Host "Purging target runtime trees for clean MM1469 + $cssRelease convergence..."
     foreach ($tree in $Global:DiagnosticRuntimeTrees) {
         $treePath = Join-Path $csgo ($tree.Replace("/", "\"))
         if (Test-Path -LiteralPath $treePath) {
@@ -62,7 +63,7 @@ try {
     }
 
     # 2.2 Copy clean runtime trees from package source
-    Write-Host "Installing clean MM1469 + CSS375 runtime trees..."
+    Write-Host "Installing clean MM1469 + $cssRelease runtime trees..."
     $runtimeFilesCopied = 0
     foreach ($tree in $Global:DiagnosticRuntimeTrees) {
         $srcTree = Join-Path $PackageSource ($tree.Replace("/", "\"))
@@ -192,7 +193,7 @@ try {
     $diagnosticState = [ordered]@{
         mode = $Mode
         metamod = "2.0.0-git1469"
-        counterstrikesharp = "1.0.375"
+        counterstrikesharp = $cssRelease.TrimStart('v')
         bot_hider_native = $false
         bot_hider_impl = $false
         player_cosmetics = ($Mode -eq "B")
