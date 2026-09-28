@@ -322,50 +322,76 @@ if ($playerCosmetics -notmatch 'IsBot: false, IsHLTV: false' -or
 $giveHookStart = $playerCosmetics.IndexOf("private HookResult OnGiveNamedItemPost", [StringComparison]::Ordinal)
 $nextMethodStart = $playerCosmetics.IndexOf("private static CCSPlayerController? GetPlayerFromItemServices", [StringComparison]::Ordinal)
 if ($giveHookStart -lt 0 -or $nextMethodStart -le $giveHookStart) {
-    Add-Failure "PlayerCosmetics purchased-weapon lifecycle guard is missing."
+    Add-Failure "PlayerCosmetics GiveNamedItem hook is missing."
 }
 else {
     $giveHook = $playerCosmetics.Substring($giveHookStart, $nextMethodStart - $giveHookStart)
-    if ($giveHook -notmatch "GiveNamedItemPhaseResolver\.Resolve" -or
-        $giveHook -notmatch "_applyTracker\.Begin\(playerHandle, phases\)" -or
-        $giveHook -notmatch "ScheduleApplyCallbacks\(playerHandle, generation\)" -or
-        $giveHook -match "ApplyPreset\(" -or
+    if (-not $giveHook.Contains("GiveNamedItemPhaseResolver.Resolve") -or
+        -not $giveHook.Contains("ScheduleGivenGunReapply(") -or
+        -not $giveHook.Contains("ScheduleApplyPipeline(") -or
+        $giveHook.Contains("ApplyGunPresetToExistingEntity(") -or
         $giveHook -match "_setAttrByName.*Invoke") {
-        Add-Failure "PlayerCosmetics GiveNamedItem hook must defer native writes into the bounded generation pipeline."
+        Add-Failure "PlayerCosmetics GiveNamedItem hook must schedule bounded reapply without native writes."
     }
 }
-if ($playerCosmetics -notmatch "Server\.NextFrame\(\(\) => RunApplyPipeline\(playerHandle, generation, false\)\)" -or
-    $playerCosmetics -notmatch "RetryDelays = \[0\.10f, 0\.25f, 0\.50f, 0\.90f\]" -or
-    $playerCosmetics -notmatch "finalAttempt = index == ApplyPipelineContext\.RetryDelays\.Length - 1" -or
-    $playerCosmetics -notmatch "player\.PawnIsAlive" -or
-    $playerCosmetics -notmatch "TryBindContext\(playerHandle, generation, readyPawn\.Handle, \(int\)readyTeam\)") {
-    Add-Failure "PlayerCosmetics generation pipeline no longer has bounded retries and Pawn/team context validation."
+if (-not $playerCosmetics.Contains("RunApplyPipeline(playerHandle, generation, false, false)") -or
+    -not $playerCosmetics.Contains("RetryDelays = [0.10f, 0.25f, 0.50f, 0.90f]") -or
+    -not $playerCosmetics.Contains("TryBindContext(playerHandle, generation, readyPawn.Handle, (int)readyTeam)") -or
+    -not $playerCosmetics.Contains("GivenGunReapplyDelays = [0.10f, 0.25f]") -or
+    -not $playerCosmetics.Contains("ResolveWeapon(weaponRaw)") -or
+    -not $playerCosmetics.Contains("context.Matches(")) {
+    Add-Failure "PlayerCosmetics spawn and Give reapply must stay bounded and validate current Pawn, team and serial handle."
 }
 if ($playerCosmetics -notmatch "private static bool HasReadyAttributeLists\(CEconItemView item\)" -or
     ([regex]::Matches($playerCosmetics, "HasReadyAttributeLists\(item\)").Count -lt 3)) {
     Add-Failure "PlayerCosmetics native attribute handles are not validated at every write entry point."
 }
-if ($playerCosmetics -notmatch '"sticker slot \{sticker\.Slot\}"' -or
-    $playerCosmetics -notmatch "BitConverter\.Int32BitsToSingle" -or
-    $playerCosmetics -notmatch "TryMarkReequip\(player\.Handle, generation\)" -or
-    ([regex]::Matches($playerCosmetics, 'ExecuteClientCommand\("lastinv"\)').Count -ne 2)) {
-    Add-Failure "PlayerCosmetics sticker attributes or single-generation re-equip fallback are incomplete."
+if (-not $playerCosmetics.Contains('"sticker slot {sticker.Slot}"') -or
+    -not $playerCosmetics.Contains("BitConverter.Int32BitsToSingle") -or
+    $playerCosmetics.Contains('ExecuteClientCommand("lastinv")')) {
+    Add-Failure "PlayerCosmetics sticker attributes or the no-forced-gun-switch contract are missing."
 }
-if ($playerCosmetics -match "TryApplyDroppedKnife" -or
-    $playerCosmetics -match "Server\.NextWorldUpdate" -or
-    $playerCosmetics -match 'new CBasePlayerWeapon\(request\.(CurrentHandle|ReplacementHandle)\)') {
-    Add-Failure "PlayerCosmetics must not retain raw entity pointers across world updates for dropped knives."
+if ($playerCosmetics.Contains("TryApplyDroppedKnife") -or
+    $playerCosmetics.Contains("Server.NextWorldUpdate") -or
+    $playerCosmetics.Contains("RemovePlayerItem(") -or
+    $playerCosmetics.Contains('AddEntityIOEvent("Kill"') -or
+    $playerCosmetics.Contains("GiveNamedItem(") -or
+    $playerCosmetics.Contains("ProvideBaseKnifeFallback") -or
+    $playerCosmetics.Contains("ExecuteSpawnGunDestructiveRefresh") -or
+    $playerCosmetics.Contains("SpawnGunLifecycleTracker")) {
+    Add-Failure "Human cosmetics must not retain destructive gun or knife entity lifecycle paths."
 }
-$knifeRefreshGate = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/KnifeRefreshGate.cs") -Raw
-if ($playerCosmetics -notmatch 'new CHandle<CBasePlayerWeapon>\(entity.EntityHandle.Raw\)' -or
-    $playerCosmetics -notmatch 'TryStartKnifeOperation\(playerHandle, generation\)' -or
-    $playerCosmetics -notmatch 'ApplyExistingKnife\(' -or
-    $playerCosmetics -notmatch 'TryStartGloveOperation\(playerHandle, generation\)' -or
-    $knifeRefreshGate -notmatch 'previous.Busy \|\| now < previous.NextAllowed' -or
-    $playerCosmetics -match 'RemovePlayerItem\(' -or
-    $playerCosmetics -match 'GiveNamedItem<' -or
-    $playerCosmetics -match 'weapon\.Remove\(\)') {
-    Add-Failure "Human knife apply must mutate the owned entity once per generation without detach/give/remove."
+$knifeDebounce = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/KnifeShortcutDebounce.cs") -Raw
+$knifeTargetPlanner = Get-Content -LiteralPath (Join-Path $repo "addons/counterstrikesharp/plugins/PlayerKnifeCustomizer/KnifeTargetPlanner.cs") -Raw
+if (-not $playerCosmetics.Contains("new CHandle<CBasePlayerWeapon>(entity.EntityHandle.Raw)") -or
+    -not $playerCosmetics.Contains("ApplyKnifeTargetToExistingEntity(") -or
+    -not $playerCosmetics.Contains('knife.AcceptInput("ChangeSubclass"') -or
+    -not $playerCosmetics.Contains("item = knife.AttributeManager?.Item;") -or
+    -not $playerCosmetics.Contains("mode == KnifeApplyMode.Shortcut || (holdingKnife && familyChanged)") -or
+    -not $playerCosmetics.Contains("TryStartGloveOperation(playerHandle, generation)") -or
+    -not $knifeDebounce.Contains("now.AddMilliseconds(250)") -or
+    -not $knifeTargetPlanner.Contains("PlanDefault(")) {
+    Add-Failure "Human knife must use one existing-entity target path and only a short shortcut debounce."
+}
+$gunWriterStart = $playerCosmetics.IndexOf("private bool ApplyGunPresetToExistingEntity(", [StringComparison]::Ordinal)
+$gunWriterEnd = $playerCosmetics.IndexOf("private bool ApplyKnifePreset(", [StringComparison]::Ordinal)
+if ($gunWriterStart -lt 0 -or $gunWriterEnd -le $gunWriterStart) {
+    Add-Failure "Human gun existing-entity writer is missing."
+}
+else {
+    $gunWriter = $playerCosmetics.Substring($gunWriterStart, $gunWriterEnd - $gunWriterStart)
+    if (-not $gunWriter.Contains("item.ItemDefinitionIndex != actualDefIndex") -or
+        $gunWriter.Contains("ItemDefinitionIndex =")) {
+        Add-Failure "Human gun writer must preserve the current gun identity."
+    }
+}
+if (-not $playerCosmetics.Contains("MarkFallbackChanged(weapon)") -or
+    -not $playerCosmetics.Contains("m_nFallbackPaintKit") -or
+    -not $playerCosmetics.Contains("m_nFallbackSeed") -or
+    -not $playerCosmetics.Contains("m_flFallbackWear") -or
+    -not $playerCosmetics.Contains("m_nFallbackStatTrak") -or
+    -not $playerCosmetics.Contains('"CBaseModelEntity", "m_CBodyComponent"')) {
+    Add-Failure "Human cosmetics fallback and bodygroup network fields must be marked dirty."
 }
 
 $jsonFiles = @(

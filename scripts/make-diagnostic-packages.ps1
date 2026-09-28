@@ -1,10 +1,15 @@
 param(
-    [string]$OutputDirectory = "artifacts\diagnostic"
+    [string]$OutputDirectory = "artifacts\diagnostic",
+    [string]$ReleaseVersion = "1.4.3.3"
 )
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
-$stageBase = Join-Path $repo ".cache\package\stage-build\LocalArena-v1.4.3.3-windows"
+$displayVersion = $ReleaseVersion.Trim().TrimStart('v', 'V')
+if ($displayVersion -notmatch '^\d+\.\d+\.\d+\.\d+(?:-Preview\.\d+)?$') {
+    throw "ReleaseVersion must use four numeric parts with an optional -Preview.N suffix."
+}
+$stageBase = Join-Path $repo ".cache\package\stage-build\LocalArena-v${displayVersion}-windows"
 $cssRelease = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "dependencies.json") -Raw | ConvertFrom-Json).counterStrikeSharp.release
 
 if (-not (Test-Path -LiteralPath $stageBase)) {
@@ -18,7 +23,7 @@ $output = Join-Path $repo $OutputDirectory
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 
 function Update-PayloadManifest {
-    param([string]$PayloadRoot, [string]$PackageVersion = "1.4.3.3-diag")
+    param([string]$PayloadRoot, [string]$PackageVersion)
     $manifestEntries = foreach ($topLevel in @("addons", "cfg", "overrides")) {
         $root = Join-Path $PayloadRoot $topLevel
         if (-not (Test-Path -LiteralPath $root)) { continue }
@@ -200,7 +205,7 @@ Decision Gate:
   pwsh .\RESTORE-NORMAL.ps1 -Cs2Root "<path-to-game/csgo>"
 "@ | Set-Content -LiteralPath (Join-Path $stageA "DIAGNOSTIC-MODE-A.txt") -Encoding utf8
 
-Update-PayloadManifest $stageA "1.4.3.3-diagA"
+Update-PayloadManifest $stageA "${displayVersion}-diagA"
 $zipA = Join-Path $output "LocalArena-diagA-runtime-only.zip"
 if (Test-Path -LiteralPath $zipA) { Remove-Item -LiteralPath $zipA -Force }
 Compress-Archive -Path (Join-Path $stageA "*") -DestinationPath $zipA -CompressionLevel Optimal
@@ -309,7 +314,7 @@ To restore exact pre-diagnostic environment when testing is complete:
   pwsh .\RESTORE-NORMAL.ps1 -Cs2Root "<path-to-game/csgo>"
 "@ | Set-Content -LiteralPath (Join-Path $stageB "DIAGNOSTIC-MODE-B.txt") -Encoding utf8
 
-Update-PayloadManifest $stageB "1.4.3.3-diagB"
+Update-PayloadManifest $stageB "${displayVersion}-diagB"
 $zipB = Join-Path $output "LocalArena-diagB-cosmetics-only.zip"
 if (Test-Path -LiteralPath $zipB) { Remove-Item -LiteralPath $zipB -Force }
 Compress-Archive -Path (Join-Path $stageB "*") -DestinationPath $zipB -CompressionLevel Optimal
@@ -402,7 +407,7 @@ To restore exact pre-diagnostic environment when testing is complete:
   pwsh .\RESTORE-NORMAL.ps1 -Cs2Root "<path-to-game/csgo>"
 "@ | Set-Content -LiteralPath (Join-Path $stageC "DIAGNOSTIC-MODE-C.txt") -Encoding utf8
 
-Update-PayloadManifest $stageC "1.4.3.3-diagC"
+Update-PayloadManifest $stageC "${displayVersion}-diagC"
 $zipC = Join-Path $output "LocalArena-diagC-full-stack.zip"
 if (Test-Path -LiteralPath $zipC) { Remove-Item -LiteralPath $zipC -Force }
 Compress-Archive -Path (Join-Path $stageC "*") -DestinationPath $zipC -CompressionLevel Optimal
