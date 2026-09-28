@@ -175,6 +175,15 @@ public static class AgentModelPolicy
         validModels.TryGetValue(team, out var teamModels) && teamModels.Contains(model);
 }
 
+public static class HumanItemIdPolicy
+{
+    public const ulong FirstLocalItemId = 0xC5200000;
+    public static bool IsAllocated(ulong itemId, ulong nextItemId) =>
+        itemId >= FirstLocalItemId && itemId < nextItemId;
+    public static bool ShouldAllocate(ulong itemId, ulong nextItemId, bool sameOwner) =>
+        !sameOwner || !IsAllocated(itemId, nextItemId);
+}
+
 public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 {
     private static readonly bool DecorationReleaseEnabled = true;
@@ -203,7 +212,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private MemoryFunctionWithReturn<nint, string, float, int>? _setAttrByName;
     private MemoryFunctionVoid<nint>? _setWearables;
     private MemoryFunctionVoid<nint, string>? _setModel;
-    private ulong _nextItemId = 0xC5200000;
+    private ulong _nextItemId = HumanItemIdPolicy.FirstLocalItemId;
     private readonly ApplyErrorThrottle _applyErrorThrottle = new(TimeSpan.FromSeconds(30));
     private int _loadedConfigSchema = KnifeConfig.CurrentSchemaVersion;
     private int _loadedGunConfigSchema = KnifeConfig.CurrentSchemaVersion;
@@ -212,9 +221,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private readonly KnifeRefreshGate _knifeRefresh = new();
     private readonly Dictionary<nint, long> _gloveRevisions = new();
     private readonly HashSet<nint> _knifeGiveGuards = new();
-    private readonly HashSet<nint> _gunGiveGuards = new();
-    private readonly SpawnGunLifecycleTracker _spawnGunTracker = new();
-    private static readonly float[] GunSettlementDelays = [0.10f, 0.25f, 0.50f];
+    private static readonly float[] GivenGunReapplyDelays = [0.10f, 0.25f];
     private long _configRevision;
     private bool _bodygroupAvailable = true;
     private static readonly float[] KnifeOwnershipRetryDelays = [0.05f, 0.12f, 0.25f];
@@ -272,9 +279,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         _applyTracker.CancelAll();
         _knifeRefresh.CancelAll();
         _gloveRevisions.Clear();
-        _spawnGunTracker.InvalidateAll();
         _knifeGiveGuards.Clear();
-        _gunGiveGuards.Clear();
         VirtualFunctions.GiveNamedItemFunc.Unhook(OnGiveNamedItemPost, HookMode.Post);
     }
 
@@ -283,9 +288,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         _applyTracker.CancelAll();
         _knifeRefresh.CancelAll();
         _gloveRevisions.Clear();
-        _spawnGunTracker.InvalidateAll();
         _knifeGiveGuards.Clear();
-        _gunGiveGuards.Clear();
         if (!_config.Enabled || !_config.AgentsEnabled) return;
         int failures = 0;
         string lastError = string.Empty;
@@ -303,9 +306,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         _applyTracker.CancelAll();
         _knifeRefresh.CancelAll();
         _gloveRevisions.Clear();
-        _spawnGunTracker.InvalidateAll();
         _knifeGiveGuards.Clear();
-        _gunGiveGuards.Clear();
     }
 
     private HookResult OnGiveNamedItemPost(DynamicHook hook)
@@ -317,7 +318,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             var player = GetPlayerFromItemServices(itemServices);
             if (!CanApplyToPlayer(player)) return HookResult.Continue;
             nint playerHandle = player!.Handle;
-            if (_knifeGiveGuards.Contains(playerHandle) || _gunGiveGuards.Contains(playerHandle))
+            if (_knifeGiveGuards.Contains(playerHandle))
                 return HookResult.Continue;
 
             nint returnedHandle = hook.GetReturn<nint>();
@@ -327,9 +328,19 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             ushort returnedDefIndex = returnedWeapon?.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
             CosmeticApplyPhase phases = GiveNamedItemPhaseResolver.Resolve(
                 returnedWeapon?.DesignerName, returnedDefIndex);
-            long generation = _applyTracker.Begin(playerHandle, phases);
-            // The returned econ item is not safe for native attribute writes while this hook is active.
-            ScheduleApplyCallbacks(playerHandle, generation);
+            var pawn = itemServices.Pawn.Value;
+            var team = GetCosmeticTeam(player);
+            if (phases == CosmeticApplyPhase.Guns && returnedWeapon is { IsValid: true } &&
+                pawn is { IsValid: true } && team.HasValue)
+            {
+                // The returned econ item is not ready for native writes inside this hook.
+                ScheduleGivenGunReapply(playerHandle, returnedWeapon.EntityHandle.Raw,
+                    new GunReapplyContext(pawn.EntityHandle.Raw, player.SteamID, team.Value, _configRevision));
+            }
+            else
+            {
+                ScheduleApplyPipeline(playerHandle, phases);
+            }
         }
         catch (Exception ex)
         {
@@ -380,8 +391,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         var player = @event.Userid;
         if (!CanApplyToPlayer(player)) return HookResult.Continue;
-        _spawnGunTracker.OnPlayerSpawn(player!.Handle);
-        ScheduleApplyPipeline(player.Handle, CosmeticApplyPhase.All);
+        ScheduleApplyPipeline(player!.Handle, CosmeticApplyPhase.All);
         return HookResult.Continue;
     }
 
@@ -410,7 +420,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     {
         var player = @event.Userid;
         if (!_config.ApplyOnPickup || !CanApplyToPlayer(player) ||
-            _knifeGiveGuards.Contains(player!.Handle) || _gunGiveGuards.Contains(player.Handle))
+            _knifeGiveGuards.Contains(player!.Handle))
             return HookResult.Continue;
 
         ScheduleApplyPipeline(player.Handle, CosmeticApplyPhase.Guns);
@@ -427,8 +437,6 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             _knifeRefresh.Cancel(victim.Handle);
             _gloveRevisions.Remove(victim.Handle);
             _knifeGiveGuards.Remove(victim.Handle);
-            _gunGiveGuards.Remove(victim.Handle);
-            _spawnGunTracker.Invalidate(victim.Handle);
         }
         if (!CanApplyToPlayer(attacker) || victim == null || !victim.IsValid || attacker == victim)
             return HookResult.Continue;
@@ -458,8 +466,6 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             _knifeRefresh.Cancel(player.Handle);
             _gloveRevisions.Remove(player.Handle);
             _knifeGiveGuards.Remove(player.Handle);
-            _gunGiveGuards.Remove(player.Handle);
-            _spawnGunTracker.Invalidate(player.Handle);
         }
         if (CanApplyToPlayer(player))
             ScheduleApplyPipeline(player!.Handle, CosmeticApplyPhase.All);
@@ -475,8 +481,6 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             _knifeRefresh.Cancel(player.Handle);
             _gloveRevisions.Remove(player.Handle);
             _knifeGiveGuards.Remove(player.Handle);
-            _gunGiveGuards.Remove(player.Handle);
-            _spawnGunTracker.Invalidate(player.Handle);
         }
         return HookResult.Continue;
     }
@@ -486,9 +490,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         _applyTracker.CancelAll();
         _knifeRefresh.CancelAll();
         _gloveRevisions.Clear();
-        _spawnGunTracker.InvalidateAll();
         _knifeGiveGuards.Clear();
-        _gunGiveGuards.Clear();
         return HookResult.Continue;
     }
 
@@ -501,17 +503,49 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private void ScheduleApplyCallbacks(nint playerHandle, long generation)
     {
-        Server.NextFrame(() => RunApplyPipeline(playerHandle, generation, false));
+        Server.NextFrame(() => RunApplyPipeline(playerHandle, generation, false, false));
         for (int index = 0; index < ApplyPipelineContext.RetryDelays.Length; index++)
         {
             bool finalAttempt = index == ApplyPipelineContext.RetryDelays.Length - 1;
+            bool gunFinalAttempt = index >= 1;
             AddTimer(ApplyPipelineContext.RetryDelays[index],
-                () => RunApplyPipeline(playerHandle, generation, finalAttempt),
+                () => RunApplyPipeline(playerHandle, generation, finalAttempt, gunFinalAttempt),
                 TimerFlags.STOP_ON_MAPCHANGE);
         }
     }
 
-    private void RunApplyPipeline(nint playerHandle, long generation, bool finalAttempt)
+    private void ScheduleGivenGunReapply(nint playerHandle, uint weaponRaw, GunReapplyContext context)
+    {
+        Server.NextFrame(() => ReapplyGivenGun(playerHandle, weaponRaw, context));
+        foreach (float delay in GivenGunReapplyDelays)
+            AddTimer(delay, () => ReapplyGivenGun(playerHandle, weaponRaw, context), TimerFlags.STOP_ON_MAPCHANGE);
+    }
+
+    private void ReapplyGivenGun(nint playerHandle, uint weaponRaw, GunReapplyContext context)
+    {
+        try
+        {
+            var player = ResolvePlayer(playerHandle);
+            var pawn = player?.PlayerPawn.Value;
+            if (!CanApplyToPlayer(player) || !player!.PawnIsAlive ||
+                pawn is not { IsValid: true } ||
+                !context.Matches(player.SteamID, pawn.EntityHandle.Raw, GetCosmeticTeam(player), _configRevision))
+                return;
+
+            // The raw CHandle includes the entity serial; a recycled slot cannot receive this preset.
+            var weapon = ResolveWeapon(weaponRaw);
+            if (weapon == null || !OwnedBy(weapon, pawn) || !IsInInventory(pawn, weapon) ||
+                IsKnifeEntity(weapon)) return;
+            var item = weapon.AttributeManager?.Item;
+            if (item == null || !HasReadyAttributeLists(item)) return;
+            ushort actualDefIndex = item.ItemDefinitionIndex;
+            if (TryGetPreset(actualDefIndex, context.Team, out var preset))
+                ApplyGunPresetToExistingEntity(weapon, actualDefIndex, preset, player.SteamID);
+        }
+        catch (Exception ex) { LogApplyError("given gun reapply", ex); }
+    }
+
+    private void RunApplyPipeline(nint playerHandle, long generation, bool finalAttempt, bool gunFinalAttempt)
     {
         if (!_applyTracker.IsCurrent(playerHandle, generation) ||
             !_applyTracker.HasPending(playerHandle, generation))
@@ -539,35 +573,21 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         if (!_applyTracker.TryBindContext(playerHandle, generation, readyPawn.Handle, (int)readyTeam))
             return;
 
-        long spawnRevision = _spawnGunTracker.GetSpawnRevision(playerHandle);
-        bool hasGunPresets = _config.Loadouts.For(readyTeam).GunPresets.Values.Any(p => p.Paint > 0);
-        bool gunSettling = _spawnGunTracker.TryBindAuthoritativePawn(
-            playerHandle,
-            spawnRevision,
-            readyPawn.Handle,
-            readyPawn.EntityHandle.Raw,
-            (int)readyTeam,
-            player.SteamID,
-            _configRevision,
-            hasGunPresets);
-
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Agent,
             () => TryApplyAgent(playerHandle, generation, readyPawn, readyTeam), "agent pipeline");
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Knife,
             () => TryApplyDefaultKnife(playerHandle, generation, readyPawn, readyTeam), "knife pipeline");
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Gloves,
             () => TryApplyGlove(playerHandle, generation, readyPawn, readyTeam), "glove pipeline");
-        bool gunsPending = _applyTracker.IsPending(playerHandle, generation, CosmeticApplyPhase.Guns);
-        bool activeGunChanged = false;
-        TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Guns,
-            () => TryApplyGunPresets(player, readyPawn, readyTeam, out activeGunChanged), "gun pipeline");
-        if (gunsPending && !_applyTracker.IsPending(playerHandle, generation, CosmeticApplyPhase.Guns))
+        if (_applyTracker.IsPending(playerHandle, generation, CosmeticApplyPhase.Guns))
         {
-            TryControlledReequip(player, readyPawn, readyTeam, generation, activeGunChanged);
-        }
-        if (gunSettling && _spawnGunTracker.TryScheduleSettlement(playerHandle, spawnRevision))
-        {
-            ScheduleSpawnGunSettlement(playerHandle, spawnRevision);
+            try
+            {
+                bool ready = TryApplyGunPresets(player, readyPawn, readyTeam);
+                if (ready && gunFinalAttempt)
+                    _applyTracker.Complete(playerHandle, generation, CosmeticApplyPhase.Guns);
+            }
+            catch (Exception ex) { LogApplyError("gun pipeline", ex); }
         }
         TryApplyPhase(playerHandle, generation, CosmeticApplyPhase.Music,
             () => { ApplyMusicKit(player); return true; }, "music pipeline");
@@ -808,7 +828,6 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
                     currentPawn is not { IsValid: true } || currentPawn.EntityHandle.Raw != pawnHandle)
                 {
                     _knifeRefresh.Complete(playerHandle, revision);
-                    TriggerSpawnGunSettlementIfSettling(playerHandle);
                     return;
                 }
 
@@ -822,7 +841,6 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             {
                 LogApplyError("knife kill stage", ex);
                 _knifeRefresh.Complete(playerHandle, revision);
-                TriggerSpawnGunSettlementIfSettling(playerHandle);
             }
         }, TimerFlags.STOP_ON_MAPCHANGE);
         AddTimer(0.23f, () =>
@@ -836,7 +854,6 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
                 currentPawn is not { IsValid: true } || currentPawn.EntityHandle.Raw != pawnHandle)
             {
                 _knifeRefresh.Complete(playerHandle, revision);
-                TriggerSpawnGunSettlementIfSettling(playerHandle);
                 return;
             }
 
@@ -994,7 +1011,6 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             if (!willRetry)
             {
                 _knifeRefresh.Complete(playerHandle, revision);
-                TriggerSpawnGunSettlementIfSettling(playerHandle);
             }
         }
     }
@@ -1023,289 +1039,6 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             catch { /* An unknown item is not a safe switch target. */ }
         }
         return null;
-    }
-
-    private readonly record struct SpawnGunRefreshEntry(
-        uint OldRawHandle,
-        ushort DefIndex,
-        string ClassName,
-        KnifePreset Preset,
-        int Clip,
-        int Reserve,
-        bool WasActive,
-        string? SlotCommand
-    );
-
-    private void ScheduleSpawnGunSettlement(nint playerHandle, long spawnRevision)
-    {
-        Server.NextFrame(() => AttemptSpawnGunSettlement(playerHandle, spawnRevision, isFinal: false));
-        for (int i = 0; i < GunSettlementDelays.Length; i++)
-        {
-            bool isFinal = i == GunSettlementDelays.Length - 1;
-            AddTimer(GunSettlementDelays[i],
-                () => AttemptSpawnGunSettlement(playerHandle, spawnRevision, isFinal),
-                TimerFlags.STOP_ON_MAPCHANGE);
-        }
-    }
-
-    private void TriggerSpawnGunSettlementIfSettling(nint playerHandle)
-    {
-        long revision = _spawnGunTracker.GetSpawnRevision(playerHandle);
-        if (revision > 0 && _spawnGunTracker.GetState(playerHandle) == SpawnGunRefreshState.Settling)
-        {
-            AttemptSpawnGunSettlement(playerHandle, revision, isFinal: false);
-        }
-    }
-
-    private void AttemptSpawnGunSettlement(nint playerHandle, long spawnRevision, bool isFinal)
-    {
-        var player = ResolvePlayer(playerHandle);
-        if (!CanApplyToPlayer(player) || !player!.PawnIsAlive)
-            return;
-        var pawn = player.PlayerPawn.Value;
-        if (pawn is not { IsValid: true })
-            return;
-
-        var team = GetCosmeticTeam(player);
-        if (team == null) return;
-
-        uint pawnHandle = pawn.EntityHandle.Raw;
-        ulong steamId = player.SteamID;
-        long configRevision = _configRevision;
-
-        if (!_spawnGunTracker.CanAttemptSettlement(
-                playerHandle, spawnRevision, pawnHandle, (int)team.Value, steamId, configRevision))
-        {
-            return;
-        }
-
-        bool isKnifeBusy = _knifeRefresh.IsBusy(playerHandle);
-        if (isKnifeBusy)
-        {
-            if (isFinal)
-            {
-                AddTimer(0.15f, () => AttemptSpawnGunSettlement(playerHandle, spawnRevision, isFinal: true), TimerFlags.STOP_ON_MAPCHANGE);
-            }
-            return;
-        }
-
-        var weapons = pawn.WeaponServices?.MyWeapons;
-        var entries = new List<SpawnGunRefreshEntry>();
-        if (weapons != null)
-        {
-            foreach (var handle in weapons)
-            {
-                var weapon = handle.Value;
-                if (weapon == null || !weapon.IsValid || IsKnifeName(weapon.DesignerName)) continue;
-                var item = weapon.AttributeManager?.Item;
-                if (item == null) continue;
-                ushort defIndex = item.ItemDefinitionIndex;
-                if (!TryGetPreset(defIndex, team.Value, out var preset) || preset.Paint <= 0) continue;
-
-                string className = weapon.DesignerName;
-                int clip = weapon.Clip1;
-                int reserve = weapon.ReserveAmmo.Length > 0 ? weapon.ReserveAmmo[0] : 0;
-                bool wasActive = pawn.WeaponServices?.ActiveWeapon.Raw == weapon.EntityHandle.Raw;
-                string? slotCommand = GetSlotCommand(weapon);
-                entries.Add(new SpawnGunRefreshEntry(weapon.EntityHandle.Raw, defIndex, className, preset.Clone(), clip, reserve, wasActive, slotCommand));
-            }
-        }
-
-        var action = _spawnGunTracker.EvaluateSettlement(
-            playerHandle, spawnRevision, pawnHandle, (int)team.Value, steamId, configRevision,
-            isKnifeBusy: false,
-            hasMatchingConfiguredGuns: entries.Count > 0,
-            isFinalAttempt: isFinal);
-
-        if (action == SettlementAction.StartRunning)
-        {
-            ExecuteSpawnGunDestructiveRefresh(player, pawn, team.Value, spawnRevision, entries);
-        }
-    }
-
-    private void ExecuteSpawnGunDestructiveRefresh(
-        CCSPlayerController player,
-        CCSPlayerPawn pawn,
-        CosmeticTeam team,
-        long spawnRevision,
-        List<SpawnGunRefreshEntry> entries)
-    {
-        nint playerHandle = player.Handle;
-        uint pawnHandle = pawn.EntityHandle.Raw;
-        ulong steamId = player.SteamID;
-        long configRevision = _configRevision;
-
-        AddTimer(0.08f, () =>
-        {
-            try
-            {
-                var validPlayer = ResolvePlayer(playerHandle);
-                if (!CanApplyToPlayer(validPlayer) || validPlayer!.SteamID != steamId ||
-                    GetCosmeticTeam(validPlayer) != team || !validPlayer.PawnIsAlive ||
-                    _configRevision != configRevision)
-                {
-                    _spawnGunTracker.Complete(playerHandle, spawnRevision);
-                    return;
-                }
-                var currentPawn = validPlayer.PlayerPawn.Value;
-                if (currentPawn is not { IsValid: true } || currentPawn.EntityHandle.Raw != pawnHandle)
-                {
-                    _spawnGunTracker.Complete(playerHandle, spawnRevision);
-                    return;
-                }
-
-                foreach (var entry in entries)
-                {
-                    var old = ResolveWeapon(entry.OldRawHandle);
-                    if (old is { IsValid: true } && OwnedBy(old, currentPawn))
-                        old.AddEntityIOEvent("Kill", old, null, "", 0f);
-                }
-            }
-            catch (Exception ex)
-            {
-                LogApplyError("spawn gun kill stage", ex);
-                _spawnGunTracker.Complete(playerHandle, spawnRevision);
-            }
-        }, TimerFlags.STOP_ON_MAPCHANGE);
-
-        AddTimer(0.20f, () =>
-        {
-            var validPlayer = ResolvePlayer(playerHandle);
-            if (!CanApplyToPlayer(validPlayer) || validPlayer!.SteamID != steamId ||
-                GetCosmeticTeam(validPlayer) != team || !validPlayer.PawnIsAlive ||
-                _configRevision != configRevision)
-            {
-                _spawnGunTracker.Complete(playerHandle, spawnRevision);
-                return;
-            }
-            var currentPawn = validPlayer.PlayerPawn.Value;
-            if (currentPawn is not { IsValid: true } || currentPawn.EntityHandle.Raw != pawnHandle)
-            {
-                _spawnGunTracker.Complete(playerHandle, spawnRevision);
-                return;
-            }
-
-            var givenEntries = new List<(SpawnGunRefreshEntry Entry, uint NewHandle)>();
-            _gunGiveGuards.Add(playerHandle);
-            try
-            {
-                foreach (var entry in entries)
-                {
-                    uint newHandle = GiveWeaponRaw(validPlayer, entry.ClassName);
-                    if (newHandle != 0)
-                        givenEntries.Add((entry, newHandle));
-                }
-            }
-            catch (Exception ex)
-            {
-                LogApplyError("spawn gun give", ex);
-            }
-            finally
-            {
-                _gunGiveGuards.Remove(playerHandle);
-            }
-
-            Server.NextFrame(() =>
-            {
-                ApplyGivenGunsWithRetry(
-                    playerHandle, pawnHandle, team, steamId, spawnRevision, configRevision,
-                    givenEntries, retryCount: 0);
-            });
-        }, TimerFlags.STOP_ON_MAPCHANGE);
-    }
-
-    private void ApplyGivenGunsWithRetry(
-        nint playerHandle,
-        uint pawnHandle,
-        CosmeticTeam team,
-        ulong steamId,
-        long spawnRevision,
-        long configRevision,
-        List<(SpawnGunRefreshEntry Entry, uint NewHandle)> givenEntries,
-        int retryCount)
-    {
-        try
-        {
-            var nextPlayer = ResolvePlayer(playerHandle);
-            if (!CanApplyToPlayer(nextPlayer) || nextPlayer!.SteamID != steamId ||
-                !nextPlayer.PawnIsAlive || _configRevision != configRevision)
-            {
-                return;
-            }
-            var nextPawn = nextPlayer.PlayerPawn.Value;
-            if (nextPawn is not { IsValid: true } || nextPawn.EntityHandle.Raw != pawnHandle)
-            {
-                return;
-            }
-
-            bool allEconReady = true;
-            foreach (var (entry, newHandle) in givenEntries)
-            {
-                var newWeapon = ResolveWeapon(newHandle);
-                if (newWeapon == null || !OwnedBy(newWeapon, nextPawn)) continue;
-                var item = newWeapon.AttributeManager?.Item;
-                if (item == null || !HasReadyAttributeLists(item))
-                {
-                    allEconReady = false;
-                    break;
-                }
-            }
-
-            if (!allEconReady && retryCount < EconReadinessPolicy.MaxRetries)
-            {
-                AddTimer(EconReadinessPolicy.RetryDelay, () =>
-                {
-                    ApplyGivenGunsWithRetry(
-                        playerHandle, pawnHandle, team, steamId, spawnRevision, configRevision,
-                        givenEntries, retryCount + 1);
-                }, TimerFlags.STOP_ON_MAPCHANGE);
-                return;
-            }
-
-            SpawnGunRefreshEntry? activeToRestore = null;
-            foreach (var (entry, newHandle) in givenEntries)
-            {
-                var newWeapon = ResolveWeapon(newHandle);
-                if (newWeapon == null || !OwnedBy(newWeapon, nextPawn)) continue;
-
-                newWeapon.Clip1 = entry.Clip;
-                if (newWeapon.ReserveAmmo.Length > 0)
-                    newWeapon.ReserveAmmo[0] = entry.Reserve;
-
-                bool applied = ApplyGunPreset(newWeapon, entry.DefIndex, entry.Preset, nextPlayer.SteamID);
-                if (applied)
-                {
-                    ushort actualDef = newWeapon.AttributeManager?.Item?.ItemDefinitionIndex ?? entry.DefIndex;
-                    int actualPaint = newWeapon.FallbackPaintKit;
-                    Logger.LogInformation(
-                        "[PlayerCosmetics] Configured spawn gun refresh complete: defindex={DefIndex} paint={Paint} actual_def={ActualDef} actual_paint={ActualPaint} old_handle={OldHandle} new_handle={NewHandle}",
-                        entry.DefIndex, entry.Preset.Paint, actualDef, actualPaint, entry.OldRawHandle, newWeapon.Handle);
-
-                    if (entry.WasActive)
-                        activeToRestore = entry;
-                }
-                else
-                {
-                    LogApplyError("spawn gun apply",
-                        new InvalidOperationException($"Failed to apply gun preset for defindex {entry.DefIndex}"));
-                }
-            }
-
-            Utilities.SetStateChanged(nextPlayer, "CCSPlayerController", "m_pInventoryServices");
-
-            if (activeToRestore != null && activeToRestore.Value.SlotCommand != null)
-            {
-                nextPlayer.ExecuteClientCommand(activeToRestore.Value.SlotCommand);
-            }
-        }
-        catch (Exception ex)
-        {
-            LogApplyError("spawn gun apply", ex);
-        }
-        finally
-        {
-            _spawnGunTracker.Complete(playerHandle, spawnRevision);
-        }
     }
 
     private static uint GiveWeaponRaw(CCSPlayerController player, string className)
@@ -1362,55 +1095,21 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
     private static bool IsInInventory(CCSPlayerPawn pawn, CBasePlayerWeapon weapon) =>
         pawn.WeaponServices?.MyWeapons.Any(handle => handle.Raw == weapon.EntityHandle.Raw) == true;
 
-    private bool TryApplyGunPresets(CCSPlayerController player, CCSPlayerPawn pawn, CosmeticTeam team, out bool activeChanged)
+    private bool TryApplyGunPresets(CCSPlayerController player, CCSPlayerPawn pawn, CosmeticTeam team)
     {
-        activeChanged = false;
         var weapons = pawn.WeaponServices?.MyWeapons;
         if (weapons == null) return false;
         bool ready = true;
         foreach (var handle in weapons)
         {
             var weapon = handle.Value;
-            if (weapon == null || !weapon.IsValid || IsKnifeName(weapon.DesignerName)) continue;
-            ushort defIndex = weapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
-            if (defIndex == 0 || !TryGetPreset(defIndex, team, out var preset)) continue;
-            if (!ApplyGunPreset(weapon, defIndex, preset, player.SteamID)) ready = false;
-            else if (pawn.WeaponServices?.ActiveWeapon.Raw == weapon.EntityHandle.Raw)
-            {
-                activeChanged = true;
-                var item = weapon.AttributeManager?.Item;
-                if (item == null) continue;
-                Logger.LogInformation("[PlayerKnifeCustomizer] Active gun applied defindex={DefIndex} paint={Paint} legacy_model={Legacy} fallback_paint={FallbackPaint} fallback_seed={Seed} fallback_wear={Wear} quality={Quality} item_id={ItemId} account_id={AccountId}",
-                    defIndex, preset.Paint, _legacyPaints.Contains((defIndex, preset.Paint)),
-                    weapon.FallbackPaintKit, weapon.FallbackSeed, weapon.FallbackWear,
-                    item.EntityQuality, item.ItemID, item.AccountID);
-            }
+            if (weapon == null || !weapon.IsValid || !OwnedBy(weapon, pawn) || IsKnifeEntity(weapon)) continue;
+            ushort actualDefIndex = weapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
+            if (actualDefIndex == 0) { ready = false; continue; }
+            if (!TryGetPreset(actualDefIndex, team, out var preset)) continue;
+            if (!ApplyGunPresetToExistingEntity(weapon, actualDefIndex, preset, player.SteamID)) ready = false;
         }
         return ready;
-    }
-
-    private void TryControlledReequip(CCSPlayerController player, CCSPlayerPawn pawn, CosmeticTeam team, long generation, bool activeChanged)
-    {
-        if (!activeChanged) return;
-        var active = pawn.WeaponServices?.ActiveWeapon.Value;
-        if (active == null || !active.IsValid || IsKnifeName(active.DesignerName)) return;
-        ushort defIndex = active.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
-        if (!TryGetPreset(defIndex, team, out _)) return;
-        if (!_applyTracker.TryMarkReequip(player.Handle, generation)) return;
-
-        Utilities.SetStateChanged(player, "CCSPlayerController", "m_pInventoryServices");
-        player.ExecuteClientCommand("lastinv");
-        nint playerHandle = player.Handle;
-        uint pawnHandle = pawn.EntityHandle.Raw;
-        long configRevision = _configRevision;
-        Server.NextFrame(() =>
-        {
-            var current = ResolvePlayer(playerHandle);
-            if (_applyTracker.IsCurrent(playerHandle, generation) && _configRevision == configRevision &&
-                CanApplyToPlayer(current) &&
-                current!.PawnIsAlive && current.PlayerPawn.Raw == pawnHandle && GetCosmeticTeam(current) == team)
-                current.ExecuteClientCommand("lastinv");
-        });
     }
 
     private bool TryGetPreset(ushort defIndex, CosmeticTeam team, out KnifePreset preset)
@@ -1451,13 +1150,22 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         }
     }
 
-    private bool ApplyGunPreset(CBasePlayerWeapon weapon, ushort defIndex, KnifePreset preset, ulong steamId) =>
-        ApplyWeaponPreset(weapon, defIndex, preset, steamId, HumanItemKind.Gun);
+    private bool ApplyGunPresetToExistingEntity(CBasePlayerWeapon weapon, ushort actualDefIndex, KnifePreset preset, ulong steamId)
+    {
+        var item = weapon.AttributeManager?.Item;
+        if (item == null || item.ItemDefinitionIndex != actualDefIndex || IsKnifeEntity(weapon)) return false;
+        return ApplyWeaponPresetValues(weapon, actualDefIndex, preset, steamId, HumanItemKind.Gun);
+    }
 
-    private bool ApplyKnifePreset(CBasePlayerWeapon weapon, ushort defIndex, KnifePreset preset, ulong steamId) =>
-        ApplyWeaponPreset(weapon, defIndex, preset, steamId, HumanItemKind.Knife);
+    private bool ApplyKnifePreset(CBasePlayerWeapon weapon, ushort defIndex, KnifePreset preset, ulong steamId)
+    {
+        var item = weapon.AttributeManager?.Item;
+        if (item == null) return false;
+        item.ItemDefinitionIndex = defIndex;
+        return ApplyWeaponPresetValues(weapon, defIndex, preset, steamId, HumanItemKind.Knife);
+    }
 
-    private bool ApplyWeaponPreset(CBasePlayerWeapon weapon, ushort defIndex, KnifePreset preset,
+    private bool ApplyWeaponPresetValues(CBasePlayerWeapon weapon, ushort defIndex, KnifePreset preset,
         ulong steamId, HumanItemKind kind)
     {
         if (_setAttrByName == null || !weapon.IsValid || !ValidatePreset(defIndex, preset)) return false;
@@ -1467,18 +1175,19 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             var item = weapon.AttributeManager?.Item;
             if (item == null || !HasReadyAttributeLists(item)) return false;
 
-            item.ItemDefinitionIndex = defIndex;
             item.EntityQuality = HumanEconPolicy.Quality(kind, preset.StatTrakEnabled, preset.SouvenirEnabled);
             item.CustomName = preset.NameTag ?? string.Empty;
             item.AttributeList.Attributes.RemoveAll();
             item.NetworkedDynamicAttributes.Attributes.RemoveAll();
-            AssignItemId(item);
-            item.AccountID = HumanEconPolicy.AccountId(steamId);
+            uint accountId = HumanEconPolicy.AccountId(steamId);
+            EnsureItemId(item, accountId);
+            item.AccountID = accountId;
 
             weapon.FallbackPaintKit = preset.Paint;
             weapon.FallbackSeed = preset.Seed;
             weapon.FallbackWear = preset.Wear;
             weapon.FallbackStatTrak = preset.StatTrakEnabled && !preset.SouvenirEnabled ? preset.StatTrakCount : -1;
+            MarkFallbackChanged(weapon);
 
             SetTextureAttributes(item.NetworkedDynamicAttributes.Handle, preset);
             SetTextureAttributes(item.AttributeList.Handle, preset);
@@ -1493,6 +1202,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
             {
                 bool legacyModel = _legacyPaints.Contains((defIndex, preset.Paint));
                 weapon.AcceptInput("SetBodygroup", value: $"body,{(legacyModel ? 1 : 0)}");
+                Utilities.SetStateChanged(weapon, "CBaseModelEntity", "m_CBodyComponent");
             }
             return true;
         }
@@ -1800,6 +1510,14 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
 
     private static bool IsKnifeDefIndex(ushort defIndex) => defIndex is >= 500 and <= 526;
 
+    private static bool IsKnifeEntity(CBasePlayerWeapon weapon)
+    {
+        ushort defIndex = weapon.AttributeManager?.Item?.ItemDefinitionIndex ?? 0;
+        if (defIndex is 42 or 59 || IsKnifeDefIndex(defIndex)) return true;
+        try { return weapon.As<CCSWeaponBase>().VData?.GearSlot == gear_slot_t.GEAR_SLOT_KNIFE; }
+        catch { return IsKnifeName(weapon.DesignerName); }
+    }
+
     private CCSPlayerController? GetEligibleHumanOwner(CBasePlayerWeapon weapon)
     {
         try
@@ -1828,6 +1546,20 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         item.ItemID = id;
         item.ItemIDLow = (uint)(id & 0xFFFFFFFF);
         item.ItemIDHigh = (uint)(id >> 32);
+    }
+
+    private void EnsureItemId(CEconItemView item, uint accountId)
+    {
+        if (HumanItemIdPolicy.ShouldAllocate(item.ItemID, _nextItemId, item.AccountID == accountId))
+            AssignItemId(item);
+    }
+
+    private static void MarkFallbackChanged(CBasePlayerWeapon weapon)
+    {
+        Utilities.SetStateChanged(weapon, "CEconEntity", "m_nFallbackPaintKit");
+        Utilities.SetStateChanged(weapon, "CEconEntity", "m_nFallbackSeed");
+        Utilities.SetStateChanged(weapon, "CEconEntity", "m_flFallbackWear");
+        Utilities.SetStateChanged(weapon, "CEconEntity", "m_nFallbackStatTrak");
     }
 
     private void LoadConfig()
@@ -2218,9 +1950,7 @@ public sealed class PlayerKnifeCustomizerPlugin : BasePlugin
         LoadConfig();
         _knifeRefresh.CancelAll();
         _gloveRevisions.Clear();
-        _spawnGunTracker.InvalidateAll();
         _knifeGiveGuards.Clear();
-        _gunGiveGuards.Clear();
         string restart = _config.Enabled && _setAttrByName == null ? "; restart CS2 to initialize runtime hooks" : string.Empty;
         command.ReplyToCommand($"[PlayerKnifeCustomizer] reloaded; enabled={_config.Enabled}, stickers={DecorationReleaseEnabled && _config.StickersEnabled}, charms={DecorationReleaseEnabled && _config.CharmsEnabled}, agents={DecorationReleaseEnabled && _config.AgentsEnabled}, sticker_catalog={_validStickers.Count}, charm_catalog={_validCharms.Count}, agent_catalog={_agentModels.Values.Sum(models => models.Count)}, ct_knives={_config.Loadouts.Ct.KnifePresets.Count}, t_knives={_config.Loadouts.T.KnifePresets.Count}, ct_guns={_config.Loadouts.Ct.GunPresets.Count}, t_guns={_config.Loadouts.T.GunPresets.Count}, music={_config.MusicKitId}{restart}");
     }
@@ -2262,7 +1992,6 @@ public sealed class ApplyGenerationTracker
         public nint PawnHandle { get; set; }
         public int? Team { get; set; }
         public bool ExhaustionRecorded { get; set; }
-        public bool ReequipIssued { get; set; }
         public bool KnifeOperationStarted { get; set; }
         public bool GloveOperationInFlight { get; set; }
     }
@@ -2365,14 +2094,6 @@ public sealed class ApplyGenerationTracker
         return true;
     }
 
-    public bool TryMarkReequip(nint playerHandle, long generation)
-    {
-        if (!_states.TryGetValue(playerHandle, out var state) || state.Generation != generation || state.ReequipIssued)
-            return false;
-        state.ReequipIssued = true;
-        return true;
-    }
-
     public void Cancel(nint playerHandle) => _states.Remove(playerHandle);
     public void CancelAll() => _states.Clear();
 }
@@ -2420,6 +2141,13 @@ public sealed class ApplyErrorThrottle(TimeSpan interval)
         entry.Suppressed = 0;
         return new ApplyErrorDecision(true, suppressed);
     }
+}
+
+public readonly record struct GunReapplyContext(uint PawnRaw, ulong SteamId, CosmeticTeam Team, long ConfigRevision)
+{
+    public bool Matches(ulong steamId, uint pawnRaw, CosmeticTeam? team, long configRevision) =>
+        PawnRaw != 0 && PawnRaw == pawnRaw && SteamId == steamId &&
+        Team == team && ConfigRevision == configRevision;
 }
 
 public enum CosmeticTeam { Ct, T }

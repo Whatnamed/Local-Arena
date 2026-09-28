@@ -283,12 +283,6 @@ Require(!tracker.MarkRetryExhausted(playerHandle, pickupStorm) && tracker.RetryE
 long retryAfterEvent = tracker.Begin(playerHandle, CosmeticApplyPhase.Guns);
 Require(tracker.MarkRetryExhausted(playerHandle, retryAfterEvent) && tracker.RetryExhaustions == 2,
     "A later gameplay event must create a fresh bounded retry window.");
-Require(tracker.TryMarkReequip(playerHandle, retryAfterEvent) && !tracker.TryMarkReequip(playerHandle, retryAfterEvent),
-    "A generation must issue at most one controlled re-equip fallback.");
-long nextReequipGeneration = tracker.Begin(playerHandle, CosmeticApplyPhase.Guns);
-Require(tracker.TryMarkReequip(playerHandle, nextReequipGeneration),
-    "A later gameplay generation may issue one new controlled re-equip fallback.");
-
 tracker.CancelAll();
 for (int i = 0; i < 1000; i++)
 {
@@ -417,200 +411,66 @@ isBusy = false;
 var nextAfterBusy = KnifeReplacementPlanner.Plan(simulatedKnife, shortcutKnives, cycleLoadout);
 Require(nextAfterBusy.TargetDefIndex == 515, "Sequence must resume at the immediate next knife after busy clears.");
 
-// Spawn-only configured gun override filtering test:
-// Configured weapons (e.g. CT USP-S 61 with Paint > 0) are matched; unconfigured weapons are skipped.
+// Gun identity is the current item defindex; a configured USP-S must never become a P2000.
 var spawnTestConfig = new KnifeConfig();
-spawnTestConfig.Loadouts.Ct.GunPresets[61] = Preset(653); // USP-S configured
-spawnTestConfig.Loadouts.Ct.GunPresets[4] = new KnifePreset { Paint = 0 }; // Glock unconfigured / vanilla
-// AWP 9 not in GunPresets at all
-
+spawnTestConfig.Loadouts.Ct.GunPresets[61] = Preset(653);
 Require(WeaponPresetResolver.TryResolveGunPreset(spawnTestConfig, 61, CosmeticTeam.Ct, out var ctUsp) && ctUsp.Paint == 653,
-    "Configured CT USP-S must resolve positive paint for spawn refresh.");
-bool glockEligible = WeaponPresetResolver.TryResolveGunPreset(spawnTestConfig, 4, CosmeticTeam.Ct, out var ctGlock) && ctGlock.Paint > 0;
-Require(!glockEligible, "Unconfigured Glock (Paint 0) must not be eligible for spawn gun refresh.");
-bool awpEligible = WeaponPresetResolver.TryResolveGunPreset(spawnTestConfig, 9, CosmeticTeam.Ct, out var unconfiguredAwp) && unconfiguredAwp.Paint > 0;
-Require(!awpEligible, "Unconfigured weapon without preset must not be eligible for spawn gun refresh.");
+    "A CT USP-S preset must resolve from defindex 61.");
+Require(!WeaponPresetResolver.TryResolveGunPreset(spawnTestConfig, 32, CosmeticTeam.Ct, out _),
+    "P2000 defindex 32 must not inherit the USP-S preset.");
 
-// --- Case 1: player_spawn with invalid Pawn -> later authoritative Pawn ready -> receives spawn refresh
-var spawnTracker = new SpawnGunLifecycleTracker();
-nint player1 = (nint)0x1000;
-ulong steamId1 = 76561198000000001UL;
-long configRev = 10;
-int teamCt = (int)CosmeticTeam.Ct;
+var gunContext = new GunReapplyContext(0x2001, 76561198000000001UL, CosmeticTeam.Ct, 10);
+Require(gunContext.Matches(76561198000000001UL, 0x2001, CosmeticTeam.Ct, 10),
+    "A matching Pawn, owner, team and config may reapply a given gun.");
+Require(!gunContext.Matches(76561198000000001UL, 0x2002, CosmeticTeam.Ct, 10) &&
+        !gunContext.Matches(76561198000000002UL, 0x2001, CosmeticTeam.Ct, 10) &&
+        !gunContext.Matches(76561198000000001UL, 0x2001, CosmeticTeam.T, 10) &&
+        !gunContext.Matches(76561198000000001UL, 0x2001, CosmeticTeam.Ct, 11),
+    "Stale gun callbacks must reject a replaced Pawn, owner, team or config.");
 
-// Player spawns: Pawn is not yet valid/authoritative
-long rev1 = spawnTracker.OnPlayerSpawn(player1);
-Require(rev1 > 0 && spawnTracker.GetState(player1) == SpawnGunRefreshState.Pending,
-    "Case 1: OnPlayerSpawn must create pending spawn revision without binding pawn.");
+ulong localItemId = HumanItemIdPolicy.FirstLocalItemId;
+Require(HumanItemIdPolicy.ShouldAllocate(0, localItemId, true) &&
+        !HumanItemIdPolicy.ShouldAllocate(localItemId, localItemId + 1, true) &&
+        !HumanItemIdPolicy.ShouldAllocate(localItemId, localItemId + 1, true) &&
+        HumanItemIdPolicy.ShouldAllocate(localItemId, localItemId + 1, false),
+    "Repeated writes to the same owned entity must retain its allocated item ID.");
 
-// Pipeline attempt 1: pawn invalid -> binding not possible yet
-Require(!spawnTracker.TryBindAuthoritativePawn(player1, rev1, nint.Zero, 0, teamCt, steamId1, configRev, hasConfiguredGunPresets: true),
-    "Case 1: Binding with invalid pawn must fail.");
-Require(spawnTracker.GetState(player1) == SpawnGunRefreshState.Pending,
-    "Case 1: State must remain pending while waiting for authoritative pawn.");
-
-// Later: replacement pawn becomes ready
-nint pawnHandle1 = (nint)0x2001;
-uint pawnRaw1 = 0x2001;
-bool bound1 = spawnTracker.TryBindAuthoritativePawn(player1, rev1, pawnHandle1, pawnRaw1, teamCt, steamId1, configRev, hasConfiguredGunPresets: true);
-Require(bound1 && spawnTracker.GetState(player1) == SpawnGunRefreshState.Settling,
-    "Case 1: Authoritative pawn ready must transition state to Settling.");
-Require(spawnTracker.TryScheduleSettlement(player1, rev1),
-    "Case 1: Settlement must be schedulable upon authoritative binding.");
-Require(!spawnTracker.TryScheduleSettlement(player1, rev1),
-    "Case 1: Settlement must not be scheduled more than once per life.");
-
-// --- Case 2: spawn with no configured gun yet -> later settlement USP appears -> refresh occurs
-var action2a = spawnTracker.EvaluateSettlement(
-    player1, rev1, pawnRaw1, teamCt, steamId1, configRev,
-    isKnifeBusy: false, hasMatchingConfiguredGuns: false, isFinalAttempt: false);
-Require(action2a == SettlementAction.RetryLater && spawnTracker.GetState(player1) == SpawnGunRefreshState.Settling,
-    "Case 2: Early attempt with empty inventory must retry later without completing prematurely.");
-
-// Later settlement check: USP equipped
-var action2b = spawnTracker.EvaluateSettlement(
-    player1, rev1, pawnRaw1, teamCt, steamId1, configRev,
-    isKnifeBusy: false, hasMatchingConfiguredGuns: true, isFinalAttempt: false);
-Require(action2b == SettlementAction.StartRunning && spawnTracker.GetState(player1) == SpawnGunRefreshState.Running,
-    "Case 2: Matching configured gun appearing during settlement window must start refresh.");
-spawnTracker.Complete(player1, rev1);
-Require(spawnTracker.GetState(player1) == SpawnGunRefreshState.Completed,
-    "Case 2: Refresh must complete into terminal Completed state.");
-
-// --- Case 3: settlement window expires with no matching gun -> terminal NoWork, only once
-nint player3 = (nint)0x3000;
-long rev3 = spawnTracker.OnPlayerSpawn(player3);
-spawnTracker.TryBindAuthoritativePawn(player3, rev3, (nint)0x3001, 0x3001, teamCt, steamId1, configRev, hasConfiguredGunPresets: true);
-var action3a = spawnTracker.EvaluateSettlement(
-    player3, rev3, 0x3001, teamCt, steamId1, configRev,
-    isKnifeBusy: false, hasMatchingConfiguredGuns: false, isFinalAttempt: false);
-Require(action3a == SettlementAction.RetryLater, "Case 3: Non-final empty attempt must retry.");
-var action3b = spawnTracker.EvaluateSettlement(
-    player3, rev3, 0x3001, teamCt, steamId1, configRev,
-    isKnifeBusy: false, hasMatchingConfiguredGuns: false, isFinalAttempt: true);
-Require(action3b == SettlementAction.MarkNoWork && spawnTracker.GetState(player3) == SpawnGunRefreshState.NoWork,
-    "Case 3: Final attempt with no matching guns must enter terminal NoWork.");
-var action3c = spawnTracker.EvaluateSettlement(
-    player3, rev3, 0x3001, teamCt, steamId1, configRev,
-    isKnifeBusy: false, hasMatchingConfiguredGuns: true, isFinalAttempt: false);
-Require(action3c == SettlementAction.RetryLater && spawnTracker.GetState(player3) == SpawnGunRefreshState.NoWork,
-    "Case 3: Subsequent attempts after NoWork must not re-open refresh.");
-
-// --- Case 4: ordinary pickup/purchase does not grant spawn recreation
-Require(!spawnTracker.CanAttemptSettlement(player1, rev1, pawnRaw1, teamCt, steamId1, configRev),
-    "Case 4: Completed life must reject ordinary pickup settlement attempts.");
-Require(!spawnTracker.TryStartRunning(player1, rev1),
-    "Case 4: Completed life must not transition back to Running on weapon pickup.");
-
-// --- Case 5: internal Give does not grant spawn recreation
-var internalGiveGuards = new HashSet<nint> { player1 };
-bool canTriggerNewPipeline = !internalGiveGuards.Contains(player1);
-Require(!canTriggerNewPipeline, "Case 5: Internal Give must be guarded from triggering cosmetic pipeline.");
-Require(spawnTracker.GetState(player1) == SpawnGunRefreshState.Completed,
-    "Case 5: Internal Give must not alter completed spawn gun lifecycle.");
-
-// --- Case 6: external gun generation G2 does not invalidate active knife transaction
-var knifeGate = new KnifeRefreshGate();
-var applyTracker = new ApplyGenerationTracker();
-nint player6 = (nint)0x6000;
-uint pawn6 = 0x6001;
-long knifeGen1 = applyTracker.Begin(player6, CosmeticApplyPhase.All);
-Require(knifeGate.TryBegin(player6, pawn6, teamCt, steamId1, configRev, DateTimeOffset.UtcNow, out long knifeRev),
-    "Case 6: Knife controlled recreation must begin successfully under G1.");
-Require(knifeGate.IsBusy(player6), "Case 6: Knife refresh gate must be busy.");
-
-// External gun Give occurs (e.g. drop or buy), creating generation G2
-long gunGen2 = applyTracker.Begin(player6, CosmeticApplyPhase.Guns);
-Require(gunGen2 != knifeGen1, "Case 6: External gun give must advance generation.");
-Require(!applyTracker.IsCurrent(player6, knifeGen1), "Case 6: Apply tracker generation G1 is now superseded.");
-
-// Operation-owned knife transaction validity check
-Require(knifeGate.IsCurrent(player6, pawn6, teamCt, steamId1, configRev, knifeRev),
-    "Case 6: Knife transaction must remain valid despite unrelated gun generation G2.");
-
-// On knife completion, old generation Complete is a safe no-op
-bool applyCompleteResult = applyTracker.Complete(player6, knifeGen1, CosmeticApplyPhase.Knife);
-Require(!applyCompleteResult, "Case 6: Old generation Complete safely returns false without exception.");
-knifeGate.Complete(player6, knifeRev);
-Require(!knifeGate.IsBusy(player6), "Case 6: Knife refresh must clear busy on completion.");
-
-// --- Case 7: Pawn replacement / death invalidates old knife and gun callbacks
-nint player7 = (nint)0x7000;
-uint pawn7a = 0x7001;
-uint pawn7b = 0x7002;
-long rev7 = spawnTracker.OnPlayerSpawn(player7);
-spawnTracker.TryBindAuthoritativePawn(player7, rev7, (nint)pawn7a, pawn7a, teamCt, steamId1, configRev, hasConfiguredGunPresets: true);
-knifeGate.TryBegin(player7, pawn7a, teamCt, steamId1, configRev, DateTimeOffset.UtcNow, out long knifeRev7);
-
-// Player dies / changes pawn:
-spawnTracker.Invalidate(player7);
-knifeGate.Cancel(player7);
-
-Require(!knifeGate.IsCurrent(player7, pawn7a, teamCt, steamId1, configRev, knifeRev7),
-    "Case 7: Death/invalidation must cancel knife transaction callback validity.");
-Require(!spawnTracker.CanAttemptSettlement(player7, rev7, pawn7a, teamCt, steamId1, configRev),
-    "Case 7: Death/invalidation must invalidate gun settlement callbacks.");
-Require(!spawnTracker.CanAttemptSettlement(player7, rev7, pawn7b, teamCt, steamId1, configRev),
-    "Case 7: Replaced pawn handle must reject old gun callbacks.");
-
-// --- Case 8: knife busy -> spawn gun destructive stage waits, not concurrent
-nint player8 = (nint)0x8000;
-uint pawn8 = 0x8001;
-long rev8 = spawnTracker.OnPlayerSpawn(player8);
-spawnTracker.TryBindAuthoritativePawn(player8, rev8, (nint)pawn8, pawn8, teamCt, steamId1, configRev, hasConfiguredGunPresets: true);
-knifeGate.TryBegin(player8, pawn8, teamCt, steamId1, configRev, DateTimeOffset.UtcNow, out long knifeRev8);
-
-var action8a = spawnTracker.EvaluateSettlement(
-    player8, rev8, pawn8, teamCt, steamId1, configRev,
-    isKnifeBusy: knifeGate.IsBusy(player8), hasMatchingConfiguredGuns: true, isFinalAttempt: false);
-Require(action8a == SettlementAction.WaitKnifeBusy && spawnTracker.GetState(player8) == SpawnGunRefreshState.Settling,
-    "Case 8: While knife is busy, spawn gun settlement must wait without starting destructive refresh.");
-
-// Knife finishes:
-knifeGate.Complete(player8, knifeRev8);
-Require(!knifeGate.IsBusy(player8), "Case 8: Knife is no longer busy.");
-var action8b = spawnTracker.EvaluateSettlement(
-    player8, rev8, pawn8, teamCt, steamId1, configRev,
-    isKnifeBusy: knifeGate.IsBusy(player8), hasMatchingConfiguredGuns: true, isFinalAttempt: false);
-Require(action8b == SettlementAction.StartRunning && spawnTracker.GetState(player8) == SpawnGunRefreshState.Running,
-    "Case 8: Once knife clears busy, spawn gun destructive refresh must start.");
-spawnTracker.Complete(player8, rev8);
-
-// --- Case 9: gun econ list delayed-ready -> bounded retry then succeeds
-int gunRetries = 0;
-bool gunEconReady = false;
-bool gunApplySuccess = false;
-while (EconReadinessPolicy.ShouldRetry(gunEconReady, gunRetries))
-{
-    gunRetries++;
-    if (gunRetries == 2) gunEconReady = true; // ready on 2nd retry
-}
-if (gunEconReady) gunApplySuccess = true;
-Require(gunRetries == 2 && gunApplySuccess,
-    "Case 9: Gun econ delayed readiness must perform bounded retries and succeed.");
-
-// --- Case 10: gun econ permanent failure -> no false success / no re-Give loop
-int failedRetries = 0;
-bool permanentFailedReady = false;
-bool loggedSuccess = false;
-int giveCount = 1; // single Give executed before retry loop
-while (EconReadinessPolicy.ShouldRetry(permanentFailedReady, failedRetries))
-{
-    failedRetries++;
-}
-if (permanentFailedReady) loggedSuccess = true;
-Require(failedRetries == EconReadinessPolicy.MaxRetries,
-    "Case 10: Permanent unready econ lists must stop after MaxRetries.");
-Require(!loggedSuccess, "Case 10: Failure must never log success.");
-Require(giveCount == 1, "Case 10: Permanent failure must not loop or re-give.");
-
-// Slot restoration policy:
-string quickKnifeOp = "quick knife";
-string? quickKnifeSlot = "slot1";
-Require((quickKnifeOp == "default knife" && quickKnifeSlot != null ? quickKnifeSlot : "slot3") == "slot3",
-    "Quick knife must remain on slot3.");
-string defaultKnifeOp = "default knife";
-string? defaultKnifeSlot = "slot2";
-Require((defaultKnifeOp == "default knife" && defaultKnifeSlot != null ? defaultKnifeSlot : "slot3") == "slot2",
-    "Default knife must restore previous non-knife slot.");
-Console.WriteLine("PlayerKnifeCustomizer resolver, knife cycles, presets, busy guards, and spawn gun filtering tests passed.");
+int gunStart = knifeSource.IndexOf("private bool ApplyGunPresetToExistingEntity(", StringComparison.Ordinal);
+int gunEnd = knifeSource.IndexOf("private bool ApplyKnifePreset(", gunStart, StringComparison.Ordinal);
+Require(gunStart >= 0 && gunEnd > gunStart, "Production must have a separate existing-gun writer.");
+string gunWriter = knifeSource[gunStart..gunEnd];
+Require(gunWriter.Contains("item.ItemDefinitionIndex != actualDefIndex", StringComparison.Ordinal) &&
+        !gunWriter.Contains("ItemDefinitionIndex =", StringComparison.Ordinal) &&
+        !gunWriter.Contains("GiveNamedItem", StringComparison.Ordinal) &&
+        !gunWriter.Contains("Kill", StringComparison.Ordinal) &&
+        !gunWriter.Contains("ChangeSubclass", StringComparison.Ordinal),
+    "The gun writer must validate actual identity and change only cosmetics.");
+int valuesStart = knifeSource.IndexOf("private bool ApplyWeaponPresetValues(", gunEnd, StringComparison.Ordinal);
+int valuesEnd = knifeSource.IndexOf("private bool TryApplyGlove(", valuesStart, StringComparison.Ordinal);
+Require(valuesStart >= 0 && valuesEnd > valuesStart &&
+        !knifeSource[valuesStart..valuesEnd].Contains("ItemDefinitionIndex =", StringComparison.Ordinal),
+    "The shared cosmetics writer must not mutate gun or knife identity.");
+int callbackStart = knifeSource.IndexOf("private void ScheduleGivenGunReapply(", StringComparison.Ordinal);
+int callbackEnd = knifeSource.IndexOf("private void RunApplyPipeline(", callbackStart, StringComparison.Ordinal);
+Require(callbackStart >= 0 && callbackEnd > callbackStart, "Bounded GiveNamedItem gun reapply must exist.");
+string gunCallbacks = knifeSource[callbackStart..callbackEnd];
+Require(gunCallbacks.Contains("ResolveWeapon(weaponRaw)", StringComparison.Ordinal) &&
+        gunCallbacks.Contains("context.Matches(", StringComparison.Ordinal) &&
+        gunCallbacks.Contains("OwnedBy(weapon, pawn)", StringComparison.Ordinal) &&
+        gunCallbacks.Contains("IsInInventory(pawn, weapon)", StringComparison.Ordinal) &&
+        gunCallbacks.Contains("TryGetPreset(actualDefIndex", StringComparison.Ordinal),
+    "Each delayed gun pass must re-resolve the serial handle and current Pawn, owner, team and preset.");
+Require(!knifeSource.Contains("SpawnGunLifecycleTracker", StringComparison.Ordinal) &&
+        !knifeSource.Contains("ExecuteSpawnGunDestructiveRefresh", StringComparison.Ordinal) &&
+        !knifeSource.Contains("ApplyGivenGunsWithRetry", StringComparison.Ordinal) &&
+        !knifeSource.Contains("_gunGiveGuards", StringComparison.Ordinal) &&
+        !knifeSource.Contains("TryControlledReequip", StringComparison.Ordinal),
+    "Obsolete gun replacement and forced weapon-switch paths must be removed.");
+Require(knifeSource.Contains("MarkFallbackChanged(weapon)", StringComparison.Ordinal) &&
+        knifeSource.Contains("m_nFallbackPaintKit", StringComparison.Ordinal) &&
+        knifeSource.Contains("m_nFallbackSeed", StringComparison.Ordinal) &&
+        knifeSource.Contains("m_flFallbackWear", StringComparison.Ordinal) &&
+        knifeSource.Contains("m_nFallbackStatTrak", StringComparison.Ordinal) &&
+        knifeSource.Contains("CBaseModelEntity\", \"m_CBodyComponent", StringComparison.Ordinal),
+    "Fallback fields and legacy bodygroup changes must be marked dirty.");
+Console.WriteLine("PlayerKnifeCustomizer resolver, knife cycles, presets, and existing-gun reapply tests passed.");
